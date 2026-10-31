@@ -9,6 +9,7 @@ pub struct Config {
     pub opacity: f32,
     pub padding: f32,
     pub shell: Option<String>,
+    pub matugen: bool,
 }
 
 impl Default for Config {
@@ -19,15 +20,19 @@ impl Default for Config {
             opacity: 0.8,
             padding: 8.0,
             shell: None,
+            matugen: false,
         }
     }
 }
 
-pub fn path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
+pub fn home() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(base.join("koral/config.koral"))
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+}
+
+pub fn path() -> Option<PathBuf> {
+    Some(home()?.join("koral/config.koral"))
 }
 
 /// Replaces the file in one step, so a crash mid-write cannot lose the config.
@@ -77,6 +82,13 @@ fn apply(config: &mut Config, line: &str) -> Result<(), String> {
             config.shell = Some(value.clone()).filter(|shell| !shell.is_empty());
             Ok(())
         }
+        "matugen" => match value.as_str() {
+            "on" | "off" => {
+                config.matugen = value == "on";
+                Ok(())
+            }
+            _ => Err(format!("'{value}' is not on or off")),
+        },
         other => Err(format!("unknown setting '{other}'")),
     }
 }
@@ -165,4 +177,15 @@ fn quote(value: &str) -> String {
     }
     let escaped = value.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\t', "\\t");
     format!("\"{escaped}\"")
+}
+
+/// `set`, refused when the parser would not take the new value.
+pub fn update(source: &str, key: &str, value: &str) -> Result<(String, Config), String> {
+    let updated = set(source, key, value);
+    let (config, errors) = parse(&updated);
+    let before = parse(source).1.len();
+    match errors.into_iter().nth(before) {
+        Some(message) => Err(message),
+        None => Ok((updated, config)),
+    }
 }

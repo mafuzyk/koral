@@ -7,10 +7,13 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::TermMode;
 use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use koral::blocks::Activity;
-use koral::frame::{self, Chrome, Frame, Layout, OPACITY, TabView};
+use koral::config::{self, Config};
+use koral::frame::{self, Chrome, Frame, Layout, TabView};
+use koral::matugen;
 use koral::input::{self, Action, Mouse, binding};
 use koral::pty::{Geometry, Terminal, UserEvent};
 use koral::render::{Renderer, rgba};
+use koral::settings::{self, Command, FIELDS, Kind, Outcome, Settings, Zone};
 use koral::tabs::{self, Bar, Hit, Tabs};
 use koral::theme::Theme;
 use koral::view;
@@ -18,7 +21,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-use winit::keyboard::ModifiersState;
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::wayland::WindowAttributesExtWayland;
 use winit::window::{Window, WindowId};
 
@@ -32,9 +35,6 @@ fn main() {
 }
 
 fn default_shell() -> String {
-    if let Ok(shell) = std::env::var("KORAL_SHELL") {
-        return shell;
-    }
     let on_path = std::env::var_os("PATH").is_some_and(|path| {
         std::env::split_paths(&path).any(|dir| dir.join("sharky").is_file())
     });
@@ -63,7 +63,10 @@ struct App {
     renderer: Option<Renderer>,
     tabs: Option<Tabs<Terminal>>,
     next_id: u64,
-    shell: String,
+    config: Config,
+    source: String,
+    settings: Option<Settings>,
+    settings_error: Option<String>,
     theme: Theme,
     home: Option<String>,
     clipboard: Option<Clipboard>,
@@ -77,14 +80,23 @@ struct App {
 
 impl App {
     fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
+        let source = config::path().and_then(|path| std::fs::read_to_string(path).ok()).unwrap_or_default();
+        let (config, errors) = config::parse(&source);
+        for error in errors {
+            eprintln!("koral: config.koral {error}");
+        }
+        matugen::watch(proxy.clone());
         Self {
             proxy,
             window: None,
             renderer: None,
             tabs: None,
             next_id: 0,
-            shell: default_shell(),
-            theme: Theme::default(),
+            theme: matugen::theme(config.matugen),
+            config,
+            source,
+            settings: None,
+            settings_error: None,
             home: std::env::var("HOME").ok(),
             clipboard: Clipboard::new().ok(),
             mods: ModifiersState::empty(),
@@ -103,6 +115,7 @@ impl App {
             width: size.width as f32,
             height: size.height as f32,
             scale: window.scale_factor() as f32,
+            padding: self.config.padding,
             cell: self.renderer.as_ref()?.cell(),
         })
     }
@@ -147,13 +160,17 @@ impl App {
         let id = self.next_id;
         self.next_id += 1;
 
-        match Terminal::spawn(id, self.proxy.clone(), &self.shell, geometry, cwd) {
+        let shell = std::env::var("KORAL_SHELL")
+            .ok()
+            .or_else(|| self.config.shell.clone())
+            .unwrap_or_else(default_shell);
+        match Terminal::spawn(id, self.proxy.clone(), &shell, geometry, cwd) {
             Ok(terminal) => match &mut self.tabs {
                 Some(tabs) => tabs.push(terminal),
                 None => self.tabs = Some(Tabs::new(terminal)),
             },
             Err(error) => {
-                eprintln!("koral: cannot start {}: {error}", self.shell);
+                eprintln!("koral: cannot start {shell}: {error}");
                 if self.tabs.is_none() {
                     event_loop.exit();
                 }
@@ -220,8 +237,118 @@ impl App {
             Action::ToggleFold => self.toggle_fold(),
             Action::PageUp => self.scroll_lines(self.page()),
             Action::PageDown => self.scroll_lines(-self.page()),
+            Action::OpenSettings => self.toggle_settings(),
         }
         self.redraw();
+    }
+
+    fn toggle_settings(&mut self) {
+        self.settings = match self.settings {
+            Some(_) => None,
+            None => Some(Settings::default()),
+        };
+        self.settings_error = None;
+        self.redraw();
+    }
+
+    fn settings_command(&mut self, command: Command) {
+        let Some(settings) = &mut self.settings else {
+            return;
+        };
+        self.settings_error = None;
+        match settings.handle(command, &self.config) {
+            Outcome::Nothing => {}
+            Outcome::Close => self.settings = None,
+            Outcome::Change(key, value) => self.change_setting(key, &value),
+        }
+        self.redraw();
+    }
+
+    /// Live first, then saved: the file stays the source of truth for the next start.
+    fn change_setting(&mut self, key: &str, value: &str) {
+        if key == "matugen" && value == "on" && let Err(message) = matugen::install() {
+            self.settings_error = Some(message);
+            return;
+        }
+        let (source, config) = match config::update(&self.source, key, value) {
+            Ok(updated) => updated,
+            Err(message) => {
+                self.settings_error = Some(message);
+                return;
+            }
+        };
+        let font_changed = config.font != self.config.font || config.font_size != self.config.font_size;
+        self.source = source;
+        self.config = config;
+        self.theme = matugen::theme(self.config.matugen);
+
+        if font_changed && let Some(renderer) = &mut self.renderer {
+            renderer.set_font(&self.config.font, self.config.font_size);
+        }
+        self.resize_all();
+
+        match config::path().map(|path| config::save(&path, &self.source)) {
+            Some(Ok(())) => {}
+            Some(Err(error)) => self.settings_error = Some(format!("Not saved: {error}")),
+            None => self.settings_error = Some("Not saved: no config folder".to_string()),
+        }
+    }
+
+    fn settings_key(&mut self, key: &Key, text: Option<&str>) {
+        let command = match key {
+            Key::Named(NamedKey::ArrowUp) => Some(Command::Up),
+            Key::Named(NamedKey::ArrowDown) => Some(Command::Down),
+            Key::Named(NamedKey::ArrowLeft) => Some(Command::Less),
+            Key::Named(NamedKey::ArrowRight) => Some(Command::More),
+            Key::Named(NamedKey::Enter) => Some(Command::Confirm),
+            Key::Named(NamedKey::Escape) => Some(Command::Cancel),
+            Key::Named(NamedKey::Backspace) => Some(Command::Erase),
+            _ => None,
+        };
+        if let Some(command) = command {
+            self.settings_command(command);
+        } else if let Some(text) = text {
+            for ch in text.chars().filter(|ch| !ch.is_control()) {
+                self.settings_command(Command::Type(ch));
+            }
+        }
+    }
+
+    /// True when the click belonged to the open panel.
+    fn press_settings(&mut self) -> bool {
+        let Some(layout) = self.layout() else {
+            return false;
+        };
+        let Some(open) = &mut self.settings else {
+            return false;
+        };
+        let (x, y) = self.cursor;
+        match settings::zone(frame::panel(layout), x, y) {
+            Zone::Outside => return false,
+            Zone::Inside => {}
+            Zone::Row(row) => {
+                let chosen = open.selected == row;
+                if !chosen {
+                    open.editing = None;
+                    open.selected = row;
+                }
+                if chosen || FIELDS[row].kind == Kind::Toggle {
+                    self.settings_command(Command::Confirm);
+                }
+            }
+            Zone::Less(row) => {
+                open.editing = None;
+                open.selected = row;
+                self.settings_command(Command::Less);
+            }
+            Zone::More(row) => {
+                open.editing = None;
+                open.selected = row;
+                self.settings_command(Command::More);
+            }
+        }
+        self.redraw();
+        true
     }
 
     fn with_tabs(&mut self, change: impl FnOnce(&mut Tabs<Terminal>)) {
@@ -378,6 +505,7 @@ impl App {
         };
         match (hit_at(&bar, self.cursor), button) {
             (Hit::New, MouseButton::Left) => self.open_tab(event_loop),
+            (Hit::Settings, MouseButton::Left) => self.toggle_settings(),
             (Hit::Close(index), MouseButton::Left) => self.request_close(index, event_loop),
             (Hit::Tab(index) | Hit::Close(index), MouseButton::Middle) => self.request_close(index, event_loop),
             (Hit::Tab(index), MouseButton::Left) => {
@@ -530,15 +658,27 @@ impl App {
             },
             hovered_close: matches!(hit, Hit::Close(_)),
             hovered_new: hit == Hit::New,
+            hovered_settings: hit == Hit::Settings,
+            settings_open: self.settings.is_some(),
             bar: &bar,
         };
         frame::draw_chrome(&mut frame, &chrome, layout, &self.theme);
+        if let Some(settings) = &self.settings {
+            frame::draw_settings(
+                &mut frame,
+                settings,
+                &self.config,
+                self.settings_error.as_deref(),
+                layout,
+                &self.theme,
+            );
+        }
 
         if let (Some(window), Some(view)) = (&self.window, views.get(tabs.active_index())) {
             window.set_title(&view.title);
         }
         if let Some(renderer) = &mut self.renderer {
-            renderer.draw(&frame.quads, &frame.lines, rgba(self.theme.background, OPACITY));
+            renderer.draw(&frame.quads, &frame.lines, frame.clip, rgba(self.theme.background, self.config.opacity));
         }
     }
 }
@@ -562,7 +702,8 @@ impl ApplicationHandler<UserEvent> for App {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(Box::new(
             event_loop.owned_display_handle(),
         )));
-        self.renderer = Some(pollster::block_on(Renderer::new(window.clone(), instance)));
+        let (font, points) = (self.config.font.clone(), self.config.font_size);
+        self.renderer = Some(pollster::block_on(Renderer::new(window.clone(), instance, font, points)));
         self.window = Some(window);
         self.open_tab(event_loop);
     }
@@ -582,6 +723,10 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             UserEvent::Copy(text) => self.store(text, LinuxClipboardKind::Clipboard),
+            UserEvent::Colors => {
+                self.theme = matugen::theme(self.config.matugen);
+                self.redraw();
+            }
             UserEvent::Color(id, index, reply) => {
                 let color = self.theme.palette(index);
                 if let Some(tab) = self.tabs.as_ref().and_then(|tabs| tabs.iter().find(|tab| tab.id == id)) {
@@ -620,7 +765,12 @@ impl ApplicationHandler<UserEvent> for App {
                 self.redraw();
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-                if let Some(action) = binding(&event.logical_key, self.mods) {
+                let action = binding(&event.logical_key, self.mods);
+                if self.settings.is_some() && action != Some(Action::OpenSettings) {
+                    self.settings_key(&event.logical_key, event.text.as_deref());
+                    return;
+                }
+                if let Some(action) = action {
                     self.run(action, event_loop);
                     return;
                 }
@@ -635,9 +785,16 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::CursorMoved { position, .. } => self.cursor_moved(position),
             WindowEvent::MouseInput { state: ElementState::Pressed, button, .. } => {
+                if button == MouseButton::Left && self.press_settings() {
+                    return;
+                }
                 if self.layout().is_some_and(|layout| self.cursor.1 < layout.strip()) {
                     self.press_strip(button, event_loop);
                 } else {
+                    if self.settings.take().is_some() {
+                        self.redraw();
+                        return;
+                    }
                     self.press_terminal(button);
                 }
             }

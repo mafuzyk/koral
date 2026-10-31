@@ -59,6 +59,34 @@ impl Default for Theme {
 }
 
 impl Theme {
+    /// The built-in colours with the named ones replaced: a damaged line changes nothing.
+    pub fn with_colors(source: &str) -> Self {
+        let mut theme = Self::default();
+        for line in source.lines() {
+            let mut words = line.split_whitespace();
+            let (Some(name), Some(color)) = (words.next(), words.next().and_then(hex)) else {
+                continue;
+            };
+            let slot = match name {
+                "background" => Some(&mut theme.background),
+                "foreground" => Some(&mut theme.foreground),
+                "cursor" => Some(&mut theme.cursor),
+                "accent" => Some(&mut theme.accent),
+                "success" => Some(&mut theme.success),
+                "failure" => Some(&mut theme.failure),
+                "muted" => Some(&mut theme.muted),
+                _ => name
+                    .strip_prefix("ansi")
+                    .and_then(|index| index.parse::<usize>().ok())
+                    .and_then(|index| theme.ansi.get_mut(index)),
+            };
+            if let Some(slot) = slot {
+                *slot = color;
+            }
+        }
+        theme
+    }
+
     pub fn resolve(&self, color: Color, overrides: &Colors) -> Rgb {
         let index = match color {
             Color::Spec(rgb) => return rgb,

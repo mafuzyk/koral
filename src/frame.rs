@@ -9,16 +9,16 @@ use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 
 use crate::blocks::{Activity, Block, BlockStore};
 use crate::format;
-use crate::render::{Cell, Quad, Shape, Span, TextLine, rgba};
+use crate::config::Config;
+use crate::render::{Cell, Clip, Quad, Shape, Span, TextLine, rgba};
+use crate::settings::{FIELDS, Kind, Panel, Settings, value};
 use crate::tabs::{Bar, CLOSE_ZONE, Rect};
 use crate::theme::Theme;
 use crate::view::{Row, pinned, without_anchors};
 
-pub const OPACITY: f32 = 0.80;
 const STRIP_HEIGHT: f32 = 38.0;
 const TAB_TOP: f32 = 6.0;
 const TAB_RADIUS: f32 = 10.0;
-const PADDING: f32 = 8.0;
 const GUTTER_CELLS: f32 = 2.0;
 const STRIP_SHADE: [f32; 4] = [0.0, 0.0, 0.0, 0.32];
 
@@ -27,6 +27,7 @@ pub struct Layout {
     pub width: f32,
     pub height: f32,
     pub scale: f32,
+    pub padding: f32,
     pub cell: Cell,
 }
 
@@ -36,7 +37,7 @@ impl Layout {
     }
 
     pub fn left(&self) -> f32 {
-        PADDING * self.scale
+        self.padding * self.scale
     }
 
     pub fn gutter(&self) -> f32 {
@@ -48,7 +49,7 @@ impl Layout {
     }
 
     pub fn grid_y(&self) -> f32 {
-        self.strip() + PADDING * self.scale / 2.0
+        self.strip() + self.padding * self.scale / 2.0
     }
 
     pub fn columns(&self) -> usize {
@@ -75,6 +76,7 @@ impl Layout {
 pub struct Frame {
     pub quads: Vec<Quad>,
     pub lines: Vec<TextLine>,
+    pub clip: Clip,
 }
 
 pub struct TabView {
@@ -89,6 +91,8 @@ pub struct Chrome<'a> {
     pub hovered: Option<usize>,
     pub hovered_close: bool,
     pub hovered_new: bool,
+    pub hovered_settings: bool,
+    pub settings_open: bool,
     pub bar: &'a Bar,
 }
 
@@ -279,6 +283,146 @@ fn draw_pinned(frame: &mut Frame, block: &Block, layout: Layout, theme: &Theme) 
     });
 }
 
+pub fn panel(layout: Layout) -> Panel {
+    let scale = layout.scale;
+    let width = (420.0 * scale).min(layout.width - 16.0 * scale);
+    Panel {
+        x: layout.width - width - 8.0 * scale,
+        y: layout.strip() + 6.0 * scale,
+        width,
+        row_height: (layout.cell.height + 12.0 * scale).round(),
+    }
+}
+
+pub fn draw_settings(
+    frame: &mut Frame,
+    settings: &Settings,
+    config: &Config,
+    error: Option<&str>,
+    layout: Layout,
+    theme: &Theme,
+) {
+    let area = panel(layout);
+    let scale = layout.scale;
+    let inset = 14.0 * scale;
+    let bottom = area.y + area.height();
+    frame.clip = Clip { count: frame.lines.len(), x: area.x, top: area.y - layout.cell.height, bottom };
+    frame.quads.push(Quad {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: area.height(),
+        color: rgba(theme.ansi[0], 1.0),
+        shape: Shape::Rounded { radius: 10.0 * scale },
+    });
+
+    let small_cell = layout.cell.width * 0.82;
+    for (index, field) in FIELDS.iter().enumerate() {
+        let top = area.y + index as f32 * area.row_height;
+        let y = top + (area.row_height - layout.cell.height) / 2.0;
+        let selected = index == settings.selected;
+        if selected {
+            frame.quads.push(Quad {
+                x: area.x + 4.0 * scale,
+                y: top + 2.0 * scale,
+                width: area.width - 8.0 * scale,
+                height: area.row_height - 4.0 * scale,
+                color: rgba(theme.foreground, 0.08),
+                shape: Shape::Rounded { radius: 7.0 * scale },
+            });
+        }
+        let label = if selected { theme.foreground } else { theme.muted };
+        frame.lines.push(TextLine {
+            x: area.x + inset,
+            y,
+            small: true,
+            spans: vec![Span::plain(field.label, label)],
+        });
+
+        let right = area.x + area.width - inset;
+        match (field.kind, settings.editing.as_ref().filter(|_| selected)) {
+            (Kind::Number { .. }, _) => {
+                let text = value(index, config);
+                let arrows = [(area.less_x(), "‹"), (area.x + area.width - area.arrow_width(), "›")];
+                for (x, arrow) in arrows {
+                    frame.lines.push(TextLine {
+                        x: x + (area.arrow_width() - small_cell) / 2.0,
+                        y,
+                        small: true,
+                        spans: vec![Span::plain(arrow, theme.accent)],
+                    });
+                }
+                let width = text.chars().count() as f32 * small_cell;
+                let middle = area.x + area.width - 2.5 * area.arrow_width();
+                frame.lines.push(TextLine {
+                    x: middle - width / 2.0,
+                    y,
+                    small: true,
+                    spans: vec![Span::plain(text, theme.foreground)],
+                });
+            }
+            (Kind::Toggle, _) => {
+                let on = value(index, config) == "on";
+                let (width, height, gap) = (30.0 * scale, 16.0 * scale, 3.0 * scale);
+                let track = top + (area.row_height - height) / 2.0;
+                let knob = height - gap * 2.0;
+                frame.quads.push(Quad {
+                    x: right - width,
+                    y: track,
+                    width,
+                    height,
+                    color: if on { rgba(theme.accent, 1.0) } else { rgba(theme.muted, 0.35) },
+                    shape: Shape::Rounded { radius: height / 2.0 },
+                });
+                frame.quads.push(Quad {
+                    x: if on { right - gap - knob } else { right - width + gap },
+                    y: track + gap,
+                    width: knob,
+                    height: knob,
+                    color: rgba(if on { theme.background } else { theme.foreground }, 1.0),
+                    shape: Shape::Rounded { radius: knob / 2.0 },
+                });
+            }
+            (Kind::Text, editing) => {
+                let room = ((area.width * 0.55 - inset) / small_cell) as usize;
+                let text = editing.cloned().unwrap_or_else(|| value(index, config));
+                let shown = if text.is_empty() && editing.is_none() {
+                    "Default".to_string()
+                } else {
+                    fit(&text, room)
+                };
+                let width = shown.chars().count() as f32 * small_cell;
+                let color = if editing.is_some() { theme.foreground } else { theme.muted };
+                frame.lines.push(TextLine {
+                    x: right - width,
+                    y,
+                    small: true,
+                    spans: vec![Span::plain(shown, color)],
+                });
+                if editing.is_some() {
+                    let caret = Quad::new(right + scale, y + 3.0 * scale, 2.0 * scale, layout.cell.height - 6.0 * scale, rgba(theme.accent, 1.0));
+                    frame.quads.push(caret);
+                }
+            }
+        }
+    }
+
+    let toggle = FIELDS[settings.selected].kind == Kind::Toggle;
+    let (hint, color) = match (error, settings.editing.is_some()) {
+        (Some(message), _) => (message, theme.failure),
+        (None, true) => ("Enter saves. Esc cancels.", theme.muted),
+        (None, false) if toggle => ("Colours update on each matugen run.", theme.muted),
+        (None, false) => ("Arrows change a setting. Esc closes.", theme.muted),
+    };
+    let room = ((area.width - inset * 2.0) / small_cell) as usize;
+    frame.lines.push(TextLine {
+        x: area.x + inset,
+        y: bottom - area.row_height + (area.row_height - layout.cell.height) / 2.0,
+        small: true,
+        spans: vec![Span::plain(fit(hint, room), color)],
+    });
+}
+
 pub fn draw_chrome(frame: &mut Frame, chrome: &Chrome<'_>, layout: Layout, theme: &Theme) {
     let scale = layout.scale;
     let strip = layout.strip();
@@ -327,7 +471,7 @@ pub fn draw_chrome(frame: &mut Frame, chrome: &Chrome<'_>, layout: Layout, theme
         }
 
         let room = rect.x + rect.width - CLOSE_ZONE * scale - x;
-        let title = if tab.confirming { "Running. Close again to quit it" } else { tab.title.as_str() };
+        let title = if tab.confirming { "Press again to end it" } else { tab.title.as_str() };
         let color = match (tab.confirming, is_active) {
             (true, _) => theme.failure,
             (false, true) => theme.foreground,
@@ -350,6 +494,29 @@ pub fn draw_chrome(frame: &mut Frame, chrome: &Chrome<'_>, layout: Layout, theme
             });
         }
     }
+
+    let gear = chrome.bar.settings;
+    let lit = chrome.hovered_settings || chrome.settings_open;
+    if lit {
+        let inset = 6.0 * scale;
+        frame.quads.push(Quad {
+            x: gear.x + inset,
+            y: top + inset / 2.0,
+            width: gear.width - inset * 2.0,
+            height: strip - top - inset,
+            color: rgba(theme.foreground, 0.1),
+            shape: Shape::Rounded { radius: 6.0 * scale },
+        });
+    }
+    let radius = 9.0 * scale;
+    frame.quads.push(Quad {
+        x: gear.x + gear.width / 2.0 - radius,
+        y: (top + strip) / 2.0 - radius,
+        width: radius * 2.0,
+        height: radius * 2.0,
+        color: rgba(if lit { theme.foreground } else { theme.muted }, 1.0),
+        shape: Shape::Gear { radius },
+    });
 
     let plus = chrome.bar.new_tab;
     let color = if chrome.hovered_new { theme.foreground } else { theme.muted };

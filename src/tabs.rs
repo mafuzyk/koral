@@ -103,6 +103,7 @@ pub struct Rect {
 pub struct Bar {
     pub tabs: Vec<Rect>,
     pub new_tab: Rect,
+    pub settings: Rect,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +111,7 @@ pub enum Hit {
     Tab(usize),
     Close(usize),
     New,
+    Settings,
     Empty,
 }
 
@@ -121,18 +123,22 @@ impl Rect {
 
 // shortcut: tabs keep shrinking past legibility, add scrolling if that ever hurts.
 pub fn layout(count: usize, width: f32, height: f32) -> Bar {
-    let room = (width - LEFT_INSET - height).max(0.0);
+    let settings = Rect { x: width - height, y: 0.0, width: height, height };
+    let room = (width - LEFT_INSET - height * 2.0).max(0.0);
     let tab = (room / count.max(1) as f32).min(MAX_TAB);
     let tabs: Vec<Rect> = (0..count)
         .map(|index| Rect { x: LEFT_INSET + index as f32 * tab, y: 0.0, width: tab, height })
         .collect();
     let new_tab = Rect { x: LEFT_INSET + count as f32 * tab, y: 0.0, width: height, height };
-    Bar { tabs, new_tab }
+    Bar { tabs, new_tab, settings }
 }
 
 pub fn hit(bar: &Bar, x: f32, y: f32) -> Hit {
     if bar.new_tab.contains(x, y) {
         return Hit::New;
+    }
+    if bar.settings.contains(x, y) {
+        return Hit::Settings;
     }
     match bar.tabs.iter().position(|tab| tab.contains(x, y)) {
         Some(index) if x >= bar.tabs[index].x + bar.tabs[index].width - CLOSE_ZONE => Hit::Close(index),

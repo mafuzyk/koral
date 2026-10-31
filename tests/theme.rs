@@ -76,3 +76,20 @@ fn the_palette_keeps_text_readable_on_the_background() {
     let contrast = (luminance(theme.foreground) + 0.05) / (luminance(theme.background) + 0.05);
     assert!(contrast > 7.0, "{contrast}");
 }
+
+#[test]
+fn named_colours_replace_the_built_in_ones() {
+    let theme = Theme::with_colors("background #102030\nansi1 #AA0000\nansi15 #FFFFFF\n");
+    assert_eq!(Some(theme.background), hex("#102030"));
+    assert_eq!(Some(theme.ansi[1]), hex("#AA0000"));
+    assert_eq!(Some(theme.ansi[15]), hex("#FFFFFF"));
+}
+
+#[test]
+fn a_damaged_colour_file_keeps_the_built_in_colours() {
+    let built_in = Theme::default();
+    let theme = Theme::with_colors("background red\nansi99 #AA0000\nnonsense #AA0000\n\ncursor\n");
+    assert_eq!(theme.background, built_in.background);
+    assert_eq!(theme.ansi, built_in.ansi);
+    assert_eq!(theme.cursor, built_in.cursor);
+}

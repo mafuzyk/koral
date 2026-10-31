@@ -28,6 +28,7 @@ pub enum UserEvent {
     Reply(u64, String),
     Copy(String),
     Color(u64, usize, ColorReply),
+    Colors,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

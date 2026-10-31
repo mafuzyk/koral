@@ -1,0 +1,23 @@
+background {{colors.surface.default.hex}}
+foreground {{colors.on_surface.default.hex}}
+cursor {{colors.primary.default.hex}}
+accent {{colors.primary.default.hex}}
+success {{colors.tertiary.default.hex}}
+failure {{colors.error.default.hex}}
+muted {{colors.on_surface_variant.default.hex}}
+ansi0 {{colors.surface_container_high.default.hex}}
+ansi1 {{colors.primary.default.hex | set_hue: 5.0}}
+ansi2 {{colors.primary.default.hex | set_hue: 130.0}}
+ansi3 {{colors.primary.default.hex | set_hue: 45.0}}
+ansi4 {{colors.primary.default.hex | set_hue: 215.0}}
+ansi5 {{colors.primary.default.hex | set_hue: 290.0}}
+ansi6 {{colors.primary.default.hex | set_hue: 180.0}}
+ansi7 {{colors.on_surface_variant.default.hex}}
+ansi8 {{colors.outline.default.hex}}
+ansi9 {{colors.primary_fixed.default.hex | set_hue: 5.0}}
+ansi10 {{colors.primary_fixed.default.hex | set_hue: 130.0}}
+ansi11 {{colors.primary_fixed.default.hex | set_hue: 45.0}}
+ansi12 {{colors.primary_fixed.default.hex | set_hue: 215.0}}
+ansi13 {{colors.primary_fixed.default.hex | set_hue: 290.0}}
+ansi14 {{colors.primary_fixed.default.hex | set_hue: 180.0}}
+ansi15 {{colors.on_surface.default.hex}}

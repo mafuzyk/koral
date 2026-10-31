@@ -1,5 +1,6 @@
 pub mod blocks;
 pub mod marks;
+pub mod matugen;
 pub mod session;
 pub mod view;
 pub mod input;
@@ -10,3 +11,4 @@ pub mod frame;
 pub mod pty;
 pub mod render;
 pub mod config;
+pub mod settings;

@@ -10,8 +10,6 @@ use glyphon::{
 };
 use winit::window::Window;
 
-const FONT: &str = "IosevkaTerm Nerd Font Mono";
-const FONT_SIZE: f32 = 18.0;
 const LINE_HEIGHT: f32 = 1.2;
 const SMALL: f32 = 0.82;
 const MAX_CACHED_LINES: usize = 4_000;
@@ -53,7 +51,16 @@ fn fs_main(in: Varying) -> @location(0) vec4<f32> {
     let mode = in.shape.w;
     let radius = in.shape.z;
     var coverage = 1.0;
-    if mode > 2.5 {
+    if mode > 3.5 {
+        let point = in.pixel - in.rect.xy - in.rect.zw * 0.5;
+        let distance_from_centre = length(point);
+        let sector = 6.2831853 / 8.0;
+        let from_tooth = abs(fract(atan2(point.y, point.x) / sector + 0.5) - 0.5) * sector;
+        let tooth = max(distance_from_centre * sin(from_tooth) - radius * 0.2, distance_from_centre - radius);
+        let body = min(tooth, distance_from_centre - radius * 0.74);
+        let distance = max(body, radius * 0.34 - distance_from_centre);
+        coverage = clamp(0.5 - distance, 0.0, 1.0);
+    } else if mode > 2.5 {
         let half_size = in.rect.zw * 0.5;
         let offset = abs(in.pixel - in.rect.xy - half_size) - half_size + vec2<f32>(radius);
         let distance = length(max(offset, vec2<f32>(0.0))) + min(max(offset.x, offset.y), 0.0) - radius;
@@ -76,6 +83,7 @@ pub enum Shape {
     InsideCircle { x: f32, y: f32, radius: f32 },
     OutsideCircle { x: f32, y: f32, radius: f32 },
     Rounded { radius: f32 },
+    Gear { radius: f32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -100,6 +108,7 @@ impl Quad {
             Shape::InsideCircle { x, y, radius } => (x, y, radius, 1.0),
             Shape::OutsideCircle { x, y, radius } => (x, y, radius, 2.0),
             Shape::Rounded { radius } => (0.0, 0.0, radius, 3.0),
+            Shape::Gear { radius } => (0.0, 0.0, radius, 4.0),
         };
         [self.x, self.y, self.width, self.height, r, g, b, a, cx, cy, radius, mode]
     }
@@ -131,6 +140,15 @@ pub struct TextLine {
     pub spans: Vec<Span>,
 }
 
+/// Terminal text under an open panel: the first `count` lines stop at `x` inside the band.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Clip {
+    pub count: usize,
+    pub x: f32,
+    pub top: f32,
+    pub bottom: f32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Cell {
     pub width: f32,
@@ -153,13 +171,15 @@ pub struct Renderer {
     atlas: TextAtlas,
     text: TextRenderer,
     lines: HashMap<u64, Buffer>,
+    font: String,
+    points: f32,
     scale: f32,
     cell: Cell,
     window: Arc<Window>,
 }
 
 impl Renderer {
-    pub async fn new(window: Arc<Window>, instance: wgpu::Instance) -> Self {
+    pub async fn new(window: Arc<Window>, instance: wgpu::Instance, font: String, points: f32) -> Self {
         let size = window.inner_size();
         let scale = window.scale_factor() as f32;
         let surface = instance.create_surface(window.clone()).expect("create surface");
@@ -274,7 +294,7 @@ impl Renderer {
         let viewport = Viewport::new(&device, &cache);
         let mut atlas = TextAtlas::with_color_mode(&device, &queue, &cache, format, ColorMode::Web);
         let text = TextRenderer::new(&mut atlas, &device, wgpu::MultisampleState::default(), None);
-        let cell = measure(&mut font_system, scale);
+        let cell = measure(&mut font_system, &font, points, scale);
 
         Self {
             device,
@@ -292,6 +312,8 @@ impl Renderer {
             atlas,
             text,
             lines: HashMap::new(),
+            font,
+            points,
             scale,
             cell,
             window,
@@ -310,35 +332,47 @@ impl Renderer {
 
     pub fn set_scale(&mut self, scale: f32) {
         self.scale = scale;
-        self.cell = measure(&mut self.font_system, scale);
+        self.remeasure();
+    }
+
+    pub fn set_font(&mut self, font: &str, points: f32) {
+        self.font = font.to_string();
+        self.points = points;
+        self.remeasure();
+    }
+
+    fn remeasure(&mut self) {
+        self.cell = measure(&mut self.font_system, &self.font, self.points, self.scale);
         self.lines.clear();
     }
 
-    pub fn draw(&mut self, quads: &[Quad], lines: &[TextLine], clear: [f32; 4]) {
+    pub fn draw(&mut self, quads: &[Quad], lines: &[TextLine], clip: Clip, clear: [f32; 4]) {
         let keys: Vec<u64> = lines.iter().map(line_key).collect();
         if self.lines.len() + keys.len() > MAX_CACHED_LINES {
             self.lines.clear();
         }
         for (key, line) in keys.iter().zip(lines) {
             if !self.lines.contains_key(key) {
-                let buffer = shape(&mut self.font_system, line, self.scale);
+                let buffer = shape(&mut self.font_system, line, &self.font, self.points, self.scale);
                 self.lines.insert(*key, buffer);
             }
         }
 
         let (width, height) = (self.config.width, self.config.height);
         self.viewport.update(&self.queue, Resolution { width, height });
-        let bounds =
-            TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
+        let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
         let cached = &self.lines;
-        let areas = keys.iter().zip(lines).map(|(key, line)| TextArea {
-            buffer: &cached[key],
-            left: line.x,
-            top: line.y,
-            scale: 1.0,
-            bounds,
-            default_color: Color::rgb(255, 255, 255),
-            custom_glyphs: &[],
+        let areas = keys.iter().zip(lines).enumerate().map(|(index, (key, line))| {
+            let clipped = index < clip.count && (clip.top..clip.bottom).contains(&line.y);
+            TextArea {
+                buffer: &cached[key],
+                left: line.x,
+                top: line.y,
+                scale: 1.0,
+                bounds: if clipped { TextBounds { right: clip.x as i32, ..bounds } } else { bounds },
+                default_color: Color::rgb(255, 255, 255),
+                custom_glyphs: &[],
+            }
         });
         if self
             .text
@@ -434,29 +468,29 @@ fn quad_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
     })
 }
 
-fn metrics(scale: f32, small: bool) -> Metrics {
-    let size = FONT_SIZE * scale * if small { SMALL } else { 1.0 };
-    Metrics::new(size, (FONT_SIZE * scale * LINE_HEIGHT).round())
+fn metrics(points: f32, scale: f32, small: bool) -> Metrics {
+    let pixels = points * 96.0 / 72.0 * scale;
+    Metrics::new(pixels * if small { SMALL } else { 1.0 }, (pixels * LINE_HEIGHT).round())
 }
 
-fn base_attrs() -> Attrs<'static> {
-    Attrs::new().family(Family::Name(FONT)).weight(Weight::MEDIUM)
+fn base_attrs(font: &str) -> Attrs<'_> {
+    Attrs::new().family(Family::Name(font)).weight(Weight::MEDIUM)
 }
 
-fn measure(font_system: &mut FontSystem, scale: f32) -> Cell {
-    let metrics = metrics(scale, false);
+fn measure(font_system: &mut FontSystem, font: &str, points: f32, scale: f32) -> Cell {
+    let metrics = metrics(points, scale, false);
     let mut buffer = Buffer::new(font_system, metrics);
-    buffer.set_text("M", &base_attrs(), Shaping::Advanced, None);
+    buffer.set_text("M", &base_attrs(font), Shaping::Advanced, None);
     buffer.shape_until_scroll(font_system, false);
     let width = buffer.layout_runs().next().map_or(metrics.font_size * 0.5, |run| run.line_w);
     Cell { width, height: metrics.line_height }
 }
 
-fn shape(font_system: &mut FontSystem, line: &TextLine, scale: f32) -> Buffer {
-    let mut buffer = Buffer::new(font_system, metrics(scale, line.small));
+fn shape(font_system: &mut FontSystem, line: &TextLine, font: &str, points: f32, scale: f32) -> Buffer {
+    let mut buffer = Buffer::new(font_system, metrics(points, scale, line.small));
     let spans = line.spans.iter().map(|span| {
         let (r, g, b) = span.color;
-        let mut attrs = base_attrs().color(Color::rgb(r, g, b));
+        let mut attrs = base_attrs(font).color(Color::rgb(r, g, b));
         if span.bold {
             attrs = attrs.weight(Weight::BOLD);
         }
@@ -465,7 +499,7 @@ fn shape(font_system: &mut FontSystem, line: &TextLine, scale: f32) -> Buffer {
         }
         (span.text.as_str(), attrs)
     });
-    buffer.set_rich_text(spans, &base_attrs(), Shaping::Advanced, None);
+    buffer.set_rich_text(spans, &base_attrs(font), Shaping::Advanced, None);
     buffer.shape_until_scroll(font_system, false);
     buffer
 }

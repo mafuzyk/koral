@@ -169,6 +169,7 @@ pub enum Action {
     ToggleFold,
     PageUp,
     PageDown,
+    OpenSettings,
 }
 
 pub fn binding(key: &Key, mods: ModifiersState) -> Option<Action> {
@@ -193,6 +194,7 @@ pub fn binding(key: &Key, mods: ModifiersState) -> Option<Action> {
                 "x" => Some(Action::NextPrompt),
                 "g" => Some(Action::CopyOutput),
                 "f" => Some(Action::ToggleFold),
+                "," | "<" => Some(Action::OpenSettings),
                 _ => None,
             }
         }

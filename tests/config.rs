@@ -110,3 +110,15 @@ fn set_updates_the_last_duplicate_because_it_wins() {
     assert_eq!(config(&result).opacity, 0.6);
     assert!(result.starts_with("polyp opacity 0.1\n"));
 }
+
+#[test]
+fn matugen_is_off_until_turned_on() {
+    assert!(!config("").matugen);
+    assert!(config("polyp matugen on").matugen);
+    assert!(!config("polyp matugen off").matugen);
+}
+
+#[test]
+fn matugen_takes_only_on_or_off() {
+    assert_eq!(errors("polyp matugen yes").len(), 1);
+}
