@@ -9,3 +9,4 @@ pub mod format;
 pub mod frame;
 pub mod pty;
 pub mod render;
+pub mod config;
