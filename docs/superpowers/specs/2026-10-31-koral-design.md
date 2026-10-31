@@ -81,13 +81,16 @@ that matches the `wgpu` version. No async runtime, as in sharky.
 Modules: `marks` (scanner), `blocks` (block store and state machine), `view`
 (fold-aware row mapping), `tabs`, `render`, `theme`, `input`.
 
-### Biggest technical risk
+### Block anchors
 
 Alacritty has no stable line identity: scrollback truncation shifts indexes and
-resize reflows lines. Blocks must stay attached to their lines. Candidate:
-anchor each mark as a private-use zero-width character on the first cell of its
-line, so it travels with the cell. Milestone 1 tests this before anything
-depends on it.
+resize reflows lines. Each block is anchored by a private-use zero-width character
+on the first cell of its prompt line, so it travels with the cell.
+
+The milestone 1 spike confirmed that anchors survive scrolling, narrowing and
+widening reflow, truncation, `ED 2` and the alternate screen. `ED 3` removes them
+with the scrollback. Writing to a cell drops its anchor, so it is placed on `B`,
+after the prompt text, not on `A`, and sharky's redraw places it again.
 
 ### Native tabs
 
