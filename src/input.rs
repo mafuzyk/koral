@@ -153,3 +153,49 @@ pub fn mouse_report(mouse: Mouse, mode: TermMode) -> Option<Vec<u8>> {
     let code = if mouse.pressed { code } else { 3 + bits };
     Some(vec![0x1b, b'[', b'M', 32 + code, 33 + mouse.column as u8, 33 + mouse.line as u8])
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    NewTab,
+    CloseTab,
+    NextTab,
+    PreviousTab,
+    SelectTab(usize),
+    Copy,
+    Paste,
+    PreviousPrompt,
+    NextPrompt,
+    CopyOutput,
+    ToggleFold,
+    PageUp,
+    PageDown,
+}
+
+pub fn binding(key: &Key, mods: ModifiersState) -> Option<Action> {
+    let shift = mods.shift_key();
+    match key {
+        Key::Named(NamedKey::Tab) if mods.control_key() => {
+            Some(if shift { Action::PreviousTab } else { Action::NextTab })
+        }
+        Key::Named(NamedKey::PageUp) if shift => Some(Action::PageUp),
+        Key::Named(NamedKey::PageDown) if shift => Some(Action::PageDown),
+        Key::Character(text) if mods == ModifiersState::ALT => match text.parse::<usize>() {
+            Ok(digit @ 1..=9) => Some(Action::SelectTab(digit - 1)),
+            _ => None,
+        },
+        Key::Character(text) if mods.control_key() && shift && !mods.alt_key() => {
+            match text.to_ascii_lowercase().as_str() {
+                "t" => Some(Action::NewTab),
+                "w" => Some(Action::CloseTab),
+                "c" => Some(Action::Copy),
+                "v" => Some(Action::Paste),
+                "z" => Some(Action::PreviousPrompt),
+                "x" => Some(Action::NextPrompt),
+                "g" => Some(Action::CopyOutput),
+                "f" => Some(Action::ToggleFold),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}

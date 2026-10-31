@@ -93,3 +93,21 @@ fn block_at(grid: &Grid<Cell>, line: Line, blocks: &BlockStore) -> Option<u32> {
 fn wraps(grid: &Grid<Cell>, line: Line) -> bool {
     grid[line][Column(grid.columns() - 1)].flags.contains(Flags::WRAPLINE)
 }
+
+pub fn previous_prompt(rows: &[Row], top: usize) -> Option<usize> {
+    rows.get(..top)?.iter().rposition(|row| row.block.is_some())
+}
+
+pub fn next_prompt(rows: &[Row], top: usize) -> Option<usize> {
+    let offset = rows.get(top + 1..)?.iter().position(|row| row.block.is_some())?;
+    Some(top + 1 + offset)
+}
+
+/// The block a fold key acts on: the last finished one above `end`.
+pub fn fold_target(rows: &[Row], end: usize, blocks: &BlockStore) -> Option<u32> {
+    rows[..end.min(rows.len())]
+        .iter()
+        .rev()
+        .filter_map(|row| row.block)
+        .find(|id| blocks.get(*id).is_some_and(|block| block.status.is_some()))
+}

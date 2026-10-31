@@ -68,7 +68,7 @@ impl Theme {
         overrides[index].unwrap_or_else(|| self.palette(index))
     }
 
-    fn palette(&self, index: usize) -> Rgb {
+    pub fn palette(&self, index: usize) -> Rgb {
         match index {
             0..=15 => self.ansi[index],
             16..=231 => {

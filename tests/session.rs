@@ -246,3 +246,50 @@ fn a_finished_command_is_not_pinned() {
     let rows = f.rows();
     assert_eq!(pinned(&rows, 2, &f.session.blocks), None);
 }
+
+mod navigation {
+    use alacritty_terminal::index::Line;
+    use koral::blocks::BlockStore;
+    use koral::marks::Mark;
+    use koral::view::{Row, fold_target, next_prompt, previous_prompt};
+    use std::time::Instant;
+
+    fn row(block: Option<u32>) -> Row {
+        Row { line: Line(0), block, hidden: 0 }
+    }
+
+    fn sample() -> Vec<Row> {
+        vec![row(Some(0)), row(None), row(None), row(Some(1)), row(None), row(Some(2))]
+    }
+
+    #[test]
+    fn previous_prompt_is_strictly_above_the_top() {
+        assert_eq!(previous_prompt(&sample(), 3), Some(0));
+        assert_eq!(previous_prompt(&sample(), 4), Some(3));
+        assert_eq!(previous_prompt(&sample(), 0), None);
+    }
+
+    #[test]
+    fn next_prompt_is_strictly_below_the_top() {
+        assert_eq!(next_prompt(&sample(), 0), Some(3));
+        assert_eq!(next_prompt(&sample(), 3), Some(5));
+        assert_eq!(next_prompt(&sample(), 5), None);
+    }
+
+    #[test]
+    fn fold_target_is_the_last_finished_block_on_screen() {
+        let mut blocks = BlockStore::default();
+        let now = Instant::now();
+        for status in [Some(0), Some(0)] {
+            blocks.apply(Mark::PromptStart, now);
+            blocks.apply(Mark::PromptEnd, now);
+            blocks.apply(Mark::CommandStart(None), now);
+            blocks.apply(Mark::CommandEnd(status), now);
+        }
+        blocks.apply(Mark::PromptStart, now);
+        blocks.apply(Mark::PromptEnd, now);
+
+        assert_eq!(fold_target(&sample(), sample().len(), &blocks), Some(1));
+        assert_eq!(fold_target(&sample(), 2, &blocks), Some(0));
+    }
+}
