@@ -1,0 +1,10 @@
+[package]
+name = "koral"
+version = "0.1.0"
+edition = "2024"
+description = "A terminal built around the sharky shell"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]
+alacritty_terminal = "0.26.0"
