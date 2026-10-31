@@ -11,5 +11,14 @@ alacritty_terminal = "0.26.0"
 arboard = { version = "3.7.0", default-features = false, features = ["wayland-data-control"] }
 glyphon = "0.12"
 polling = "3.11.0"
+pollster = "1.0.1"
 wgpu = "30"
 winit = "0.30"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true

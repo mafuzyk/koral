@@ -1,0 +1,415 @@
+use std::time::Duration;
+
+use alacritty_terminal::event::EventListener;
+use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::{Column, Point};
+use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::{Term, TermMode};
+use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
+
+use crate::blocks::{Activity, Block, BlockStore};
+use crate::format;
+use crate::render::{Cell, Quad, Shape, Span, TextLine, rgba};
+use crate::tabs::{Bar, CLOSE_ZONE, Rect};
+use crate::theme::Theme;
+use crate::view::{Row, pinned, without_anchors};
+
+pub const OPACITY: f32 = 0.80;
+const STRIP_HEIGHT: f32 = 38.0;
+const TAB_TOP: f32 = 6.0;
+const TAB_RADIUS: f32 = 10.0;
+const PADDING: f32 = 8.0;
+const GUTTER_CELLS: f32 = 2.0;
+const STRIP_SHADE: [f32; 4] = [0.0, 0.0, 0.0, 0.32];
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Layout {
+    pub width: f32,
+    pub height: f32,
+    pub scale: f32,
+    pub cell: Cell,
+}
+
+impl Layout {
+    pub fn strip(&self) -> f32 {
+        STRIP_HEIGHT * self.scale
+    }
+
+    pub fn left(&self) -> f32 {
+        PADDING * self.scale
+    }
+
+    pub fn gutter(&self) -> f32 {
+        GUTTER_CELLS * self.cell.width
+    }
+
+    pub fn grid_x(&self) -> f32 {
+        self.left() + self.gutter()
+    }
+
+    pub fn grid_y(&self) -> f32 {
+        self.strip() + PADDING * self.scale / 2.0
+    }
+
+    pub fn columns(&self) -> usize {
+        (((self.width - self.grid_x() - self.left()) / self.cell.width) as usize).max(2)
+    }
+
+    pub fn lines(&self) -> usize {
+        (((self.height - self.grid_y() - self.left()) / self.cell.height) as usize).max(1)
+    }
+
+    /// The visible (row, column) under a window position.
+    pub fn cell_at(&self, x: f32, y: f32) -> (usize, usize) {
+        let row = ((y - self.grid_y()).max(0.0) / self.cell.height) as usize;
+        let column = ((x - self.grid_x()).max(0.0) / self.cell.width) as usize;
+        (row.min(self.lines() - 1), column.min(self.columns() - 1))
+    }
+
+    pub fn in_gutter(&self, x: f32) -> bool {
+        x < self.grid_x()
+    }
+}
+
+#[derive(Default)]
+pub struct Frame {
+    pub quads: Vec<Quad>,
+    pub lines: Vec<TextLine>,
+}
+
+pub struct TabView {
+    pub title: String,
+    pub activity: Activity,
+    pub confirming: bool,
+}
+
+pub struct Chrome<'a> {
+    pub tabs: &'a [TabView],
+    pub active: usize,
+    pub hovered: Option<usize>,
+    pub hovered_close: bool,
+    pub hovered_new: bool,
+    pub bar: &'a Bar,
+}
+
+pub fn visible_top(rows: &[Row], lines: usize, scroll: usize) -> usize {
+    rows.len().saturating_sub(lines + scroll)
+}
+
+pub fn draw_terminal<L: EventListener>(
+    frame: &mut Frame,
+    term: &Term<L>,
+    blocks: &BlockStore,
+    rows: &[Row],
+    scroll: usize,
+    focused: bool,
+    layout: Layout,
+    theme: &Theme,
+) {
+    let top = visible_top(rows, layout.lines(), scroll);
+    let selection = term.selection.as_ref().and_then(|selection| selection.to_range(term));
+    let grid = term.grid();
+    let columns = grid.columns();
+    let colors = term.colors();
+    let default_bg = theme.resolve(Color::Named(NamedColor::Background), colors);
+
+    for (index, row) in rows[top..].iter().take(layout.lines()).enumerate() {
+        let y = layout.grid_y() + index as f32 * layout.cell.height;
+        let cells = &grid[row.line];
+        let mut spans: Vec<Span> = Vec::new();
+
+        for column in 0..columns {
+            let cell = &cells[Column(column)];
+            if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                continue;
+            }
+
+            let mut fg = theme.resolve(cell.fg, colors);
+            let mut bg = theme.resolve(cell.bg, colors);
+            if cell.flags.contains(Flags::INVERSE) {
+                std::mem::swap(&mut fg, &mut bg);
+            }
+            if cell.flags.contains(Flags::DIM) {
+                fg = Rgb { r: fg.r / 3 * 2, g: fg.g / 3 * 2, b: fg.b / 3 * 2 };
+            }
+            if cell.flags.contains(Flags::HIDDEN) {
+                fg = bg;
+            }
+
+            let x = layout.grid_x() + column as f32 * layout.cell.width;
+            let wide = if cell.flags.contains(Flags::WIDE_CHAR) { 2.0 } else { 1.0 };
+            let width = layout.cell.width * wide;
+            let selected = selection.is_some_and(|range| range.contains(Point::new(row.line, Column(column))));
+            if selected {
+                frame.quads.push(Quad::new(x, y, width, layout.cell.height, rgba(theme.accent, 0.35)));
+            } else if bg != default_bg {
+                frame.quads.push(Quad::new(x, y, width, layout.cell.height, rgba(bg, 1.0)));
+            }
+            let thickness = layout.scale.max(1.0);
+            if cell.flags.intersects(Flags::ALL_UNDERLINES) {
+                let underline = y + layout.cell.height - 2.0 * thickness;
+                frame.quads.push(Quad::new(x, underline, width, thickness, rgba(fg, 1.0)));
+            }
+            if cell.flags.contains(Flags::STRIKEOUT) {
+                let strike = y + layout.cell.height / 2.0;
+                frame.quads.push(Quad::new(x, strike, width, thickness, rgba(fg, 1.0)));
+            }
+
+            let mut text = String::from(if cell.c == '\0' { ' ' } else { cell.c });
+            if let Some(extra) = cell.zerowidth() {
+                text.extend(extra.iter());
+            }
+            let text = without_anchors(&text);
+            let bold = cell.flags.intersects(Flags::BOLD);
+            let italic = cell.flags.intersects(Flags::ITALIC);
+            let color = (fg.r, fg.g, fg.b);
+            match spans.last_mut() {
+                Some(last) if last.color == color && last.bold == bold && last.italic == italic => {
+                    last.text.push_str(&text);
+                }
+                _ => spans.push(Span { text, color, bold, italic }),
+            }
+        }
+
+        while spans.last().is_some_and(|span| span.text.trim_end().is_empty()) {
+            spans.pop();
+        }
+        if let Some(last) = spans.last_mut() {
+            last.text.truncate(last.text.trim_end().len());
+            frame.lines.push(TextLine { x: layout.grid_x(), y, small: false, spans });
+        }
+
+        if let Some(block) = row.block.and_then(|id| blocks.get(id)) {
+            draw_block_marks(frame, block, row, y, blocks, layout, theme);
+        }
+    }
+
+    if scroll == 0 && term.mode().contains(TermMode::SHOW_CURSOR) {
+        let cursor = grid.cursor.point;
+        let position = rows[top..].iter().take(layout.lines()).position(|row| row.line == cursor.line);
+        if let Some(index) = position {
+            draw_cursor(frame, term, index, cursor.column.0, focused, layout, theme);
+        }
+    }
+
+    if let Some(block) = pinned(rows, top, blocks).and_then(|id| blocks.get(id)) {
+        draw_pinned(frame, block, layout, theme);
+    }
+}
+
+fn draw_block_marks(
+    frame: &mut Frame,
+    block: &Block,
+    row: &Row,
+    y: f32,
+    blocks: &BlockStore,
+    layout: Layout,
+    theme: &Theme,
+) {
+    if block.status.is_none() && block.command.is_none() {
+        return;
+    }
+    let toggle = if block.folded { "▸" } else { "▾" };
+    let toggle_color = match block.status {
+        Some(0) => theme.success,
+        Some(_) => theme.failure,
+        None => theme.accent,
+    };
+    frame.lines.push(TextLine {
+        x: layout.left(),
+        y,
+        small: false,
+        spans: vec![Span::plain(toggle, toggle_color)],
+    });
+
+    let running = blocks.activity() == Activity::Running && blocks.latest().is_some_and(|last| last.id == block.id);
+    let mut spans = Vec::new();
+    if row.hidden > 0 {
+        spans.push(Span::plain(format!("{}  ", format::lines(row.hidden)), theme.muted));
+    }
+    match block.status {
+        Some(0) => spans.push(Span::plain("✓", theme.success)),
+        Some(status) => spans.push(Span::plain(format!("✗ {status}"), theme.failure)),
+        None if running => spans.push(Span::plain("running", theme.accent)),
+        None => {}
+    }
+    if let Some(duration) = block.duration.filter(|value| *value >= Duration::from_millis(100)) {
+        spans.push(Span::plain(format!("  {}", format::duration(duration)), theme.muted));
+    }
+    if spans.is_empty() {
+        return;
+    }
+
+    let characters: usize = spans.iter().map(|span| span.text.chars().count()).sum();
+    let x = layout.width - layout.left() - characters as f32 * layout.cell.width * 0.82;
+    frame.lines.push(TextLine { x, y, small: true, spans });
+}
+
+fn draw_cursor<L>(
+    frame: &mut Frame,
+    term: &Term<L>,
+    index: usize,
+    column: usize,
+    focused: bool,
+    layout: Layout,
+    theme: &Theme,
+) {
+    let x = layout.grid_x() + column as f32 * layout.cell.width;
+    let y = layout.grid_y() + index as f32 * layout.cell.height;
+    let thickness = (2.0 * layout.scale).round();
+    let color = rgba(theme.cursor, if focused { 0.9 } else { 0.4 });
+    let (width, height) = (layout.cell.width, layout.cell.height);
+    frame.quads.push(match term.cursor_style().shape {
+        CursorShape::Beam => Quad::new(x, y, thickness, height, color),
+        CursorShape::Underline => Quad::new(x, y + height - thickness, width, thickness, color),
+        CursorShape::Hidden => return,
+        _ => Quad::new(x, y, width, height, color),
+    });
+}
+
+fn draw_pinned(frame: &mut Frame, block: &Block, layout: Layout, theme: &Theme) {
+    let y = layout.grid_y();
+    frame.quads.push(Quad::new(0.0, y, layout.width, layout.cell.height, rgba(theme.ansi[0], 1.0)));
+    let command = block.command.as_deref().and_then(|text| text.lines().next()).unwrap_or("running");
+    frame.lines.push(TextLine {
+        x: layout.left(),
+        y,
+        small: false,
+        spans: vec![Span::plain(format!("▾ {command}"), theme.foreground)],
+    });
+}
+
+pub fn draw_chrome(frame: &mut Frame, chrome: &Chrome<'_>, layout: Layout, theme: &Theme) {
+    let scale = layout.scale;
+    let strip = layout.strip();
+    let top = TAB_TOP * scale;
+    let radius = TAB_RADIUS * scale;
+    let active = chrome.bar.tabs.get(chrome.active).copied().unwrap_or(Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 0.0,
+        height: 0.0,
+    });
+    shade_around_tab(frame, active, layout.width, strip, top, radius);
+
+    for (index, (tab, rect)) in chrome.tabs.iter().zip(&chrome.bar.tabs).enumerate() {
+        let is_active = index == chrome.active;
+        let hovered = chrome.hovered == Some(index);
+        if hovered && !is_active {
+            let inset = 3.0 * scale;
+            frame.quads.push(Quad {
+                x: rect.x + inset,
+                y: top + inset,
+                width: rect.width - inset * 2.0,
+                height: strip - top - inset * 2.0,
+                color: rgba(theme.foreground, 0.07),
+                shape: Shape::Rounded { radius: 6.0 * scale },
+            });
+        }
+
+        let y = (top + strip - layout.cell.height) / 2.0;
+        let (glyph, glyph_color) = match tab.activity {
+            Activity::Running => ("●", theme.accent),
+            Activity::Succeeded => ("✓", theme.success),
+            Activity::Failed => ("✗", theme.failure),
+            Activity::Idle => ("", theme.muted),
+        };
+        let small_cell = layout.cell.width * 0.82;
+        let mut x = rect.x + 12.0 * scale;
+        if !glyph.is_empty() {
+            frame.lines.push(TextLine {
+                x,
+                y,
+                small: true,
+                spans: vec![Span::plain(glyph, glyph_color)],
+            });
+            x += small_cell * 2.0;
+        }
+
+        let room = rect.x + rect.width - CLOSE_ZONE * scale - x;
+        let title = if tab.confirming { "Running. Close again to quit it" } else { tab.title.as_str() };
+        let color = match (tab.confirming, is_active) {
+            (true, _) => theme.failure,
+            (false, true) => theme.foreground,
+            (false, false) => theme.muted,
+        };
+        frame.lines.push(TextLine {
+            x,
+            y,
+            small: true,
+            spans: vec![Span::plain(fit(title, (room / small_cell) as usize), color)],
+        });
+
+        if hovered || is_active {
+            let color = if hovered && chrome.hovered_close { theme.failure } else { theme.muted };
+            frame.lines.push(TextLine {
+                x: rect.x + rect.width - 20.0 * scale,
+                y,
+                small: true,
+                spans: vec![Span::plain("×", color)],
+            });
+        }
+    }
+
+    let plus = chrome.bar.new_tab;
+    let color = if chrome.hovered_new { theme.foreground } else { theme.muted };
+    frame.lines.push(TextLine {
+        x: plus.x + (plus.width - layout.cell.width) / 2.0,
+        y: (top + strip - layout.cell.height) / 2.0,
+        small: false,
+        spans: vec![Span::plain("+", color)],
+    });
+}
+
+/// The strip is a shade laid over the window, with the active tab cut out of it,
+/// so the tab flows into the terminal with no seam at any opacity.
+fn shade_around_tab(frame: &mut Frame, tab: Rect, width: f32, strip: f32, top: f32, radius: f32) {
+    let shade = STRIP_SHADE;
+    let (left, right) = (tab.x, tab.x + tab.width);
+    let tall = strip - top;
+    let piece = |x, y, w, h, shape| Quad { x, y, width: w, height: h, color: shade, shape };
+
+    frame.quads.extend([
+        Quad::new(0.0, 0.0, width, top, shade),
+        Quad::new(0.0, top, left - radius, tall, shade),
+        Quad::new(right + radius, top, width - right - radius, tall, shade),
+        Quad::new(left - radius, top, radius, tall - radius, shade),
+        Quad::new(right, top, radius, tall - radius, shade),
+        piece(
+            left - radius,
+            strip - radius,
+            radius,
+            radius,
+            Shape::InsideCircle { x: left - radius, y: strip - radius, radius },
+        ),
+        piece(
+            right,
+            strip - radius,
+            radius,
+            radius,
+            Shape::InsideCircle { x: right + radius, y: strip - radius, radius },
+        ),
+        piece(
+            left,
+            top,
+            radius,
+            radius,
+            Shape::OutsideCircle { x: left + radius, y: top + radius, radius },
+        ),
+        piece(
+            right - radius,
+            top,
+            radius,
+            radius,
+            Shape::OutsideCircle { x: right - radius, y: top + radius, radius },
+        ),
+    ]);
+}
+
+fn fit(text: &str, room: usize) -> String {
+    if text.chars().count() <= room {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(room.saturating_sub(1)).collect();
+    format!("{kept}…")
+}
