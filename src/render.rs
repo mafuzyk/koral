@@ -114,6 +114,12 @@ impl Quad {
     }
 }
 
+pub fn surface_format(formats: &[wgpu::TextureFormat]) -> wgpu::TextureFormat {
+    // Theme colours are sRGB values: a float surface would read them as linear and wash them out.
+    let plain = [wgpu::TextureFormat::Bgra8Unorm, wgpu::TextureFormat::Rgba8Unorm];
+    plain.into_iter().find(|format| formats.contains(format)).unwrap_or(formats[0])
+}
+
 pub fn rgba(color: Rgb, alpha: f32) -> [f32; 4] {
     [f32::from(color.r) / 255.0, f32::from(color.g) / 255.0, f32::from(color.b) / 255.0, alpha]
 }
@@ -194,13 +200,7 @@ impl Renderer {
             adapter.request_device(&wgpu::DeviceDescriptor::default()).await.expect("request device");
 
         let capabilities = surface.get_capabilities(&adapter);
-        // A non-sRGB target keeps blending in the same space the theme colours are written in.
-        let format = capabilities
-            .formats
-            .iter()
-            .copied()
-            .find(|format| !format.is_srgb())
-            .unwrap_or(capabilities.formats[0]);
+        let format = surface_format(&capabilities.formats);
         let alpha_mode = [wgpu::CompositeAlphaMode::PreMultiplied, wgpu::CompositeAlphaMode::PostMultiplied]
             .into_iter()
             .find(|mode| capabilities.alpha_modes.contains(mode))
