@@ -15,6 +15,8 @@ use alacritty_terminal::vte::ansi::Rgb;
 use polling::{Event as PollEvent, Events, Poller};
 use winit::event_loop::EventLoopProxy;
 
+use crate::notify::Notice;
+use crate::tabs::clean_title;
 use crate::session::Session;
 
 const SCROLLBACK: usize = 10_000;
@@ -34,6 +36,9 @@ pub enum UserEvent {
     Color(u64, usize, ColorReply),
     Colors,
     Blink,
+    Title(u64, Option<String>),
+    Bell(u64),
+    Notify(u64, Notice),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +77,9 @@ impl EventListener for Listener {
             Event::ClipboardStore(_, text) => UserEvent::Copy(text),
             Event::ColorRequest(index, reply) => UserEvent::Color(self.tab, index, reply),
             Event::CursorBlinkingChange => UserEvent::Blink,
+            Event::Title(text) => UserEvent::Title(self.tab, clean_title(&text)),
+            Event::ResetTitle => UserEvent::Title(self.tab, None),
+            Event::Bell => UserEvent::Bell(self.tab),
             _ => return,
         };
         let _ = self.proxy.send_event(event);
@@ -82,6 +90,8 @@ pub struct Terminal {
     pub id: u64,
     pub session: Arc<FairMutex<Session<Listener>>>,
     pub scroll: usize,
+    pub title: Option<String>,
+    pub rang: bool,
     pty: Pty,
     writer: Sender<Vec<u8>>,
 }
@@ -126,7 +136,7 @@ impl Terminal {
         let reader_session = session.clone();
         std::thread::spawn(move || read_loop(id, input, reader_session, proxy));
 
-        Ok(Self { id, session, scroll: 0, pty, writer })
+        Ok(Self { id, session, scroll: 0, title: None, rang: false, pty, writer })
     }
 
     pub fn write(&self, bytes: Vec<u8>) {
@@ -216,6 +226,9 @@ fn read_loop(
                     session.feed(&buffer[..count], Instant::now());
                     for reply in session.replies.drain(..) {
                         let _ = proxy.send_event(UserEvent::Reply(id, reply));
+                    }
+                    for notice in session.notices.drain(..) {
+                        let _ = proxy.send_event(UserEvent::Notify(id, notice));
                     }
                     drop(session);
                     if pacer.read(Instant::now()) {

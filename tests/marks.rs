@@ -186,3 +186,37 @@ fn other_application_commands_pass_through() {
     });
     assert_eq!(text, b"\x1b_Xhello\x1b\\");
 }
+
+fn notify(title: &str, body: &str) -> Out {
+    Out::Mark(Mark::Notify { title: title.to_string(), body: body.to_string() })
+}
+
+#[test]
+fn osc_777_is_a_notification() {
+    assert_eq!(scan(&[b"\x1b]777;notify;Build;done; ok\x1b\\"]), vec![notify("Build", "done; ok")]);
+}
+
+#[test]
+fn osc_9_is_a_notification() {
+    assert_eq!(scan(&[b"\x1b]9;done\x07"]), vec![notify("", "done")]);
+}
+
+#[test]
+fn osc9_progress_is_not_a_notification() {
+    let text = b"\x1b]9;4;1;50\x07";
+    assert_eq!(scan(&[text]), vec![bytes(text)]);
+}
+
+#[test]
+fn a_notification_split_across_reads_is_still_found() {
+    assert_eq!(scan(&[b"\x1b]77", b"7;noti", b"fy;a;b\x07"]), vec![notify("a", "b")]);
+}
+
+#[test]
+fn an_unknown_777_stays_in_the_stream() {
+    let text = b"\x1b]777;foo;a\x07";
+    assert_eq!(scan(&[text]).into_iter().flat_map(|out| match out {
+        Out::Bytes(part) => part,
+        Out::Mark(_) => panic!("not a mark"),
+    }).collect::<Vec<u8>>(), text);
+}

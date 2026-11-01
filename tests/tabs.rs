@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use koral::blocks::BlockStore;
 use koral::marks::Mark;
-use koral::tabs::{Hit, Tabs, hit, layout, title};
+use koral::tabs::{Hit, Ring, Tabs, clean_title, hit, layout, ring, title};
 
 fn tabs(count: usize) -> Tabs<usize> {
     let mut tabs = Tabs::new(0);
@@ -111,12 +111,12 @@ fn at_prompt(cwd: &str) -> BlockStore {
 
 #[test]
 fn title_is_the_directory_name_at_a_prompt() {
-    assert_eq!(title(&at_prompt("/home/mafu/koral"), Some("/home/mafu")), "koral");
+    assert_eq!(title(&at_prompt("/home/mafu/koral"), None, Some("/home/mafu")), "koral");
 }
 
 #[test]
 fn title_is_a_tilde_at_home() {
-    assert_eq!(title(&at_prompt("/home/mafu"), Some("/home/mafu")), "~");
+    assert_eq!(title(&at_prompt("/home/mafu"), None, Some("/home/mafu")), "~");
 }
 
 #[test]
@@ -125,12 +125,12 @@ fn title_is_the_first_line_of_the_running_command() {
     let now = Instant::now();
     blocks.apply(Mark::PromptEnd, now);
     blocks.apply(Mark::CommandStart(Some("cargo test\nls".to_string())), now);
-    assert_eq!(title(&blocks, None), "cargo test");
+    assert_eq!(title(&blocks, None, None), "cargo test");
 }
 
 #[test]
 fn title_without_any_marks_is_the_product_name() {
-    assert_eq!(title(&BlockStore::default(), None), "koral");
+    assert_eq!(title(&BlockStore::default(), None, None), "koral");
 }
 
 #[test]
@@ -173,4 +173,63 @@ fn clicks_elsewhere_hit_nothing() {
     let bar = layout(1, 1000.0, 36.0);
     assert_eq!(hit(&bar, 900.0, 10.0), Hit::Empty);
     assert_eq!(hit(&bar, 10.0, 50.0), Hit::Empty);
+}
+
+fn running(command: &str) -> BlockStore {
+    let mut blocks = at_prompt("/tmp");
+    let now = Instant::now();
+    blocks.apply(Mark::PromptEnd, now);
+    blocks.apply(Mark::CommandStart(Some(command.to_string())), now);
+    blocks
+}
+
+#[test]
+fn a_running_program_names_the_tab() {
+    assert_eq!(title(&running("nvim"), Some("notes.md - nvim"), None), "notes.md - nvim");
+}
+
+#[test]
+fn the_prompt_ignores_a_stale_title() {
+    assert_eq!(title(&at_prompt("/home/mafu/koral"), Some("notes.md - nvim"), None), "koral");
+}
+
+#[test]
+fn a_shell_without_marks_uses_the_program_title() {
+    assert_eq!(title(&BlockStore::default(), Some("bash"), None), "bash");
+}
+
+#[test]
+fn no_marks_and_no_title_is_koral() {
+    assert_eq!(title(&BlockStore::default(), None, None), "koral");
+}
+
+#[test]
+fn clean_title_drops_control_characters() {
+    assert_eq!(clean_title("a\x1b]0;b\x07c"), Some("a]0;bc".to_string()));
+    assert_eq!(clean_title("\x07"), None);
+}
+
+#[test]
+fn clean_title_cuts_a_long_title() {
+    assert_eq!(clean_title(&"a".repeat(1000)).unwrap().chars().count(), 256);
+}
+
+#[test]
+fn a_bell_in_the_tab_in_view_does_nothing() {
+    assert_eq!(ring(true, true), Ring { mark: false, urgent: false });
+}
+
+#[test]
+fn a_bell_in_another_tab_marks_it() {
+    assert_eq!(ring(false, true), Ring { mark: true, urgent: false });
+}
+
+#[test]
+fn a_bell_behind_another_window_asks_for_attention() {
+    assert_eq!(ring(true, false), Ring { mark: false, urgent: true });
+}
+
+#[test]
+fn a_bell_in_a_hidden_tab_does_both() {
+    assert_eq!(ring(false, false), Ring { mark: true, urgent: true });
 }

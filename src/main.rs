@@ -13,10 +13,11 @@ use koral::frame::{self, Chrome, CursorView, Frame, Layout, TabView};
 use koral::matugen;
 use koral::input::{self, Action, Clicks, Mouse, binding};
 use koral::keyboard::{self, KeyPress, Stage};
+use koral::notify::{self, Limiter};
 use koral::pty::{Geometry, Terminal, UserEvent};
 use koral::render::{Renderer, rgba};
 use koral::settings::{self, Command, FIELDS, Kind, Outcome, Settings, Zone};
-use koral::tabs::{self, Bar, Hit, Tabs};
+use koral::tabs::{self, Bar, Hit, Ring, Tabs};
 use koral::theme::Theme;
 use koral::view;
 use winit::application::ApplicationHandler;
@@ -26,7 +27,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::platform::wayland::WindowAttributesExtWayland;
-use winit::window::{Window, WindowId};
+use winit::window::{Window, WindowId, UserAttentionType};
 
 const CONFIRM_WINDOW: Duration = Duration::from_secs(3);
 
@@ -89,6 +90,8 @@ struct App {
     zoom: f32,
     blink: Blink,
     blink_shown: bool,
+    window_title: String,
+    notices: Limiter,
 }
 
 impl App {
@@ -127,6 +130,8 @@ impl App {
             zoom: 0.0,
             blink: Blink::new(Instant::now()),
             blink_shown: true,
+            window_title: String::new(),
+            notices: Limiter::default(),
         }
     }
 
@@ -410,6 +415,22 @@ impl App {
         true
     }
 
+    fn tab_mut(&mut self, id: u64) -> Option<&mut Terminal> {
+        self.tabs.as_mut().and_then(|tabs| tabs.iter_mut().find(|tab| tab.id == id))
+    }
+
+    fn bell(&mut self, id: u64) {
+        let active = self.active().is_some_and(|tab| tab.id == id);
+        let Ring { mark, urgent } = tabs::ring(active, self.focused);
+        if let Some(tab) = self.tab_mut(id) {
+            tab.rang |= mark;
+        }
+        if let (true, Some(window)) = (urgent, &self.window) {
+            window.request_user_attention(Some(UserAttentionType::Informational));
+        }
+        self.redraw();
+    }
+
     fn with_tabs(&mut self, change: impl FnOnce(&mut Tabs<Terminal>)) {
         if let Some(tabs) = &mut self.tabs {
             change(tabs);
@@ -681,6 +702,9 @@ impl App {
             return;
         };
         self.blink_shown = !self.blinking() || self.blink.visible(Instant::now());
+        if let Some(tab) = self.active_mut() {
+            tab.rang = false;
+        }
         let Some(tabs) = &self.tabs else {
             return;
         };
@@ -691,9 +715,10 @@ impl App {
             .map(|tab| {
                 let session = tab.session.lock();
                 TabView {
-                    title: tabs::title(&session.blocks, self.home.as_deref()),
+                    title: tabs::title(&session.blocks, tab.title.as_deref(), self.home.as_deref()),
                     activity: session.blocks.activity(),
                     confirming: confirming == Some(tab.id),
+                    rang: tab.rang,
                 }
             })
             .collect();
@@ -746,8 +771,11 @@ impl App {
             );
         }
 
-        if let (Some(window), Some(view)) = (&self.window, views.get(tabs.active_index())) {
+        if let (Some(window), Some(view)) = (&self.window, views.get(tabs.active_index()))
+            && view.title != self.window_title
+        {
             window.set_title(&view.title);
+            self.window_title = view.title.clone();
         }
         if let (Some(window), Some((x, y)), true) = (&self.window, cursor, cursor != self.ime_cursor) {
             let size = PhysicalSize::new(layout.cell.width, layout.cell.height);
@@ -801,6 +829,19 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             UserEvent::Copy(text) => self.store(text, LinuxClipboardKind::Clipboard),
+            UserEvent::Title(id, title) => {
+                if let Some(tab) = self.tab_mut(id) {
+                    tab.title = title;
+                }
+                self.redraw();
+            }
+            UserEvent::Bell(id) => self.bell(id),
+            UserEvent::Notify(id, notice) => {
+                let in_view = self.focused && self.active().is_some_and(|tab| tab.id == id);
+                if !in_view && self.notices.allow(Instant::now()) {
+                    notify::show(&notice);
+                }
+            }
             UserEvent::Blink => {
                 self.blink.reset(Instant::now());
                 self.redraw();

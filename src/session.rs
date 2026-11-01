@@ -9,7 +9,8 @@ use alacritty_terminal::vte::ansi::Processor;
 
 use crate::blocks::BlockStore;
 use crate::graphics::{Graphics, Request};
-use crate::marks::{Piece, Scanner};
+use crate::marks::{Mark, Piece, Scanner};
+use crate::notify::{BODY_LIMIT, Notice, TITLE_LIMIT, clean};
 use crate::view::{anchor_char, picture_anchor, picture_char, picture_foot};
 
 /// One terminal: the grid plus the commands it has shown.
@@ -19,6 +20,8 @@ pub struct Session<L> {
     pub graphics: Graphics,
     /// Answers for the program on the other side of the PTY.
     pub replies: Vec<String>,
+    /// Notifications for the desktop, which also work on the alternate screen.
+    pub notices: Vec<Notice>,
     parser: Processor,
     scanner: Scanner,
 }
@@ -30,13 +33,14 @@ impl<L: EventListener> Session<L> {
             blocks: BlockStore::default(),
             graphics: Graphics::default(),
             replies: Vec::new(),
+            notices: Vec::new(),
             parser: Processor::new(),
             scanner: Scanner::default(),
         }
     }
 
     pub fn feed(&mut self, bytes: &[u8], now: Instant) {
-        let Self { term, blocks, graphics, replies, parser, scanner } = self;
+        let Self { term, blocks, graphics, replies, notices, parser, scanner } = self;
         scanner.feed(bytes, &mut |piece| match piece {
             Piece::Bytes(bytes) => {
                 parser.advance(term, bytes);
@@ -48,6 +52,9 @@ impl<L: EventListener> Session<L> {
                 if let Some(request) = outcome.place {
                     place(term, parser, graphics, request);
                 }
+            }
+            Piece::Mark(Mark::Notify { title, body }) => {
+                notices.push(Notice { title: clean(&title, TITLE_LIMIT), body: clean(&body, BODY_LIMIT) });
             }
             Piece::Mark(mark) => {
                 if term.mode().contains(TermMode::ALT_SCREEN) {

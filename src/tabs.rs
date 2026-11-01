@@ -75,20 +75,39 @@ impl<T> Tabs<T> {
     }
 }
 
-pub fn title(blocks: &BlockStore, home: Option<&str>) -> String {
+const TITLE_LIMIT: usize = 256;
+
+pub fn title(blocks: &BlockStore, program: Option<&str>, home: Option<&str>) -> String {
     let Some(latest) = blocks.latest() else {
-        return "koral".to_string();
+        return program.unwrap_or("koral").to_string();
     };
-    if blocks.activity() == Activity::Running
-        && let Some(line) = latest.command.as_deref().and_then(|command| command.lines().next())
-    {
-        return line.to_string();
+    if blocks.activity() == Activity::Running {
+        let command = latest.command.as_deref().and_then(|command| command.lines().next());
+        if let Some(name) = program.or(command) {
+            return name.to_string();
+        }
     }
     match latest.cwd.as_deref() {
         None => "koral".to_string(),
         Some(cwd) if Some(cwd) == home => "~".to_string(),
         Some(cwd) => cwd.rsplit('/').next().filter(|name| !name.is_empty()).unwrap_or("/").to_string(),
     }
+}
+
+/// A title a program asked for, safe to show. None when nothing printable is left.
+pub fn clean_title(text: &str) -> Option<String> {
+    let title: String = text.chars().filter(|ch| !ch.is_control()).take(TITLE_LIMIT).collect();
+    (!title.trim().is_empty()).then_some(title)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ring {
+    pub mark: bool,
+    pub urgent: bool,
+}
+
+pub fn ring(active: bool, focused: bool) -> Ring {
+    Ring { mark: !active, urgent: !focused }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

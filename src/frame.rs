@@ -86,6 +86,7 @@ pub struct TabView {
     pub title: String,
     pub activity: Activity,
     pub confirming: bool,
+    pub rang: bool,
 }
 
 pub struct Chrome<'a> {
@@ -589,6 +590,11 @@ pub fn draw_chrome(frame: &mut Frame, chrome: &Chrome<'_>, layout: Layout, theme
                 small: true,
                 spans: vec![Span::plain(glyph, glyph_color)],
             });
+            x += small_cell * 2.0;
+        }
+
+        if tab.rang {
+            frame.lines.push(TextLine { x, y, small: true, spans: vec![Span::plain("!", theme.accent)] });
             x += small_cell * 2.0;
         }
 

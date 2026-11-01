@@ -4,7 +4,8 @@ use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::Rgb;
-use koral::frame::{CursorView, Frame, Underline, draw_terminal, underline};
+use koral::blocks::Activity;
+use koral::frame::{Chrome, CursorView, Frame, TabView, Underline, draw_chrome, draw_terminal, underline};
 use glyphon::{Style, Weight};
 use koral::render::{Face, Quad, attrs, rgba, surface_format};
 use koral::session::Session;
@@ -125,4 +126,28 @@ fn plain_text_takes_the_regular_weight() {
     assert_eq!(attrs(&face, false, false).weight, Weight(500));
     assert_eq!(attrs(&face, true, false).weight, Weight(800));
     assert_eq!(attrs(&face, false, true).style, Style::Italic);
+}
+
+#[test]
+fn a_rung_tab_shows_a_mark() {
+    let tab = |rang| TabView { title: "build".to_string(), activity: Activity::Idle, confirming: false, rang };
+    let shown = |rang| {
+        let bar = koral::tabs::layout(2, 800.0, 38.0);
+        let views = [tab(false), tab(rang)];
+        let chrome = Chrome {
+            tabs: &views,
+            active: 0,
+            hovered: None,
+            hovered_close: false,
+            hovered_new: false,
+            hovered_settings: false,
+            settings_open: false,
+            bar: &bar,
+        };
+        let mut frame = Frame::default();
+        draw_chrome(&mut frame, &chrome, layout(), &Theme::default());
+        frame.lines.iter().flat_map(|line| &line.spans).any(|span| span.text == "!")
+    };
+    assert!(shown(true));
+    assert!(!shown(false));
 }

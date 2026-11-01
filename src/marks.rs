@@ -1,7 +1,7 @@
 const ESC: u8 = 0x1b;
 const BEL: u8 = 0x07;
 const GRAPHICS: &[u8] = b"\x1b_G";
-const PREFIXES: [&[u8]; 3] = [b"\x1b]133;", b"\x1b]7;", GRAPHICS];
+const PREFIXES: [&[u8]; 5] = [b"\x1b]133;", b"\x1b]7;", b"\x1b]777;notify;", b"\x1b]9;", GRAPHICS];
 // The stream is untrusted: an unterminated mark must not grow without bound.
 const MAX_MARK: usize = 64 * 1024;
 // Programs send images in 4096-byte chunks, this leaves room for the ones that do not.
@@ -14,6 +14,7 @@ pub enum Mark {
     CommandStart(Option<String>),
     CommandEnd(Option<i32>),
     Cwd(String),
+    Notify { title: String, body: String },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -30,7 +31,7 @@ enum Step {
     Graphics,
 }
 
-/// Takes OSC 133, OSC 7 and image commands out of a PTY stream; vte would drop them.
+/// Takes OSC 133, OSC 7, notifications and image commands out of a PTY stream; vte would drop them.
 // shortcut: marks inside DCS or tmux passthrough also match, harmless for now.
 #[derive(Default)]
 pub struct Scanner {
@@ -112,6 +113,17 @@ fn parse(body: &[u8]) -> Option<Mark> {
     if let Some(url) = body.strip_prefix("7;") {
         let (_host, path) = url.strip_prefix("file://")?.split_once('/')?;
         return Some(Mark::Cwd(format!("/{}", percent_decode(path)?)));
+    }
+
+    if let Some(rest) = body.strip_prefix("777;notify;") {
+        let (title, body) = rest.split_once(';')?;
+        return Some(Mark::Notify { title: title.to_string(), body: body.to_string() });
+    }
+    if let Some(text) = body.strip_prefix("9;") {
+        // ConEmu progress is digits then a semicolon, and stays with vte.
+        let digits = text.chars().take_while(char::is_ascii_digit).count();
+        let progress = digits > 0 && text[digits..].starts_with(';');
+        return (!progress).then(|| Mark::Notify { title: String::new(), body: text.to_string() });
     }
 
     let mut params = body.strip_prefix("133;")?.split(';');

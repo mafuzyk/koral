@@ -3,6 +3,7 @@ pub mod blocks;
 pub mod boxes;
 pub mod marks;
 pub mod matugen;
+pub mod notify;
 pub mod session;
 pub mod view;
 pub mod input;
