@@ -10,6 +10,7 @@ use glyphon::{
 };
 use winit::window::Window;
 
+use crate::fonts;
 use crate::graphics::Image;
 
 const LINE_HEIGHT: f32 = 1.2;
@@ -228,6 +229,7 @@ pub struct Renderer {
     atlas: TextAtlas,
     text: TextRenderer,
     lines: HashMap<u64, Buffer>,
+    wanted: Face,
     face: Face,
     points: f32,
     scale: f32,
@@ -332,7 +334,9 @@ impl Renderer {
         let viewport = Viewport::new(&device, &cache);
         let mut atlas = TextAtlas::with_color_mode(&device, &queue, &cache, format, ColorMode::Web);
         let text = TextRenderer::new(&mut atlas, &device, wgpu::MultisampleState::default(), None);
-        let cell = measure(&mut font_system, face, points, scale);
+        let wanted = face.clone();
+        let face = fonts::usable(face, font_system.db());
+        let cell = measure(&mut font_system, &face, points, scale);
 
         Self {
             device,
@@ -355,7 +359,8 @@ impl Renderer {
             atlas,
             text,
             lines: HashMap::new(),
-            face: face.clone(),
+            wanted,
+            face,
             points,
             scale,
             cell,
@@ -384,13 +389,22 @@ impl Renderer {
         self.swash = SwashCache::new();
         self.atlas = TextAtlas::with_color_mode(&self.device, &self.queue, &self.cache, self.config.format, ColorMode::Web);
         self.text = TextRenderer::new(&mut self.atlas, &self.device, wgpu::MultisampleState::default(), None);
+        self.face = fonts::usable(&self.wanted, self.font_system.db());
         self.remeasure();
     }
 
     pub fn set_font(&mut self, face: &Face, points: f32) {
-        self.face = face.clone();
+        if *face != self.wanted {
+            self.wanted = face.clone();
+            self.face = fonts::usable(face, self.font_system.db());
+        }
         self.points = points;
         self.remeasure();
+    }
+
+    /// The family drawn in place of the one in the config.
+    pub fn substitute(&self) -> Option<&str> {
+        (self.face.family != self.wanted.family).then_some(self.face.family.as_str())
     }
 
     fn remeasure(&mut self) {

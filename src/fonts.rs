@@ -43,10 +43,11 @@ fn face_files(db: &fontdb::Database, face: &Face) -> Vec<PathBuf> {
         (face.weight, italic),
         (face.bold_italic, italic),
     ];
-    let mut files: Vec<PathBuf> = db
-        .faces()
-        .filter(|info| info.families.iter().any(|(name, _)| *name == face.family))
-        .filter(|info| wanted.contains(&(info.weight.0, info.style)))
+    let faces: Vec<_> = db.faces().filter(|info| info.families.iter().any(|(name, _)| *name == face.family)).collect();
+    let exact = wanted.iter().all(|style| faces.iter().any(|info| (info.weight.0, info.style) == *style));
+    let mut files: Vec<PathBuf> = faces
+        .into_iter()
+        .filter(|info| !exact || wanted.contains(&(info.weight.0, info.style)))
         .filter_map(|info| match &info.source {
             fontdb::Source::File(path) | fontdb::Source::SharedFile(path, _) => Some(path.clone()),
             fontdb::Source::Binary(_) => None,
@@ -55,6 +56,68 @@ fn face_files(db: &fontdb::Database, face: &Face) -> Vec<PathBuf> {
     files.sort();
     files.dedup();
     files
+}
+
+/// Text sits on a grid measured with `M`: a narrower `i` would leave the cursor behind the text.
+fn fixed_width(db: &fontdb::Database, id: fontdb::ID) -> bool {
+    let same = db.with_face_data(id, |data, index| {
+        let font = ttf_parser::Face::parse(data, index).ok()?;
+        let advance = |ch| font.glyph_hor_advance(font.glyph_index(ch)?);
+        Some(advance('i')? == advance('M')?)
+    });
+    same.flatten().unwrap_or(false)
+}
+
+/// The families Koral can draw, by the names `Family::Name` finds.
+pub fn monospaced(db: &fontdb::Database) -> Vec<String> {
+    let mut names: Vec<String> = db
+        .faces()
+        .filter(|info| info.style == fontdb::Style::Normal && fixed_width(db, info.id))
+        .filter_map(|info| Some(info.families.first()?.0.clone()))
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// The face to draw with: a font that is missing or proportional would break the grid.
+pub fn usable(face: &Face, db: &fontdb::Database) -> Face {
+    let installed = db.faces().any(|info| named(info, &face.family) && fixed_width(db, info.id));
+    if installed {
+        return nearest_weights(face, db);
+    }
+    let names = monospaced(db);
+    let system = db.family_name(&fontdb::Family::Monospace);
+    match names.iter().find(|name| *name == system).or(names.first()) {
+        Some(family) => nearest_weights(&Face { family: family.clone(), ..face.clone() }, db),
+        None => face.clone(),
+    }
+}
+
+fn named(info: &fontdb::FaceInfo, family: &str) -> bool {
+    info.families.iter().any(|(name, _)| name == family)
+}
+
+/// Shaping passes over a family that lacks the exact weight, so ask only for weights it has.
+fn nearest_weights(face: &Face, db: &fontdb::Database) -> Face {
+    let faces: Vec<_> = db.faces().filter(|info| named(info, &face.family)).collect();
+    let variable = |info: &&&fontdb::FaceInfo| {
+        let parsed = db.with_face_data(info.id, |data, index| Some(ttf_parser::Face::parse(data, index).ok()?.is_variable()));
+        parsed.flatten().unwrap_or(false)
+    };
+    if faces.iter().any(|info| variable(&info)) {
+        return face.clone();
+    }
+    let nearest = |weight: u16, slanted: bool| {
+        let styled = faces.iter().filter(|info| (info.style != fontdb::Style::Normal) == slanted);
+        styled.map(|info| info.weight.0).min_by_key(|have| have.abs_diff(weight)).unwrap_or(weight)
+    };
+    Face {
+        weight: nearest(face.weight, false),
+        bold: nearest(face.bold, false),
+        bold_italic: nearest(face.bold_italic, true),
+        ..face.clone()
+    }
 }
 
 /// Fontconfig's scale for a font weight.
@@ -77,14 +140,17 @@ pub fn listed_files(output: &str, face: &Face) -> Vec<PathBuf> {
     let italic = if face.oblique { "110" } else { "100" };
     let wanted = [(face.weight, "0"), (face.bold, "0"), (face.weight, italic), (face.bold_italic, italic)]
         .map(|(weight, slant)| (fontconfig_weight(weight), slant));
-    output
+    let lines: Vec<(&str, &str, &str)> = output
         .lines()
         .filter_map(|line| {
             let (rest, slant) = line.rsplit_once('|')?;
             let (file, weight) = rest.rsplit_once('|')?;
-            (weight.starts_with('[') || wanted.contains(&(weight, slant))).then(|| PathBuf::from(file))
+            Some((file, weight, slant))
         })
-        .collect()
+        .collect();
+    let exact = wanted.iter().all(|style| lines.iter().any(|(_, weight, slant)| (*weight, *slant) == *style));
+    let kept = lines.iter().filter(|(_, weight, slant)| !exact || weight.starts_with('[') || wanted.contains(&(*weight, *slant)));
+    kept.map(|(file, ..)| PathBuf::from(file)).collect()
 }
 
 /// Only the files of the chosen font, so a start does not wait on every font on the disk.
