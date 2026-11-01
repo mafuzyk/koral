@@ -4,6 +4,7 @@ pub mod matugen;
 pub mod session;
 pub mod view;
 pub mod input;
+pub mod keyboard;
 pub mod tabs;
 pub mod theme;
 pub mod format;

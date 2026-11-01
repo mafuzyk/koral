@@ -139,3 +139,9 @@ fn legacy_mouse_offsets_values_by_32() {
 fn legacy_mouse_cannot_report_past_its_range() {
     assert_eq!(mouse_report(press(0, 300, 0), TermMode::MOUSE_REPORT_CLICK), None);
 }
+
+#[test]
+fn ctrl_cedilla_stays_silent_in_legacy_mode() {
+    let cedilla = Key::Character("ç".into());
+    assert_eq!(encode(&cedilla, None, ModifiersState::CONTROL, TermMode::empty()), None);
+}

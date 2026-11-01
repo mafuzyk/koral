@@ -22,6 +22,10 @@ const FRAME: Duration = Duration::from_millis(16);
 
 type ColorReply = Arc<dyn Fn(Rgb) -> String + Send + Sync>;
 
+pub fn term_config() -> Config {
+    Config { scrolling_history: SCROLLBACK, kitty_keyboard: true, ..Config::default() }
+}
+
 pub enum UserEvent {
     Redraw,
     Exited(u64),
@@ -88,9 +92,8 @@ impl Terminal {
         geometry: Geometry,
         cwd: Option<PathBuf>,
     ) -> std::io::Result<Self> {
-        let config = Config { scrolling_history: SCROLLBACK, ..Config::default() };
         let listener = Listener { tab: id, proxy: proxy.clone() };
-        let term = Term::new(config, &geometry.term_size(), listener);
+        let term = Term::new(term_config(), &geometry.term_size(), listener);
         let mut session = Session::new(term);
         session.graphics.set_cell(geometry.cell_width.into(), geometry.cell_height.into());
         let session = Arc::new(FairMutex::new(session));

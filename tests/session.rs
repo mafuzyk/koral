@@ -4,7 +4,7 @@ use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{Config, Term};
+use alacritty_terminal::term::{Config, Term, TermMode};
 use koral::session::Session;
 use koral::view::{Placed, Row, output_text, pinned, placed, rows};
 
@@ -507,4 +507,12 @@ fn named_images_on_one_cell_both_stay() {
     f.show("i=1,c=2,r=2,C=1");
     f.show("i=2,c=2,r=2,C=1");
     assert_eq!(f.pictures().len(), 2);
+}
+
+#[test]
+fn an_app_can_turn_the_keyboard_protocol_on() {
+    let term = Term::new(koral::pty::term_config(), &TermSize::new(20, 5), VoidListener);
+    let mut session = Session::new(term);
+    session.feed(b"\x1b[>1u", Instant::now());
+    assert!(session.term.mode().contains(TermMode::DISAMBIGUATE_ESC_CODES));
 }

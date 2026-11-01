@@ -11,6 +11,7 @@ use koral::config::{self, Config};
 use koral::frame::{self, Chrome, Frame, Layout, TabView};
 use koral::matugen;
 use koral::input::{self, Action, Mouse, binding};
+use koral::keyboard::{self, KeyPress, Stage};
 use koral::pty::{Geometry, Terminal, UserEvent};
 use koral::render::{Renderer, rgba};
 use koral::settings::{self, Command, FIELDS, Kind, Outcome, Settings, Zone};
@@ -19,9 +20,10 @@ use koral::theme::Theme;
 use koral::view;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::platform::wayland::WindowAttributesExtWayland;
 use winit::window::{Window, WindowId};
 
@@ -223,6 +225,13 @@ impl App {
 
     fn mode(&self) -> TermMode {
         self.active().map_or(TermMode::empty(), |tab| *tab.session.lock().term.mode())
+    }
+
+    fn kitty_key(&self, event: &KeyEvent, stage: Stage) -> Option<Vec<u8>> {
+        let unshifted = event.key_without_modifiers();
+        let text = event.text.as_deref();
+        let press = KeyPress { key: &event.logical_key, unshifted: &unshifted, text, mods: self.mods, stage };
+        keyboard::encode(&press, self.mode())
     }
 
     fn run(&mut self, action: Action, event_loop: &ActiveEventLoop) {
@@ -783,12 +792,19 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 }
                 let text = if self.mods.control_key() { None } else { event.text.as_deref() };
-                if let Some(bytes) = input::encode(&event.logical_key, text, self.mods, self.mode()) {
+                let stage = if event.repeat { Stage::Repeat } else { Stage::Press };
+                let bytes = self.kitty_key(&event, stage).or_else(|| input::encode(&event.logical_key, text, self.mods, self.mode()));
+                if let Some(bytes) = bytes {
                     if let Some(tab) = self.active() {
                         tab.session.lock().term.selection = None;
                     }
                     self.write_active(bytes);
                     self.redraw();
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } if self.settings.is_none() => {
+                if let (Some(bytes), Some(tab)) = (self.kitty_key(&event, Stage::Release), self.active()) {
+                    tab.write(bytes);
                 }
             }
             WindowEvent::CursorMoved { position, .. } => self.cursor_moved(position),
