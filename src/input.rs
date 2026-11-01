@@ -225,6 +225,11 @@ pub fn binding(key: &Key, mods: ModifiersState) -> Option<Action> {
             Ok(digit @ 1..=9) => Some(Action::SelectTab(digit - 1)),
             _ => None,
         },
+        Key::Character(text) if mods == ModifiersState::CONTROL => match text.as_str() {
+            "=" | "+" => Some(Action::ZoomIn),
+            "-" => Some(Action::ZoomOut),
+            _ => None,
+        },
         Key::Character(text) if mods.control_key() && shift && !mods.alt_key() => {
             match text.to_ascii_lowercase().as_str() {
                 "t" => Some(Action::NewTab),

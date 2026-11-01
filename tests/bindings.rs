@@ -56,6 +56,9 @@ fn keys_meant_for_the_app_pass_through() {
 
 #[test]
 fn zoom_keys_work_with_or_without_the_shifted_character() {
+    assert_eq!(letter("=", ModifiersState::CONTROL), Some(Action::ZoomIn));
+    assert_eq!(letter("+", ModifiersState::CONTROL), Some(Action::ZoomIn));
+    assert_eq!(letter("-", ModifiersState::CONTROL), Some(Action::ZoomOut));
     assert_eq!(letter("=", CTRL_SHIFT), Some(Action::ZoomIn));
     assert_eq!(letter("+", CTRL_SHIFT), Some(Action::ZoomIn));
     assert_eq!(letter("-", CTRL_SHIFT), Some(Action::ZoomOut));

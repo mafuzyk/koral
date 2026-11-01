@@ -37,7 +37,7 @@ The default font is IosevkaTerm Nerd Font Mono.
 | `ctrl+shift+f` | Fold or open a command |
 | `ctrl+shift+g` | Copy a command's output |
 | `ctrl+shift+s` | Search the scrollback |
-| `ctrl+shift+=`, `ctrl+shift+-`, `ctrl+shift+0` | Zoom in, out and back |
+| `ctrl+=`, `ctrl+-`, also with `shift`; `ctrl+shift+0` | Zoom in, out and back |
 | `shift+pageup`, `shift+pagedown` | Scroll a page |
 | `ctrl+shift+,` | Settings |
 
