@@ -1,4 +1,6 @@
-use koral::config::{Config, parse, set};
+use std::path::PathBuf;
+
+use koral::config::{Config, migrate, parse, path, set};
 
 fn config(source: &str) -> Config {
     parse(source).0
@@ -121,4 +123,53 @@ fn matugen_is_off_until_turned_on() {
 #[test]
 fn matugen_takes_only_on_or_off() {
     assert_eq!(errors("polyp matugen yes").len(), 1);
+}
+
+fn folder(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("koral-migrate-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn the_config_file_is_config_sharky() {
+    assert!(path().unwrap().ends_with("koral/config.sharky"));
+}
+
+#[test]
+fn migrate_renames_the_old_file() {
+    let dir = folder("old");
+    std::fs::write(dir.join("config.koral"), "polyp font_size 14\n").unwrap();
+    migrate(&dir).unwrap();
+    assert_eq!(std::fs::read_to_string(dir.join("config.sharky")).unwrap(), "polyp font_size 14\n");
+    assert!(!dir.join("config.koral").exists());
+}
+
+#[test]
+fn migrate_never_overwrites_the_new_file() {
+    let dir = folder("both");
+    std::fs::write(dir.join("config.koral"), "polyp font_size 14\n").unwrap();
+    std::fs::write(dir.join("config.sharky"), "polyp font_size 20\n").unwrap();
+    migrate(&dir).unwrap();
+    assert_eq!(std::fs::read_to_string(dir.join("config.sharky")).unwrap(), "polyp font_size 20\n");
+    assert_eq!(std::fs::read_to_string(dir.join("config.koral")).unwrap(), "polyp font_size 14\n");
+}
+
+#[test]
+fn migrate_with_no_files_creates_nothing() {
+    let dir = folder("none");
+    migrate(&dir).unwrap();
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+}
+
+#[test]
+fn set_ignores_a_comment_marker_inside_quotes() {
+    assert_eq!(set("polyp font \"a // b\"\n", "font", "c"), "polyp font c\n");
+}
+
+#[test]
+fn a_bare_word_ends_at_a_comment_as_in_sharky() {
+    assert_eq!(config("polyp font a//why\n").font, "a");
+    assert_eq!(set("polyp font a//why\n", "font", "c"), "polyp font c //why\n");
 }

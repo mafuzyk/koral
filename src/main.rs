@@ -84,10 +84,13 @@ struct App {
 
 impl App {
     fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
+        if let Some(Err(error)) = config::home().map(|home| config::migrate(&home.join("koral"))) {
+            eprintln!("koral: cannot rename config.koral: {error}");
+        }
         let source = config::path().and_then(|path| std::fs::read_to_string(path).ok()).unwrap_or_default();
         let (config, errors) = config::parse(&source);
         for error in errors {
-            eprintln!("koral: config.koral {error}");
+            eprintln!("koral: config.sharky {error}");
         }
         matugen::watch(proxy.clone());
         Self {

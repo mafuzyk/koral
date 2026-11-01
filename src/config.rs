@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use sharky_config::tokenize;
+
 const INSTRUCTION: &str = "polyp";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -32,7 +34,16 @@ pub fn home() -> Option<PathBuf> {
 }
 
 pub fn path() -> Option<PathBuf> {
-    Some(home()?.join("koral/config.koral"))
+    Some(home()?.join("koral/config.sharky"))
+}
+
+/// Moves a config from before the rename; an existing `config.sharky` always wins.
+pub fn migrate(dir: &std::path::Path) -> std::io::Result<()> {
+    let (old, new) = (dir.join("config.koral"), dir.join("config.sharky"));
+    if old.exists() && !new.exists() {
+        std::fs::rename(old, new)?;
+    }
+    Ok(())
 }
 
 /// Replaces the file in one step, so a crash mid-write cannot lose the config.
@@ -40,7 +51,7 @@ pub fn save(path: &std::path::Path, source: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let temporary = path.with_extension("koral.tmp");
+    let temporary = path.with_extension("sharky.tmp");
     std::fs::write(&temporary, source)?;
     std::fs::rename(&temporary, path)
 }
@@ -58,7 +69,7 @@ pub fn parse(source: &str) -> (Config, Vec<String>) {
 }
 
 fn apply(config: &mut Config, line: &str) -> Result<(), String> {
-    let tokens = tokenize(line)?.0;
+    let tokens = tokenize(line)?;
     let Some((instruction, rest)) = tokens.split_first() else {
         return Ok(());
     };
@@ -100,46 +111,10 @@ fn number(value: &str, min: f32, max: f32) -> Result<f32, String> {
     }
 }
 
-/// Words of a line, and where its trailing comment starts.
-// shortcut: repeats sharky's tokenizer, swap for sharky-config once it is tagged.
-fn tokenize(line: &str) -> Result<(Vec<String>, Option<usize>), String> {
-    let mut tokens = Vec::new();
-    let mut chars = line.char_indices().peekable();
-    while let Some((index, ch)) = chars.next() {
-        if ch.is_whitespace() {
-            continue;
-        }
-        if line[index..].starts_with("//") {
-            return Ok((tokens, Some(index)));
-        }
-        let mut token = String::new();
-        if ch == '"' {
-            loop {
-                match chars.next() {
-                    None => return Err("unterminated quote".to_string()),
-                    Some((_, '"')) => break,
-                    Some((_, '\\')) => match chars.next() {
-                        Some((_, 'n')) => token.push('\n'),
-                        Some((_, 't')) => token.push('\t'),
-                        Some((_, other)) => token.push(other),
-                        None => return Err("unterminated quote".to_string()),
-                    },
-                    Some((_, other)) => token.push(other),
-                }
-            }
-        } else {
-            token.push(ch);
-            while let Some((_, next)) = chars.peek().copied() {
-                if next.is_whitespace() {
-                    break;
-                }
-                token.push(next);
-                chars.next();
-            }
-        }
-        tokens.push(token);
-    }
-    Ok((tokens, None))
+/// Where a line's trailing comment starts: the first `//` that leaves the words unchanged.
+fn comment_start(line: &str) -> Option<usize> {
+    let tokens = tokenize(line).ok()?;
+    line.match_indices("//").map(|(index, _)| index).find(|index| tokenize(&line[..*index]).is_ok_and(|words| words == tokens))
 }
 
 /// The new file text with one setting changed; every other byte stays.
@@ -148,14 +123,13 @@ pub fn set(source: &str, key: &str, value: &str) -> String {
     let mut lines: Vec<String> = source.lines().map(str::to_string).collect();
 
     let found = lines.iter().rposition(|line| {
-        tokenize(line).is_ok_and(|(tokens, _)| {
+        tokenize(line).is_ok_and(|tokens| {
             tokens.first().is_some_and(|word| word == INSTRUCTION) && tokens.get(1).is_some_and(|word| word == key)
         })
     });
     match found {
         Some(index) => {
-            let comment = tokenize(&lines[index]).ok().and_then(|(_, start)| start);
-            lines[index] = match comment {
+            lines[index] = match comment_start(&lines[index]) {
                 Some(start) => format!("{statement} {}", &lines[index][start..]),
                 None => statement,
             };

@@ -15,6 +15,7 @@ glyphon = "0.12"
 png = "0.18.1"
 polling = "3.11.0"
 pollster = "1.0.1"
+sharky-config = { git = "https://github.com/mafuzyk/sharky-shell", tag = "v3.0.0" }
 wgpu = "30"
 winit = "0.30"
 

@@ -956,6 +956,7 @@ dependencies = [
  "png",
  "polling",
  "pollster",
+ "sharky-config",
  "wgpu",
  "winit",
 ]
@@ -1976,6 +1977,11 @@ dependencies = [
  "quote",
  "syn 3.0.9",
 ]
+
+[[package]]
+name = "sharky-config"
+version = "0.1.0"
+source = "git+https://github.com/mafuzyk/sharky-shell?tag=v3.0.0#568fa123d1977236d4296c6add7946e44d80628a"
 
 [[package]]
 name = "shlex"

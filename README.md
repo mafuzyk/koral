@@ -44,7 +44,7 @@ the primary selection, and the middle button pastes it.
 
 ## Configuration
 
-Use the gear in the tab strip, or edit `~/.config/koral/config.koral`:
+Use the gear in the tab strip, or edit `~/.config/koral/config.sharky`:
 
 ```
 polyp font "IosevkaTerm Nerd Font Mono"
