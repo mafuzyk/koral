@@ -173,3 +173,10 @@ fn a_narrow_window_still_draws_the_search_bar() {
     koral::frame::draw_search_bar(&mut frame, "needle", false, narrow, &Theme::default());
     assert!(!frame.quads.is_empty());
 }
+
+#[test]
+fn a_tab_kept_in_a_cell_draws_one_cell_wide() {
+    assert_eq!(koral::frame::shown('\t'), ' ');
+    assert_eq!(koral::frame::shown('\0'), ' ');
+    assert_eq!(koral::frame::shown('a'), 'a');
+}

@@ -232,7 +232,7 @@ pub fn draw_terminal<L: EventListener>(
                 frame.quads.push(Quad::new(x, strike, width, thickness, rgba(fg, 1.0)));
             }
 
-            let mut text = String::from(if cell.c == '\0' { ' ' } else { cell.c });
+            let mut text = String::from(shown(cell.c));
             if let Some(extra) = cell.zerowidth() {
                 text.extend(extra.iter());
             }
@@ -278,6 +278,11 @@ pub fn draw_terminal<L: EventListener>(
     if let Some(block) = pinned(rows, top, blocks).and_then(|id| blocks.get(id)) {
         draw_pinned(frame, block, layout, theme);
     }
+}
+
+/// The character a cell draws. alacritty keeps tabs in the grid for copying, and a font would widen them.
+pub fn shown(ch: char) -> char {
+    if matches!(ch, '\0' | '\t') { ' ' } else { ch }
 }
 
 pub fn draw_search(
