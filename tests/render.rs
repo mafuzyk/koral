@@ -1,4 +1,14 @@
-use koral::render::surface_format;
+use std::time::Instant;
+
+use alacritty_terminal::event::VoidListener;
+use alacritty_terminal::term::test::TermSize;
+use alacritty_terminal::term::{Config, Term};
+use alacritty_terminal::vte::ansi::Rgb;
+use koral::frame::{CursorView, Frame, Underline, draw_terminal, underline};
+use koral::render::{Quad, rgba, surface_format};
+use koral::session::Session;
+use koral::theme::Theme;
+use koral::view::rows;
 use wgpu::TextureFormat::{Bgra8Unorm, Bgra8UnormSrgb, Rgba8Unorm, Rgba16Float};
 
 #[test]
@@ -31,4 +41,63 @@ fn preedit_text_is_underlined_at_the_cursor() {
     assert_eq!((frame.lines[0].x, frame.lines[0].y), (30.0, 40.0));
     assert_eq!(frame.lines[0].spans[0].text, "ãé");
     assert_eq!(frame.quads.len(), 1);
+}
+
+const INK: [f32; 4] = [1.0; 4];
+
+fn drawn(text: &str) -> Frame {
+    let term = Term::new(Config::default(), &TermSize::new(20, 5), VoidListener);
+    let mut session = Session::new(term);
+    session.feed(text.as_bytes(), Instant::now());
+    let rows = rows(&session.term, &session.blocks);
+    let mut frame = Frame::default();
+    let cursor = CursorView { focused: true, visible: true };
+    draw_terminal(&mut frame, &session.term, &session.blocks, &rows, 0, cursor, layout(), &Theme::default());
+    frame
+}
+
+fn covered(quads: &[Quad]) -> f32 {
+    quads.iter().map(|quad| quad.width).sum()
+}
+
+#[test]
+fn single_is_one_quad() {
+    assert_eq!(underline(Underline::Single, 0.0, 10.0, 8.0, 1.0, INK).len(), 1);
+}
+
+#[test]
+fn double_is_two_quads_apart() {
+    let quads = underline(Underline::Double, 0.0, 10.0, 8.0, 1.0, INK);
+    assert_eq!(quads.len(), 2);
+    assert_eq!((quads[1].y - quads[0].y).abs(), 2.0);
+}
+
+#[test]
+fn dashed_and_dotted_leave_gaps() {
+    for style in [Underline::Dashed, Underline::Dotted] {
+        let quads = underline(style, 0.0, 10.0, 40.0, 1.0, INK);
+        assert!(quads.len() > 1);
+        assert!(covered(&quads) < 40.0);
+    }
+}
+
+#[test]
+fn curl_covers_the_whole_width() {
+    let quads = underline(Underline::Curl, 3.0, 10.0, 12.0, 1.0, INK);
+    assert_eq!(covered(&quads), 12.0);
+    assert!(quads.iter().all(|quad| (quad.y - 10.0).abs() <= 1.0));
+    assert!(quads.iter().any(|quad| quad.y != 10.0));
+}
+
+#[test]
+fn curl_joins_between_cells() {
+    let first = underline(Underline::Curl, 0.0, 10.0, 10.0, 1.0, INK);
+    let second = underline(Underline::Curl, 10.0, 10.0, 10.0, 1.0, INK);
+    assert!((first[first.len() - 1].y - second[0].y).abs() <= 1.0);
+}
+
+#[test]
+fn an_underline_takes_its_own_colour() {
+    let red = rgba(Rgb { r: 255, g: 0, b: 0 }, 1.0);
+    assert!(drawn("\x1b[4:3;58:2::255:0:0mx").quads.iter().any(|quad| quad.color == red));
 }

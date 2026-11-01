@@ -8,7 +8,7 @@ use alacritty_terminal::term::TermMode;
 use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use koral::blocks::Activity;
 use koral::config::{self, Config};
-use koral::frame::{self, Chrome, Frame, Layout, TabView};
+use koral::frame::{self, Chrome, CursorView, Frame, Layout, TabView};
 use koral::matugen;
 use koral::input::{self, Action, Clicks, Mouse, binding};
 use koral::keyboard::{self, KeyPress, Stage};
@@ -699,7 +699,7 @@ impl App {
                 &session.blocks,
                 &rows,
                 tab.scroll,
-                self.focused,
+                CursorView { focused: self.focused, visible: true },
                 layout,
                 &self.theme,
             );

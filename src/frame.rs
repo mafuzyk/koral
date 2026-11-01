@@ -98,6 +98,70 @@ pub struct Chrome<'a> {
     pub bar: &'a Bar,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CursorView {
+    pub focused: bool,
+    pub visible: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Underline {
+    Single,
+    Double,
+    Curl,
+    Dotted,
+    Dashed,
+}
+
+fn underline_style(flags: Flags) -> Option<Underline> {
+    [
+        (Flags::UNDERCURL, Underline::Curl),
+        (Flags::DOUBLE_UNDERLINE, Underline::Double),
+        (Flags::DOTTED_UNDERLINE, Underline::Dotted),
+        (Flags::DASHED_UNDERLINE, Underline::Dashed),
+        (Flags::UNDERLINE, Underline::Single),
+    ]
+    .into_iter()
+    .find_map(|(flag, style)| flags.contains(flag).then_some(style))
+}
+
+/// The marks of one cell. Dots and curls follow the window position, so neighbours join.
+pub fn underline(style: Underline, x: f32, y: f32, width: f32, thickness: f32, color: [f32; 4]) -> Vec<Quad> {
+    let beats = |period: f32, mark: f32| -> Vec<Quad> {
+        let end = x + width;
+        let mut start = (x / period).floor() * period;
+        let mut quads = Vec::new();
+        while start < end {
+            let (left, right) = (start.max(x), (start + mark).min(end));
+            if right > left {
+                quads.push(Quad::new(left, y, right - left, thickness, color));
+            }
+            start += period;
+        }
+        quads
+    };
+    match style {
+        Underline::Single => vec![Quad::new(x, y, width, thickness, color)],
+        Underline::Double => {
+            vec![Quad::new(x, y, width, thickness, color), Quad::new(x, y + 2.0 * thickness, width, thickness, color)]
+        }
+        Underline::Dotted => beats(2.0 * thickness, thickness),
+        Underline::Dashed => beats(6.0 * thickness, 4.0 * thickness),
+        Underline::Curl => {
+            let period = 8.0 * thickness;
+            let wave = |column: f32| (column * std::f32::consts::TAU / period).sin() * thickness;
+            let mut quads = Vec::new();
+            let mut left = x;
+            while left < x + width {
+                let right = (left.floor() + 1.0).min(x + width);
+                quads.push(Quad::new(left, y + wave(left.floor()).round(), right - left, thickness, color));
+                left = right;
+            }
+            quads
+        }
+    }
+}
+
 pub fn visible_top(rows: &[Row], lines: usize, scroll: usize) -> usize {
     rows.len().saturating_sub(lines + scroll)
 }
@@ -108,7 +172,7 @@ pub fn draw_terminal<L: EventListener>(
     blocks: &BlockStore,
     rows: &[Row],
     scroll: usize,
-    focused: bool,
+    cursor: CursorView,
     layout: Layout,
     theme: &Theme,
 ) {
@@ -152,9 +216,10 @@ pub fn draw_terminal<L: EventListener>(
                 frame.quads.push(Quad::new(x, y, width, layout.cell.height, rgba(bg, 1.0)));
             }
             let thickness = layout.scale.max(1.0);
-            if cell.flags.intersects(Flags::ALL_UNDERLINES) {
-                let underline = y + layout.cell.height - 2.0 * thickness;
-                frame.quads.push(Quad::new(x, underline, width, thickness, rgba(fg, 1.0)));
+            if let Some(style) = underline_style(cell.flags) {
+                let color = cell.underline_color().map_or(fg, |color| theme.resolve(color, colors));
+                let top = y + layout.cell.height - 3.0 * thickness;
+                frame.quads.extend(underline(style, x, top, width, thickness, rgba(color, 1.0)));
             }
             if cell.flags.contains(Flags::STRIKEOUT) {
                 let strike = y + layout.cell.height / 2.0;
@@ -192,11 +257,11 @@ pub fn draw_terminal<L: EventListener>(
 
     frame.pictures.over = frame.quads.len();
 
-    if scroll == 0 && term.mode().contains(TermMode::SHOW_CURSOR) {
-        let cursor = grid.cursor.point;
-        let position = rows[top..].iter().take(layout.lines()).position(|row| row.line == cursor.line);
+    if scroll == 0 && cursor.visible && term.mode().contains(TermMode::SHOW_CURSOR) {
+        let point = grid.cursor.point;
+        let position = rows[top..].iter().take(layout.lines()).position(|row| row.line == point.line);
         if let Some(index) = position {
-            draw_cursor(frame, term, index, cursor.column.0, focused, layout, theme);
+            draw_cursor(frame, term, index, point.column.0, cursor.focused, layout, theme);
         }
     }
 
