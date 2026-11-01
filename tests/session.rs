@@ -366,6 +366,14 @@ fn an_image_sits_on_the_cursor_cell() {
 }
 
 #[test]
+fn a_placement_carries_its_crop_to_the_view() {
+    let mut f = Fixture::new(20, 10);
+    f.feed("\x1b_Ga=t,f=24,s=2,v=2,i=1,q=2;AAAAAAAAAAAAAAAA\x1b\\");
+    f.feed("\x1b_Ga=p,i=1,x=1,y=0,w=1,h=2,c=1,r=1,C=1,q=2\x1b\\");
+    assert_eq!(f.pictures()[0].crop, [1, 0, 1, 2]);
+}
+
+#[test]
 fn an_image_moves_the_cursor_past_itself() {
     let mut f = Fixture::new(20, 10);
     f.show("i=1,c=3,r=4");

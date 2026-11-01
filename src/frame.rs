@@ -388,6 +388,15 @@ pub fn fit_picture(image: (u32, u32), area: (f32, f32)) -> (f32, f32) {
     (width * scale, height * scale)
 }
 
+/// The size a placement draws at, and the part of the image it shows as offset and scale.
+pub fn picture_box(image: (u32, u32), crop: [u32; 4], area: (f32, f32)) -> ((f32, f32), [f32; 4]) {
+    let [x, y, width, height] = crop;
+    let (whole_width, whole_height) = (image.0 as f32, image.1 as f32);
+    // A tile of a larger picture: keeping its shape would open seams between the cells.
+    let size = if (width, height) == image { fit_picture(image, area) } else { area };
+    (size, [x as f32 / whole_width, y as f32 / whole_height, width as f32 / whole_width, height as f32 / whole_height])
+}
+
 pub fn draw_pictures<L: EventListener>(
     frame: &mut Frame,
     term: &Term<L>,
@@ -401,10 +410,10 @@ pub fn draw_pictures<L: EventListener>(
     for found in placed(term, graphics, rows, top, layout.lines()) {
         let Some(image) = graphics.image(found.image) else { continue };
         let area = (found.columns as f32 * cell.width, found.rows as f32 * cell.height);
-        let (width, height) = fit_picture((image.width, image.height), area);
+        let ((width, height), crop) = picture_box((image.width, image.height), found.crop, area);
         let x = layout.grid_x() + found.column as f32 * cell.width;
         let y = layout.grid_y() + found.row as f32 * cell.height;
-        frame.pictures.list.push(Picture { image: image.clone(), x, y, width, height });
+        frame.pictures.list.push(Picture { image: image.clone(), x, y, width, height, crop });
     }
     let area = (layout.columns() as f32 * cell.width, layout.lines() as f32 * cell.height);
     frame.pictures.area = [layout.grid_x(), layout.grid_y(), area.0, area.1];

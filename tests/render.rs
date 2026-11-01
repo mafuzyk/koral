@@ -29,6 +29,20 @@ fn a_picture_keeps_its_shape_inside_its_cells() {
     assert_eq!(koral::frame::fit_picture((16, 16), (8.0, 24.0)), (8.0, 8.0));
 }
 
+#[test]
+fn a_whole_image_keeps_its_shape_and_shows_everything() {
+    let (size, crop) = koral::frame::picture_box((100, 50), [0, 0, 100, 50], (100.0, 60.0));
+    assert_eq!(size, (100.0, 50.0));
+    assert_eq!(crop, [0.0, 0.0, 1.0, 1.0]);
+}
+
+#[test]
+fn a_cropped_tile_fills_its_cells_so_no_seam_shows() {
+    let (size, crop) = koral::frame::picture_box((100, 50), [25, 10, 50, 20], (9.0, 21.0));
+    assert_eq!(size, (9.0, 21.0));
+    assert_eq!(crop, [0.25, 0.2, 0.5, 0.4]);
+}
+
 fn layout() -> koral::frame::Layout {
     let cell = koral::render::Cell { width: 10.0, height: 20.0 };
     koral::frame::Layout { width: 800.0, height: 600.0, scale: 1.0, padding: 0.0, cell }

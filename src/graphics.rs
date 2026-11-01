@@ -23,6 +23,8 @@ pub struct Request {
     pub columns: u32,
     pub rows: u32,
     pub keep_cursor: bool,
+    /// The part of the image to show: x, y, width and height in pixels.
+    pub crop: [u32; 4],
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -44,6 +46,7 @@ pub struct Placement {
     pub number: u32,
     pub columns: u32,
     pub rows: u32,
+    pub crop: [u32; 4],
 }
 
 #[derive(Clone, Copy)]
@@ -60,6 +63,7 @@ struct Keys {
     rows: u32,
     quiet: u32,
     keep_cursor: bool,
+    crop: [u32; 4],
     delete: u8,
     more: bool,
 }
@@ -79,6 +83,7 @@ impl Default for Keys {
             rows: 0,
             quiet: 0,
             keep_cursor: false,
+            crop: [0; 4],
             delete: b'a',
             more: false,
         }
@@ -98,7 +103,7 @@ struct Decoded {
 }
 
 /// The kitty graphics protocol for one terminal, without the grid or the GPU.
-// shortcut: no cropping, z-index, animation or unicode placeholders, add them when a program needs one.
+// shortcut: no z-index, animation or unicode placeholders, add them when a program needs one.
 pub struct Graphics {
     images: HashMap<u32, Arc<Image>>,
     order: VecDeque<u32>,
@@ -209,7 +214,11 @@ impl Graphics {
     fn request(&self, keys: Keys, id: u32) -> Option<Request> {
         let image = self.images.get(&id)?;
         let (cell_width, cell_height) = (u64::from(self.cell.0), u64::from(self.cell.1));
-        let (width, height) = (u64::from(image.width), u64::from(image.height));
+        let [x, y, width, height] = keys.crop;
+        let (x, y) = (x.min(image.width - 1), y.min(image.height - 1));
+        let part = |size: u32, left: u32| if size == 0 { left } else { size.min(left) };
+        let crop = [x, y, part(width, image.width - x), part(height, image.height - y)];
+        let (width, height) = (u64::from(crop[2]), u64::from(crop[3]));
         let (columns, rows) = (u64::from(keys.columns), u64::from(keys.rows));
 
         let fitted_columns = match (columns, rows) {
@@ -229,15 +238,16 @@ impl Graphics {
             columns: clamp(fitted_columns),
             rows: clamp(fitted_rows),
             keep_cursor: keys.keep_cursor,
+            crop,
         })
     }
 
     /// The anchor for a placement. `here` holds the anchors already on the target
     /// cell: a video repainting one spot must not pile anchors onto it.
     pub fn place(&mut self, request: Request, here: &[u32]) -> u32 {
-        let Request { image, number, columns, rows, .. } = request;
+        let Request { image, number, columns, rows, crop, .. } = request;
         let same = |placement: &Placement| placement.image == image && placement.number == number;
-        let placement = Placement { image, number, columns, rows };
+        let placement = Placement { image, number, columns, rows, crop };
 
         // mpv sends each frame with no id, so nothing else ties a frame to the one before it.
         let frame = |id: u32| id >= FIRST_AUTOMATIC_ID;
@@ -317,6 +327,10 @@ fn parse(body: &[u8]) -> Option<(Keys, &[u8])> {
             "r" => keys.rows = number,
             "q" => keys.quiet = number,
             "C" => keys.keep_cursor = number == 1,
+            "x" => keys.crop[0] = number,
+            "y" => keys.crop[1] = number,
+            "w" => keys.crop[2] = number,
+            "h" => keys.crop[3] = number,
             "d" => keys.delete = letter,
             "m" => keys.more = number == 1,
             _ => {}

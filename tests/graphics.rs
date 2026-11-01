@@ -143,7 +143,7 @@ fn transmit_and_place_asks_for_a_placement_in_cells() {
     let mut g = graphics();
     let outcome = send(&mut g, "a=T,f=24,s=25,v=30,i=2,q=2", &vec![0; 25 * 30 * 3]);
     let request = outcome.place.unwrap();
-    assert_eq!(request, Request { image: 2, number: 0, columns: 3, rows: 2, keep_cursor: false });
+    assert_eq!(request, Request { image: 2, number: 0, columns: 3, rows: 2, keep_cursor: false, crop: [0, 0, 25, 30] });
 }
 
 #[test]
@@ -151,7 +151,31 @@ fn explicit_cells_and_the_cursor_key_win() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=2", &[0; 3]);
     let request = send(&mut g, "a=p,i=2,p=9,c=40,r=12,C=1", &[]).place.unwrap();
-    assert_eq!(request, Request { image: 2, number: 9, columns: 40, rows: 12, keep_cursor: true });
+    assert_eq!(request, Request { image: 2, number: 9, columns: 40, rows: 12, keep_cursor: true, crop: [0, 0, 1, 1] });
+}
+
+#[test]
+fn a_placement_keeps_the_part_of_the_image_it_asked_for() {
+    let mut g = graphics();
+    send(&mut g, "a=t,f=24,s=4,v=4,i=2", &[0; 4 * 4 * 3]);
+    let request = send(&mut g, "a=p,i=2,x=1,y=2,w=2,h=1,c=1,r=1,C=1", &[]).place.unwrap();
+    assert_eq!(request.crop, [1, 2, 2, 1]);
+}
+
+#[test]
+fn a_crop_ends_at_the_edge_of_the_image() {
+    let mut g = graphics();
+    send(&mut g, "a=t,f=24,s=4,v=4,i=2", &[0; 4 * 4 * 3]);
+    assert_eq!(send(&mut g, "a=p,i=2,x=3,y=1", &[]).place.unwrap().crop, [3, 1, 1, 3]);
+    assert_eq!(send(&mut g, "a=p,i=2,x=9,y=9,w=9,h=9", &[]).place.unwrap().crop, [3, 3, 1, 1]);
+}
+
+#[test]
+fn a_crop_without_cells_takes_the_size_of_the_crop() {
+    let mut g = graphics();
+    send(&mut g, "a=t,f=24,s=30,v=30,i=2", &vec![0; 30 * 30 * 3]);
+    let request = send(&mut g, "a=p,i=2,w=10,h=30", &[]).place.unwrap();
+    assert_eq!((request.columns, request.rows), (1, 2));
 }
 
 #[test]
@@ -173,7 +197,7 @@ fn a_transmission_without_an_id_still_places() {
 fn a_placement_with_a_number_replaces_the_old_one() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
-    let request = Request { image: 1, number: 3, columns: 1, rows: 1, keep_cursor: false };
+    let request = Request { image: 1, number: 3, columns: 1, rows: 1, keep_cursor: false, crop: [0, 0, 1, 1] };
     let first = g.place(request, &[]);
     let second = g.place(request, &[]);
     assert_ne!(first, second);
@@ -185,7 +209,7 @@ fn a_placement_with_a_number_replaces_the_old_one() {
 fn placing_again_on_the_same_cell_reuses_its_anchor() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
-    let request = Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true };
+    let request = Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] };
     let first = g.place(request, &[]);
     assert_eq!(g.place(request, &[first]), first);
 }
@@ -194,7 +218,7 @@ fn placing_again_on_the_same_cell_reuses_its_anchor() {
 fn deleting_everything_removes_placements_and_keeps_images() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
-    let anchor = g.place(Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true }, &[]);
+    let anchor = g.place(Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] }, &[]);
     send(&mut g, "a=d,d=a", &[]);
     assert!(g.placement(anchor).is_none());
     assert!(g.image(1).is_some());
@@ -213,8 +237,8 @@ fn deleting_by_id_leaves_the_others() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
     send(&mut g, "a=t,f=24,s=1,v=1,i=2", &[0; 3]);
-    let one = g.place(Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true }, &[]);
-    let two = g.place(Request { image: 2, number: 0, columns: 1, rows: 1, keep_cursor: true }, &[]);
+    let one = g.place(Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] }, &[]);
+    let two = g.place(Request { image: 2, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] }, &[]);
     send(&mut g, "a=d,d=I,i=1", &[]);
     assert!(g.placement(one).is_none() && g.image(1).is_none());
     assert!(g.placement(two).is_some() && g.image(2).is_some());

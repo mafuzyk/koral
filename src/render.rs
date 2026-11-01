@@ -83,7 +83,8 @@ fn fs_main(in: Varying) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_picture(in: Varying) -> @location(0) vec4<f32> {
-    let color = textureSample(picture, picture_sampler, (in.pixel - in.rect.xy) / in.rect.zw);
+    let at = (in.pixel - in.rect.xy) / in.rect.zw;
+    let color = textureSample(picture, picture_sampler, in.color.xy + at * in.color.zw);
     return vec4<f32>(color.rgb * color.a, color.a);
 }
 "#;
@@ -182,6 +183,7 @@ pub struct Picture {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+    pub crop: [f32; 4],
 }
 
 /// Images go over the first `over` quads and under everything else.
@@ -504,7 +506,7 @@ impl Renderer {
             }
         }
 
-        let boxes = drawn.iter().map(|p| Quad::new(p.x, p.y, p.width, p.height, [0.0; 4]));
+        let boxes = drawn.iter().map(|p| Quad::new(p.x, p.y, p.width, p.height, p.crop));
         let instances: Vec<u8> = quads
             .iter()
             .copied()
