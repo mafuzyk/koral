@@ -172,6 +172,11 @@ pub fn visible_top(rows: &[Row], lines: usize, scroll: usize) -> usize {
     rows.len().saturating_sub(lines + scroll)
 }
 
+/// Past this a glyph may come from a fallback font with its own width, so it draws apart
+/// and what follows keeps its column.
+// shortcut: a font that lacks an accented letter still shifts its line, split there if one shows up.
+const LAST_COMMON_CHAR: char = '\u{2FF}';
+
 pub fn draw_terminal<L: EventListener>(
     frame: &mut Frame,
     term: &Term<L>,
@@ -192,7 +197,8 @@ pub fn draw_terminal<L: EventListener>(
     for (index, row) in rows[top..].iter().take(layout.lines()).enumerate() {
         let y = layout.grid_y() + index as f32 * layout.cell.height;
         let cells = &grid[row.line];
-        let mut spans: Vec<Span> = Vec::new();
+        let mut pieces: Vec<(usize, Vec<Span>)> = Vec::new();
+        let mut after_symbol = false;
 
         for column in 0..columns {
             let cell = &cells[Column(column)];
@@ -244,6 +250,12 @@ pub fn draw_terminal<L: EventListener>(
             let bold = cell.flags.intersects(Flags::BOLD);
             let italic = cell.flags.intersects(Flags::ITALIC);
             let color = (fg.r, fg.g, fg.b);
+            let symbol = text.chars().next().is_some_and(|ch| ch > LAST_COMMON_CHAR);
+            if symbol || after_symbol || pieces.is_empty() {
+                pieces.push((column, Vec::new()));
+            }
+            after_symbol = symbol;
+            let spans = pieces.last_mut().map(|(_, spans)| spans).expect("a piece was just pushed");
             match spans.last_mut() {
                 Some(last) if last.color == color && last.bold == bold && last.italic == italic => {
                     last.text.push_str(&text);
@@ -252,12 +264,15 @@ pub fn draw_terminal<L: EventListener>(
             }
         }
 
-        while spans.last().is_some_and(|span| span.text.trim_end().is_empty()) {
-            spans.pop();
-        }
-        if let Some(last) = spans.last_mut() {
-            last.text.truncate(last.text.trim_end().len());
-            frame.lines.push(TextLine { x: layout.grid_x(), y, small: false, spans });
+        for (column, mut spans) in pieces {
+            while spans.last().is_some_and(|span| span.text.trim_end().is_empty()) {
+                spans.pop();
+            }
+            if let Some(last) = spans.last_mut() {
+                last.text.truncate(last.text.trim_end().len());
+                let x = layout.grid_x() + column as f32 * layout.cell.width;
+                frame.lines.push(TextLine { x, y, small: false, spans });
+            }
         }
 
         if let Some(block) = row.block.and_then(|id| blocks.get(id)) {

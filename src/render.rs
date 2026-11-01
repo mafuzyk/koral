@@ -445,7 +445,9 @@ impl Renderer {
 
     pub fn draw(&mut self, quads: &[Quad], pictures: &Pictures, lines: &[TextLine], clip: Clip, clear: [f32; 4]) {
         let keys: Vec<u64> = lines.iter().map(line_key).collect();
-        if self.lines.len() + keys.len() > MAX_CACHED_LINES {
+        // A screen of symbols repeats its pieces: counting them all would empty the cache each frame.
+        let new: HashSet<&u64> = keys.iter().filter(|key| !self.lines.contains_key(*key)).collect();
+        if self.lines.len() + new.len() > MAX_CACHED_LINES {
             self.lines.clear();
         }
         for (key, line) in keys.iter().zip(lines) {

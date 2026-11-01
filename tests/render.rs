@@ -180,3 +180,38 @@ fn a_tab_kept_in_a_cell_draws_one_cell_wide() {
     assert_eq!(koral::frame::shown('\0'), ' ');
     assert_eq!(koral::frame::shown('a'), 'a');
 }
+
+fn pieces(text: &str) -> Vec<(usize, String)> {
+    let (x, width) = (layout().grid_x(), layout().cell.width);
+    let line = |line: &koral::render::TextLine| {
+        let text = line.spans.iter().map(|span| span.text.as_str()).collect();
+        (((line.x - x) / width).round() as usize, text)
+    };
+    drawn(text).lines.iter().map(line).collect()
+}
+
+#[test]
+fn text_after_a_wide_glyph_stays_on_its_column() {
+    assert_eq!(pieces("a😀b"), [(0, "a".to_string()), (1, "😀".to_string()), (3, "b".to_string())]);
+}
+
+#[test]
+fn every_symbol_starts_on_its_own_column() {
+    let expected = [(0, "日"), (2, "本"), (4, "❯"), (5, "x")].map(|(column, text)| (column, text.to_string()));
+    assert_eq!(pieces("日本❯x"), expected);
+}
+
+#[test]
+fn a_mark_stays_with_the_symbol_it_combines_with() {
+    assert_eq!(pieces("❯\u{301}x"), [(0, "❯\u{301}".to_string()), (1, "x".to_string())]);
+}
+
+#[test]
+fn plain_and_accented_text_stay_in_one_piece() {
+    assert_eq!(pieces("ação  ok"), [(0, "ação  ok".to_string())]);
+}
+
+#[test]
+fn spaces_after_a_symbol_draw_nothing() {
+    assert_eq!(pieces("❯   "), [(0, "❯".to_string())]);
+}
