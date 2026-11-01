@@ -42,6 +42,14 @@ is 100 MB of base64, peak is the terminal's RSS at the end.
 The 100 ms start target holds in one run of three on software rendering, and Koral
 starts faster than kitty in all three. Typing latency and video need a real GPU.
 
+Inside the process a warm start takes 75 ms to the first tab: 8 ms for the GPU
+setup, 18 ms to list the fonts, and 48 ms for the text pipelines and the first
+measure, which software rendering makes slower.
+
+The real miss is a start with the fonts out of the page cache: listing the 1074
+faces on the test machine took 2.4 s, once, before the window appeared. The fix
+is to load the configured font first and the fallbacks behind it.
+
 ## Left to a person
 
 - Accents through a dead key on ABNT2: the virtual keyboard cannot compose them.
