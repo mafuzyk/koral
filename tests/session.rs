@@ -9,6 +9,7 @@ use koral::session::Session;
 use koral::view::{Row, output_text, pinned, rows};
 
 const PROMPT: &str = "\x1b]133;A\x1b\\$ \x1b]133;B\x1b\\";
+const TALL_PROMPT: &str = "\x1b]133;A\x1b\\\r\ninfo\r\n$ \x1b]133;B\x1b\\";
 
 struct Fixture {
     session: Session<VoidListener>,
@@ -33,6 +34,15 @@ impl Fixture {
             self.feed("\r\n");
         }
         self.feed(&format!("\x1b]133;D;{status}\x1b\\"));
+    }
+
+    fn tall_command(&mut self, name: &str, output: &[&str]) {
+        self.feed(TALL_PROMPT);
+        self.feed(&format!("{name}\r\n\x1b]133;C\x1b\\"));
+        for line in output {
+            self.feed(&format!("{line}\r\n"));
+        }
+        self.feed("\x1b]133;D;0\x1b\\");
     }
 
     fn start(&mut self, name: &str) {
@@ -111,6 +121,29 @@ fn folding_hides_only_that_blocks_output() {
 }
 
 #[test]
+fn folding_stops_before_the_next_prompt_of_several_lines() {
+    let mut f = Fixture::new(20, 12);
+    f.tall_command("one", &["a", "b"]);
+    f.tall_command("two", &["c"]);
+    f.fold_latest_finished();
+
+    assert_eq!(f.visible(), vec!["", "info", "$ one", "", "info", "$ two", "c"]);
+    assert_eq!(f.rows()[2].hidden, 2);
+}
+
+#[test]
+fn a_tall_prompt_is_measured_even_with_the_scrollback_full() {
+    let mut f = Fixture::new(20, 4);
+    for _ in 0..40 {
+        f.tall_command("one", &["a"]);
+    }
+    let header = f.rows().iter().position(|row| row.block.is_some()).unwrap();
+    f.fold_latest_finished();
+
+    assert_eq!(f.rows()[header].hidden, 1);
+}
+
+#[test]
 fn folding_keeps_a_wrapped_command_line_visible() {
     let mut f = Fixture::new(8, 10);
     f.command("a-long-command", &["out"], 0);
@@ -186,6 +219,15 @@ fn output_text_is_only_that_commands_output() {
     f.command("one", &["a", "b"], 0);
     f.command("two", &["c"], 0);
     let id = f.rows()[0].block.unwrap();
+    assert_eq!(output_text(&f.session.term, &f.session.blocks, id).as_deref(), Some("a\nb"));
+}
+
+#[test]
+fn output_text_leaves_out_the_next_prompt_of_several_lines() {
+    let mut f = Fixture::new(20, 12);
+    f.tall_command("one", &["a", "b"]);
+    f.tall_command("two", &["c"]);
+    let id = f.rows()[2].block.unwrap();
     assert_eq!(output_text(&f.session.term, &f.session.blocks, id).as_deref(), Some("a\nb"));
 }
 

@@ -15,6 +15,8 @@ pub struct Block {
     pub status: Option<i32>,
     pub duration: Option<Duration>,
     pub folded: bool,
+    /// Rows the prompt takes above the line the anchor sits on.
+    pub prompt_lines: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +82,17 @@ impl BlockStore {
                 None
             }
             _ => None,
+        }
+    }
+
+    /// Line feeds count where the grid cannot: at the bottom of a full scrollback
+    /// a prompt moves no cursor line and adds no history.
+    // shortcut: a prompt line that wraps is not counted, read the wraps if one ever does.
+    pub fn observe(&mut self, bytes: &[u8]) {
+        if self.phase == Phase::Prompt
+            && let Some(block) = self.latest_mut()
+        {
+            block.prompt_lines += bytes.iter().filter(|byte| **byte == b'\n').count();
         }
     }
 

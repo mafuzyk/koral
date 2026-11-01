@@ -27,7 +27,10 @@ impl<L: EventListener> Session<L> {
     pub fn feed(&mut self, bytes: &[u8], now: Instant) {
         let Self { term, blocks, parser, scanner } = self;
         scanner.feed(bytes, &mut |piece| match piece {
-            Piece::Bytes(bytes) => parser.advance(term, bytes),
+            Piece::Bytes(bytes) => {
+                parser.advance(term, bytes);
+                blocks.observe(bytes);
+            }
             Piece::Mark(mark) => {
                 if term.mode().contains(TermMode::ALT_SCREEN) {
                     return;

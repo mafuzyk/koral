@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::{Dimensions, Grid};
 use alacritty_terminal::index::{Column, Line, Point};
@@ -31,6 +33,8 @@ pub fn rows<L: EventListener>(term: &Term<L>, blocks: &BlockStore) -> Vec<Row> {
     let mut rows = Vec::new();
     let mut fold_into = None;
     let mut in_command = false;
+    let prompts: HashSet<i32> =
+        headers(term, blocks).iter().flat_map(|header| prompt_top(*header, blocks).0..header.0.0).collect();
 
     for number in grid.topmost_line().0..=grid.bottommost_line().0 {
         let line = Line(number);
@@ -42,6 +46,8 @@ pub fn rows<L: EventListener>(term: &Term<L>, blocks: &BlockStore) -> Vec<Row> {
         } else if in_command {
             rows.push(Row { line, block: None, hidden: 0 });
             in_command = wraps(grid, line);
+        } else if prompts.contains(&number) {
+            rows.push(Row { line, block: None, hidden: 0 });
         } else if let Some(header) = fold_into {
             let row: &mut Row = &mut rows[header];
             row.hidden += 1;
@@ -62,9 +68,7 @@ pub fn pinned(rows: &[Row], top: usize, blocks: &BlockStore) -> Option<u32> {
 
 pub fn output_text<L: EventListener>(term: &Term<L>, blocks: &BlockStore, id: u32) -> Option<String> {
     let grid = term.grid();
-    let headers: Vec<(Line, u32)> = (grid.topmost_line().0..=grid.bottommost_line().0)
-        .filter_map(|number| Some((Line(number), block_at(grid, Line(number), blocks)?)))
-        .collect();
+    let headers = headers(term, blocks);
     let index = headers.iter().position(|(_, header)| *header == id)?;
 
     let mut start = headers[index].0;
@@ -72,7 +76,7 @@ pub fn output_text<L: EventListener>(term: &Term<L>, blocks: &BlockStore, id: u3
         start = Line(start.0 + 1);
     }
     start = Line(start.0 + 1);
-    let end = headers.get(index + 1).map_or(grid.cursor.point.line, |(line, _)| Line(line.0 - 1));
+    let end = headers.get(index + 1).map_or(grid.cursor.point.line, |next| prompt_top(*next, blocks) - 1);
     if start > end {
         return Some(String::new());
     }
@@ -80,6 +84,18 @@ pub fn output_text<L: EventListener>(term: &Term<L>, blocks: &BlockStore, id: u3
     let last = Column(grid.columns() - 1);
     let text = term.bounds_to_string(Point::new(start, Column(0)), Point::new(end, last));
     Some(without_anchors(&text).trim_end_matches('\n').to_string())
+}
+
+fn headers<L: EventListener>(term: &Term<L>, blocks: &BlockStore) -> Vec<(Line, u32)> {
+    let grid = term.grid();
+    (grid.topmost_line().0..=grid.bottommost_line().0)
+        .filter_map(|number| Some((Line(number), block_at(grid, Line(number), blocks)?)))
+        .collect()
+}
+
+/// Where a block's prompt starts: output above it belongs to the block before.
+fn prompt_top((line, id): (Line, u32), blocks: &BlockStore) -> Line {
+    line - blocks.get(id).map_or(0, |block| block.prompt_lines)
 }
 
 fn block_at(grid: &Grid<Cell>, line: Line, blocks: &BlockStore) -> Option<u32> {
