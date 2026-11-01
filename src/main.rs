@@ -28,7 +28,11 @@ use winit::window::{Window, WindowId};
 const CONFIRM_WINDOW: Duration = Duration::from_secs(3);
 
 fn main() {
-    let event_loop = EventLoop::<UserEvent>::with_user_event().build().expect("create event loop");
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        println!("koral {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    let event_loop =EventLoop::<UserEvent>::with_user_event().build().expect("create event loop");
     let proxy = event_loop.create_proxy();
     let mut app = App::new(proxy);
     event_loop.run_app(&mut app).expect("run event loop");
