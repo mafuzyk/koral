@@ -166,7 +166,8 @@ Details the builder must handle:
   anchor on the last row makes a clear take the image's whole height.
 - Frames with no id on the same cell replace each other: mpv sends video this way.
 - Images draw over cell backgrounds and under text, the cursor and the chrome.
-- Not supported: cropping, z-index, animation frames and unicode placeholders.
+- A cropped placement fills its cells: yazi draws an image as one tile per cell.
+- Not supported: z-index, animation frames and unicode placeholders.
 
 ## Terminal parity
 

@@ -14,9 +14,9 @@ Results for 1.0.0, from a headless sway session with software rendering on
 | `kitten icat` | Pass after a fix | Waited 10 s on a short device reply; now 24 ms |
 | `ls --hyperlink` | Pass | Opens the `file://` target |
 | `mpv --vo=kitty` | Pass | Checked at 0.1.0, not repeated |
-| neovim | Not run | Not installed on the test machine |
-| chafa | Not run | Not installed on the test machine |
-| yazi | Not run | Not installed on the test machine |
+| neovim | Pass after a fix | Undercurl fell back to a plain underline; now answers DECRQSS. Cursor shape, italics, true colour, kitty keys, `:terminal` and resize work |
+| chafa | Pass | `-f kitty` draws the image. With no `-f` it picks text symbols, since it does not recognise Koral |
+| yazi | Pass after a fix | Image preview needs cropped placements, one per cell. Preview, clearing on move and resize work |
 | vttest | Not run | Not in the official repositories |
 
 ## Stress
