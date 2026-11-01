@@ -28,6 +28,10 @@ Success means Koral replaces kitty on `SUPER + Return` for daily use.
 - Images and video through the kitty graphics protocol (see Images).
 - Parity with what daily kitty use relies on (see Terminal parity).
 
+All of these shipped in 1.0.0. Open at that release: the `SUPER + Return` switch,
+which stays the user's decision, and the checks left to a person in
+`docs/testing.md`.
+
 ## Non-goals (v1)
 
 - Internal splits: Hyprland and tmux already cover them.
