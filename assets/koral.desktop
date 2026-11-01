@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Koral
+Comment=Terminal for the sharky shell
+Exec=koral
+Icon=koral
+Terminal=false
+Categories=System;TerminalEmulator;
+StartupWMClass=koral
