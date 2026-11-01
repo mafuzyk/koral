@@ -53,6 +53,7 @@ impl<L: EventListener> Session<L> {
                     place(term, parser, graphics, request);
                 }
             }
+            Piece::Status(query) => replies.push(status_reply(query, term.grid().cursor.template.flags)),
             Piece::Mark(Mark::Notify { title, body }) => {
                 notices.push(Notice { title: clean(&title, TITLE_LIMIT), body: clean(&body, BODY_LIMIT) });
             }
@@ -66,6 +67,30 @@ impl<L: EventListener> Session<L> {
             }
         });
     }
+}
+
+/// DECRQSS. neovim sets undercurl and reads it back to learn that it works.
+// shortcut: colours and settings other than SGR go unreported, add them if a program restores them this way.
+fn status_reply(query: &[u8], flags: Flags) -> String {
+    const STYLES: [(Flags, &str); 11] = [
+        (Flags::BOLD, "1"),
+        (Flags::DIM, "2"),
+        (Flags::ITALIC, "3"),
+        (Flags::UNDERLINE, "4"),
+        (Flags::DOUBLE_UNDERLINE, "4:2"),
+        (Flags::UNDERCURL, "4:3"),
+        (Flags::DOTTED_UNDERLINE, "4:4"),
+        (Flags::DASHED_UNDERLINE, "4:5"),
+        (Flags::INVERSE, "7"),
+        (Flags::HIDDEN, "8"),
+        (Flags::STRIKEOUT, "9"),
+    ];
+    if query != b"m" {
+        return "\x1bP0$r\x1b\\".to_string();
+    }
+    let styles: String =
+        STYLES.iter().filter(|(flag, _)| flags.contains(*flag)).map(|(_, code)| format!(";{code}")).collect();
+    format!("\x1bP1$r0{styles}m\x1b\\")
 }
 
 /// Lines have no stable identity: a character on the first cell travels with

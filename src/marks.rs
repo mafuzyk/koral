@@ -1,11 +1,13 @@
 const ESC: u8 = 0x1b;
 const BEL: u8 = 0x07;
 const GRAPHICS: &[u8] = b"\x1b_G";
-const PREFIXES: [&[u8]; 5] = [b"\x1b]133;", b"\x1b]7;", b"\x1b]777;notify;", b"\x1b]9;", GRAPHICS];
+const STATUS: &[u8] = b"\x1bP$q";
+const PREFIXES: [&[u8]; 6] = [b"\x1b]133;", b"\x1b]7;", b"\x1b]777;notify;", b"\x1b]9;", GRAPHICS, STATUS];
 // The stream is untrusted: an unterminated mark must not grow without bound.
 const MAX_MARK: usize = 64 * 1024;
 // Programs send images in 4096-byte chunks, this leaves room for the ones that do not.
 const MAX_GRAPHICS: usize = 2 * 1024 * 1024;
+const MAX_STATUS: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mark {
@@ -22,6 +24,7 @@ pub enum Piece<'a> {
     Bytes(&'a [u8]),
     Mark(Mark),
     Graphics(&'a [u8]),
+    Status(&'a [u8]),
 }
 
 enum Step {
@@ -29,9 +32,10 @@ enum Step {
     Release,
     Found(Mark),
     Graphics,
+    Status,
 }
 
-/// Takes OSC 133, OSC 7, notifications and image commands out of a PTY stream; vte would drop them.
+/// Takes OSC 133, OSC 7, notifications, image commands and status queries out of a PTY stream; vte would drop them.
 // shortcut: marks inside DCS or tmux passthrough also match, harmless for now.
 #[derive(Default)]
 pub struct Scanner {
@@ -73,6 +77,11 @@ impl Scanner {
                     sink(Piece::Graphics(&self.pending[2..end]));
                     self.pending.clear();
                 }
+                Step::Status => {
+                    let end = self.pending.len() - 2;
+                    sink(Piece::Status(&self.pending[STATUS.len()..end]));
+                    self.pending.clear();
+                }
             }
         }
     }
@@ -93,6 +102,13 @@ impl Scanner {
             return match byte {
                 b'\\' if after_escape => Step::Graphics,
                 _ if after_escape || seen.len() >= MAX_GRAPHICS => Step::Release,
+                _ => Step::Keep,
+            };
+        }
+        if seen.starts_with(STATUS) {
+            return match byte {
+                b'\\' if after_escape => Step::Status,
+                _ if after_escape || seen.len() >= MAX_STATUS => Step::Release,
                 _ => Step::Keep,
             };
         }

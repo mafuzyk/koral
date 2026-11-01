@@ -4,6 +4,7 @@ use koral::marks::{Mark, Piece, Scanner};
 enum Out {
     Bytes(Vec<u8>),
     Mark(Mark),
+    Status(Vec<u8>),
 }
 
 fn scan(chunks: &[&[u8]]) -> Vec<Out> {
@@ -17,6 +18,7 @@ fn scan(chunks: &[&[u8]]) -> Vec<Out> {
             },
             Piece::Mark(mark) => out.push(Out::Mark(mark)),
             Piece::Graphics(_) => {}
+            Piece::Status(query) => out.push(Out::Status(query.to_vec())),
         });
     }
     out
@@ -150,7 +152,7 @@ fn a_graphics_command_leaves_the_stream_whole() {
     scanner.feed(b"a\x1b_Ga=t;QUJD\x1b\\b", &mut |piece| match piece {
         Piece::Bytes(bytes) => seen.push(format!("bytes {}", String::from_utf8_lossy(bytes))),
         Piece::Graphics(body) => seen.push(format!("graphics {}", String::from_utf8_lossy(body))),
-        Piece::Mark(_) => {}
+        Piece::Mark(_) | Piece::Status(_) => {}
     });
     assert_eq!(seen, ["bytes a", "graphics Ga=t;QUJD", "bytes b"]);
 }
@@ -217,6 +219,22 @@ fn an_unknown_777_stays_in_the_stream() {
     let text = b"\x1b]777;foo;a\x07";
     assert_eq!(scan(&[text]).into_iter().flat_map(|out| match out {
         Out::Bytes(part) => part,
-        Out::Mark(_) => panic!("not a mark"),
+        Out::Mark(_) | Out::Status(_) => panic!("not a mark"),
     }).collect::<Vec<u8>>(), text);
+}
+
+#[test]
+fn a_status_query_split_across_reads_is_taken_out() {
+    assert_eq!(scan(&[b"a\x1bP$", b"qm\x1b", b"\\b"]), vec![bytes(b"a"), Out::Status(b"m".to_vec()), bytes(b"b")]);
+}
+
+#[test]
+fn other_device_strings_stay_in_the_stream() {
+    assert_eq!(scan(&[b"\x1bPq#0\x1b\\"]), vec![bytes(b"\x1bPq#0\x1b\\")]);
+}
+
+#[test]
+fn an_unterminated_status_query_is_released() {
+    let long = [b"\x1bP$q".as_slice(), &[b'a'; 64]].concat();
+    assert_eq!(scan(&[&long]), vec![bytes(&long)]);
 }

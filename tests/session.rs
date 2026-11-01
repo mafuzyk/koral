@@ -374,6 +374,27 @@ fn a_placement_carries_its_crop_to_the_view() {
 }
 
 #[test]
+fn the_current_style_can_be_read_back() {
+    let mut f = Fixture::new(20, 10);
+    f.feed("\x1b[1;4:3m\x1bP$qm\x1b\\\x1b[m");
+    assert_eq!(f.session.replies, vec!["\x1bP1$r0;1;4:3m\x1b\\"]);
+}
+
+#[test]
+fn a_plain_style_reads_back_as_zero() {
+    let mut f = Fixture::new(20, 10);
+    f.feed("\x1bP$qm\x1b\\");
+    assert_eq!(f.session.replies, vec!["\x1bP1$r0m\x1b\\"]);
+}
+
+#[test]
+fn a_setting_koral_does_not_report_is_refused() {
+    let mut f = Fixture::new(20, 10);
+    f.feed("\x1bP$q q\x1b\\");
+    assert_eq!(f.session.replies, vec!["\x1bP0$r\x1b\\"]);
+}
+
+#[test]
 fn an_image_moves_the_cursor_past_itself() {
     let mut f = Fixture::new(20, 10);
     f.show("i=1,c=3,r=4");
