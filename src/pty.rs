@@ -39,6 +39,14 @@ pub enum UserEvent {
     Title(u64, Option<String>),
     Bell(u64),
     Notify(u64, Notice),
+    Size(u64, SizeReply),
+}
+
+pub type SizeReply = Arc<dyn Fn(WindowSize) -> String + Sync + Send>;
+
+/// alacritty answers as a VT102, and kitty's tools wait out a timeout on so short an answer.
+pub fn device_reply(text: String) -> String {
+    if text == "\x1b[?6c" { "\x1b[?62;c".to_string() } else { text }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,7 +62,7 @@ impl Geometry {
         TermSize::new(self.columns, self.lines)
     }
 
-    fn window_size(self) -> WindowSize {
+    pub fn window_size(self) -> WindowSize {
         WindowSize {
             num_lines: self.lines as u16,
             num_cols: self.columns as u16,
@@ -73,7 +81,8 @@ pub struct Listener {
 impl EventListener for Listener {
     fn send_event(&self, event: Event) {
         let event = match event {
-            Event::PtyWrite(text) => UserEvent::Reply(self.tab, text),
+            Event::PtyWrite(text) => UserEvent::Reply(self.tab, device_reply(text)),
+            Event::TextAreaSizeRequest(reply) => UserEvent::Size(self.tab, reply),
             Event::ClipboardStore(_, text) => UserEvent::Copy(text),
             Event::ColorRequest(index, reply) => UserEvent::Color(self.tab, index, reply),
             Event::CursorBlinkingChange => UserEvent::Blink,

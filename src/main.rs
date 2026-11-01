@@ -966,6 +966,11 @@ impl ApplicationHandler<UserEvent> for App {
                 self.theme = matugen::theme(self.config.matugen);
                 self.redraw();
             }
+            UserEvent::Size(id, reply) => {
+                if let (Some(geometry), Some(tab)) = (self.geometry(), self.tab_mut(id)) {
+                    tab.write(reply(geometry.window_size()).into_bytes());
+                }
+            }
             UserEvent::Color(id, index, reply) => {
                 let color = self.theme.palette(index);
                 if let Some(tab) = self.tabs.as_ref().and_then(|tabs| tabs.iter().find(|tab| tab.id == id)) {
