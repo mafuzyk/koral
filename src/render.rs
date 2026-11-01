@@ -213,6 +213,7 @@ pub struct Renderer {
     bind_group: wgpu::BindGroup,
     quads: wgpu::Buffer,
     font_system: FontSystem,
+    cache: Cache,
     swash: SwashCache,
     viewport: Viewport,
     atlas: TextAtlas,
@@ -226,7 +227,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub async fn new(window: Arc<Window>, instance: wgpu::Instance, face: &Face, points: f32) -> Self {
+    pub async fn new(window: Arc<Window>, instance: wgpu::Instance, face: &Face, points: f32, mut font_system: FontSystem) -> Self {
         let size = window.inner_size();
         let scale = window.scale_factor() as f32;
         let surface = instance.create_surface(window.clone()).expect("create surface");
@@ -318,7 +319,6 @@ impl Renderer {
         });
         let quads = quad_buffer(&device, 1024);
 
-        let mut font_system = FontSystem::new();
         let cache = Cache::new(&device);
         let viewport = Viewport::new(&device, &cache);
         let mut atlas = TextAtlas::with_color_mode(&device, &queue, &cache, format, ColorMode::Web);
@@ -340,6 +340,7 @@ impl Renderer {
             bind_group,
             quads,
             font_system,
+            cache,
             swash: SwashCache::new(),
             viewport,
             atlas,
@@ -365,6 +366,15 @@ impl Renderer {
 
     pub fn set_scale(&mut self, scale: f32) {
         self.scale = scale;
+        self.remeasure();
+    }
+
+    /// The full font list. Font ids differ between systems, so nothing shaped or cached carries over.
+    pub fn set_fonts(&mut self, fonts: FontSystem) {
+        self.font_system = fonts;
+        self.swash = SwashCache::new();
+        self.atlas = TextAtlas::with_color_mode(&self.device, &self.queue, &self.cache, self.config.format, ColorMode::Web);
+        self.text = TextRenderer::new(&mut self.atlas, &self.device, wgpu::MultisampleState::default(), None);
         self.remeasure();
     }
 

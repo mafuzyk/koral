@@ -36,19 +36,21 @@ is 100 MB of base64, peak is the terminal's RSS at the end.
 
 | Terminal | Start | Cat | Peak |
 | --- | --- | --- | --- |
-| Koral | 81, 112, 120 ms | 1.40, 1.58, 1.40 s | 178, 187, 179 MiB |
+| Koral | 39, 43, 39 ms | 1.38, 1.41, 1.40 s | 175, 176, 176 MiB |
 | kitty | 370, 146, 146 ms | 1.25, 1.25, 1.24 s | 146, 148, 148 MiB |
 
-The 100 ms start target holds in one run of three on software rendering, and Koral
-starts faster than kitty in all three. Typing latency and video need a real GPU.
+A start used to list every font on the system. Koral now keeps the files of the
+four styles it draws in `~/.cache/koral/fonts`, loads those, and lists the rest
+behind the first frame for fallback glyphs.
 
-Inside the process a warm start takes 75 ms to the first tab: 8 ms for the GPU
-setup, 18 ms to list the fonts, and 48 ms for the text pipelines and the first
-measure, which software rendering makes slower.
+| Start | Before | After |
+| --- | --- | --- |
+| Warm | 77 to 80 ms | 40 to 45 ms |
+| Fonts out of the page cache | 3222 to 3555 ms | 98 to 100 ms |
 
-The real miss is a start with the fonts out of the page cache: listing the 1074
-faces on the test machine took 2.4 s, once, before the window appeared. The fix
-is to load the configured font first and the fallbacks behind it.
+The target of 100 ms holds in both. The first start ever, or the first after a
+font change, still lists every font: 3.3 s with a cold cache on the test machine.
+Glyphs from fallback fonts appear once the list is in.
 
 ## Left to a person
 

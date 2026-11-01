@@ -11,6 +11,7 @@ pub mod keyboard;
 pub mod links;
 pub mod tabs;
 pub mod theme;
+pub mod fonts;
 pub mod format;
 pub mod graphics;
 pub mod frame;

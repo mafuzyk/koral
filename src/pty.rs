@@ -13,6 +13,7 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty::{self, Options, Pty, Shell};
 use alacritty_terminal::vte::ansi::Rgb;
 use polling::{Event as PollEvent, Events, Poller};
+use glyphon::FontSystem;
 use winit::event_loop::EventLoopProxy;
 
 use crate::notify::Notice;
@@ -40,6 +41,7 @@ pub enum UserEvent {
     Bell(u64),
     Notify(u64, Notice),
     Size(u64, SizeReply),
+    Fonts(Box<FontSystem>),
 }
 
 pub type SizeReply = Arc<dyn Fn(WindowSize) -> String + Sync + Send>;

@@ -10,6 +10,7 @@ use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use koral::blocks::Activity;
 use koral::config::{self, Config};
 use koral::blink::Blink;
+use koral::fonts;
 use koral::frame::{self, Chrome, CursorView, Frame, Layout, TabView};
 use koral::links::{self, Link};
 use koral::matugen;
@@ -925,7 +926,17 @@ impl ApplicationHandler<UserEvent> for App {
             event_loop.owned_display_handle(),
         )));
         let (face, points) = (self.config.face(), self.config.font_size);
-        self.renderer = Some(pollster::block_on(Renderer::new(window.clone(), instance, &face, points)));
+        let cache = fonts::cache_path();
+        let quick = cache.as_deref().and_then(|path| fonts::quick(path, &face));
+        if quick.is_some() {
+            let (proxy, face, cache) = (self.proxy.clone(), face.clone(), cache.clone());
+            std::thread::spawn(move || {
+                let fonts = fonts::full(cache.as_deref(), &face);
+                let _ = proxy.send_event(UserEvent::Fonts(Box::new(fonts)));
+            });
+        }
+        let fonts = quick.unwrap_or_else(|| fonts::full(cache.as_deref(), &face));
+        self.renderer = Some(pollster::block_on(Renderer::new(window.clone(), instance, &face, points, fonts)));
         window.set_ime_allowed(true);
         self.window = Some(window);
         self.open_tab(event_loop);
@@ -965,6 +976,13 @@ impl ApplicationHandler<UserEvent> for App {
             }
             UserEvent::Colors => {
                 self.theme = matugen::theme(self.config.matugen);
+                self.redraw();
+            }
+            UserEvent::Fonts(fonts) => {
+                if let Some(renderer) = &mut self.renderer {
+                    renderer.set_fonts(*fonts);
+                }
+                self.resize_all();
                 self.redraw();
             }
             UserEvent::Size(id, reply) => {
