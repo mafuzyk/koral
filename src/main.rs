@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::index::Direction;
 use alacritty_terminal::selection::Selection;
 use alacritty_terminal::term::TermMode;
 use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind, SetExtLinux};
@@ -16,6 +17,7 @@ use koral::keyboard::{self, KeyPress, Stage};
 use koral::notify::{self, Limiter};
 use koral::pty::{Geometry, Terminal, UserEvent};
 use koral::render::{Renderer, rgba};
+use koral::search::Search;
 use koral::settings::{self, Command, FIELDS, Kind, Outcome, Settings, Zone};
 use koral::tabs::{self, Bar, Hit, Ring, Tabs};
 use koral::theme::Theme;
@@ -92,6 +94,7 @@ struct App {
     blink_shown: bool,
     window_title: String,
     notices: Limiter,
+    search: Option<Search>,
 }
 
 impl App {
@@ -132,6 +135,7 @@ impl App {
             blink_shown: true,
             window_title: String::new(),
             notices: Limiter::default(),
+            search: None,
         }
     }
 
@@ -252,6 +256,10 @@ impl App {
                 self.preedit = None;
                 text.chars().for_each(|ch| self.settings_command(Command::Type(ch)));
             }
+            Ime::Commit(text) if self.search.is_some() => {
+                self.preedit = None;
+                self.search_type(&text);
+            }
             Ime::Commit(text) => {
                 self.preedit = None;
                 self.write_active(text.into_bytes());
@@ -286,9 +294,15 @@ impl App {
             Action::NextPrompt => self.jump(view::next_prompt),
             Action::CopyOutput => self.copy_output(),
             Action::ToggleFold => self.toggle_fold(),
+            Action::Search => {
+                self.search.get_or_insert_with(Search::default);
+            }
             Action::PageUp => self.scroll_lines(self.page()),
             Action::PageDown => self.scroll_lines(-self.page()),
-            Action::OpenSettings => self.toggle_settings(),
+            Action::OpenSettings => {
+                self.search = None;
+                self.toggle_settings();
+            }
             Action::ZoomIn => self.zoom_to(self.zoom + 1.0),
             Action::ZoomOut => self.zoom_to(self.zoom - 1.0),
             Action::ZoomReset => self.zoom_to(0.0),
@@ -356,6 +370,62 @@ impl App {
             Some(Err(error)) => self.settings_error = Some(format!("Not saved: {error}")),
             None => self.settings_error = Some("Not saved: no config folder".to_string()),
         }
+    }
+
+    fn search_key(&mut self, key: &Key, text: Option<&str>) {
+        let direction = if self.mods.shift_key() { Direction::Right } else { Direction::Left };
+        match key {
+            Key::Named(NamedKey::Escape) => self.search = None,
+            Key::Named(NamedKey::Enter) => self.search_step(direction),
+            Key::Named(NamedKey::Backspace) => self.search_edit(|query| {
+                query.pop();
+            }),
+            _ if !self.mods.control_key() => self.search_type(text.unwrap_or("")),
+            _ => {}
+        }
+        self.redraw();
+    }
+
+    fn search_type(&mut self, text: &str) {
+        let typed: String = text.chars().filter(|ch| !ch.is_control()).collect();
+        if !typed.is_empty() {
+            self.search_edit(|query| query.push_str(&typed));
+        }
+    }
+
+    fn search_edit(&mut self, change: impl FnOnce(&mut String)) {
+        let Some(search) = &mut self.search else {
+            return;
+        };
+        let mut query = search.query.clone();
+        change(&mut query);
+        search.set_query(query);
+        self.search_step(Direction::Left);
+    }
+
+    fn search_step(&mut self, direction: Direction) {
+        let Some(lines) = self.layout().map(|layout| layout.lines()) else {
+            return;
+        };
+        let Some(mut search) = self.search.take() else {
+            return;
+        };
+        if let Some(tab) = self.active_mut() {
+            let mut session = tab.session.lock();
+            if let Some(found) = search.step(&session.term, direction) {
+                let line = found.start().line;
+                let rows = view::rows(&session.term, &session.blocks);
+                if let Some(id) = view::block_of(&rows, line) {
+                    session.blocks.toggle_fold(id);
+                }
+                let rows = view::rows(&session.term, &session.blocks);
+                if let Some(index) = view::row_of(&rows, line) {
+                    tab.scroll = rows.len().saturating_sub(lines + index.saturating_sub(lines / 2));
+                }
+            }
+        }
+        self.search = Some(search);
+        self.redraw();
     }
 
     fn settings_key(&mut self, key: &Key, text: Option<&str>) {
@@ -432,6 +502,7 @@ impl App {
     }
 
     fn with_tabs(&mut self, change: impl FnOnce(&mut Tabs<Terminal>)) {
+        self.search = None;
         if let Some(tabs) = &mut self.tabs {
             change(tabs);
         }
@@ -504,6 +575,11 @@ impl App {
 
     fn paste(&mut self, kind: LinuxClipboardKind) {
         let text = self.clipboard.as_mut().and_then(|clipboard| clipboard.get().clipboard(kind).text().ok());
+        if let (Some(text), true) = (&text, self.search.is_some()) {
+            let line = text.lines().next().unwrap_or("").to_string();
+            self.search_edit(|query| query.push_str(&line));
+            return;
+        }
         if let Some(text) = text {
             let bytes = input::paste(&text, self.mode());
             self.write_active(bytes);
@@ -740,6 +816,12 @@ impl App {
             );
             frame::draw_pictures(&mut frame, &session.term, &session.graphics, &rows, tab.scroll, layout);
             cursor = frame::cursor_position(&session.term, &rows, tab.scroll, layout);
+            let top = frame::visible_top(&rows, layout.lines(), tab.scroll);
+            let shown = &rows[top..rows.len().min(top + layout.lines())];
+            if let (Some(search), Some(first), Some(last)) = (&mut self.search, shown.first(), shown.last()) {
+                let matches = search.visible(&session.term, first.line, last.line);
+                frame::draw_search(&mut frame, &rows, top, &matches, search.current.as_ref(), layout, &self.theme);
+            }
         }
         if let (Some(text), Some((x, y))) = (&self.preedit, cursor) {
             frame::draw_preedit(&mut frame, text, x, y, layout, &self.theme);
@@ -760,6 +842,9 @@ impl App {
             bar: &bar,
         };
         frame::draw_chrome(&mut frame, &chrome, layout, &self.theme);
+        if let Some(search) = &self.search {
+            frame::draw_search_bar(&mut frame, &search.query, search.current.is_some(), layout, &self.theme);
+        }
         if let Some(settings) = &self.settings {
             frame::draw_settings(
                 &mut frame,
@@ -899,6 +984,10 @@ impl ApplicationHandler<UserEvent> for App {
                     self.run(action, event_loop);
                     return;
                 }
+                if self.search.is_some() {
+                    self.search_key(&event.logical_key, event.text.as_deref());
+                    return;
+                }
                 let text = if self.mods.control_key() { None } else { event.text.as_deref() };
                 let stage = if event.repeat { Stage::Repeat } else { Stage::Press };
                 let bytes = self.kitty_key(&event, stage).or_else(|| input::encode(&event.logical_key, text, self.mods, self.mode()));
@@ -910,7 +999,7 @@ impl ApplicationHandler<UserEvent> for App {
                     self.redraw();
                 }
             }
-            WindowEvent::KeyboardInput { event, .. } if self.settings.is_none() => {
+            WindowEvent::KeyboardInput { event, .. } if self.settings.is_none() && self.search.is_none() => {
                 if let (Some(bytes), Some(tab)) = (self.kitty_key(&event, Stage::Release), self.active()) {
                     tab.write(bytes);
                 }

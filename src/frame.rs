@@ -3,6 +3,7 @@ use std::time::Duration;
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Point};
+use alacritty_terminal::term::search::Match;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
@@ -22,6 +23,7 @@ const STRIP_HEIGHT: f32 = 38.0;
 const TAB_TOP: f32 = 6.0;
 const TAB_RADIUS: f32 = 10.0;
 const GUTTER_CELLS: f32 = 2.0;
+const SEARCH_COLUMNS: f32 = 36.0;
 const STRIP_SHADE: [f32; 4] = [0.0, 0.0, 0.0, 0.32];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -273,6 +275,76 @@ pub fn draw_terminal<L: EventListener>(
 
     if let Some(block) = pinned(rows, top, blocks).and_then(|id| blocks.get(id)) {
         draw_pinned(frame, block, layout, theme);
+    }
+}
+
+pub fn draw_search(
+    frame: &mut Frame,
+    rows: &[Row],
+    top: usize,
+    matches: &[Match],
+    current: Option<&Match>,
+    layout: Layout,
+    theme: &Theme,
+) {
+    let cell = layout.cell;
+    for found in matches {
+        let (start, end) = (found.start(), found.end());
+        for (index, row) in rows.iter().enumerate().skip(top).take(layout.lines()) {
+            if row.line < start.line || row.line > end.line {
+                continue;
+            }
+            let first = if row.line == start.line { start.column.0 } else { 0 };
+            let last = if row.line == end.line { end.column.0 + 1 } else { layout.columns() };
+            let (x, y) = (layout.grid_x() + first as f32 * cell.width, layout.grid_y() + (index - top) as f32 * cell.height);
+            let width = (last - first) as f32 * cell.width;
+            let focused = current == Some(found);
+            let alpha = if focused { 0.6 } else { 0.25 };
+            frame.quads.push(Quad::new(x, y, width, cell.height, rgba(theme.accent, alpha)));
+            if focused {
+                let line = layout.scale.max(1.0);
+                let ink = rgba(theme.foreground, 1.0);
+                frame.quads.push(Quad::new(x, y, width, line, ink));
+                frame.quads.push(Quad::new(x, y + cell.height - line, width, line, ink));
+                frame.quads.push(Quad::new(x, y, line, cell.height, ink));
+                frame.quads.push(Quad::new(x + width - line, y, line, cell.height, ink));
+            }
+        }
+    }
+}
+
+pub fn draw_search_bar(frame: &mut Frame, query: &str, found: bool, layout: Layout, theme: &Theme) {
+    let scale = layout.scale;
+    let cell = layout.cell;
+    let inset = 12.0 * scale;
+    let width = (SEARCH_COLUMNS * cell.width + inset * 2.0).min(layout.width - layout.left() * 2.0);
+    let height = cell.height + 12.0 * scale;
+    let (x, y) = (layout.width - layout.left() - width, layout.height - layout.left() - height);
+    frame.clip = Clip { count: frame.lines.len(), x, top: y - cell.height, bottom: y + height };
+    frame.quads.push(Quad {
+        x,
+        y,
+        width,
+        height,
+        color: rgba(theme.ansi[0], 1.0),
+        shape: Shape::Rounded { radius: 10.0 * scale },
+    });
+
+    let text_y = y + (height - cell.height) / 2.0;
+    let status = if found || query.is_empty() { "" } else { "No matches" };
+    let room = ((width - inset * 2.0) / cell.width) as usize - status.chars().count().min(10);
+    let shown = fit(query, room.saturating_sub(1));
+    let caret = x + inset + shown.chars().count() as f32 * cell.width;
+    frame.quads.push(Quad::new(caret, text_y, (2.0 * scale).round(), cell.height, rgba(theme.cursor, 0.9)));
+    let spans = if query.is_empty() {
+        vec![Span::plain("Search", theme.muted)]
+    } else {
+        vec![Span::plain(shown, theme.foreground)]
+    };
+    frame.lines.push(TextLine { x: x + inset, y: text_y, small: false, spans });
+    if !status.is_empty() {
+        let status_x = x + width - inset - status.chars().count() as f32 * cell.width;
+        frame.lines.push(TextLine { x: status_x, y: text_y, small: false, spans: vec![Span::plain(status, theme.failure)] });
     }
 }
 

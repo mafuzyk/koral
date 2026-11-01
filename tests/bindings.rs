@@ -63,3 +63,8 @@ fn zoom_keys_work_with_or_without_the_shifted_character() {
     assert_eq!(letter("0", CTRL_SHIFT), Some(Action::ZoomReset));
     assert_eq!(letter(")", CTRL_SHIFT), Some(Action::ZoomReset));
 }
+
+#[test]
+fn control_shift_s_searches() {
+    assert_eq!(letter("S", CTRL_SHIFT), Some(Action::Search));
+}

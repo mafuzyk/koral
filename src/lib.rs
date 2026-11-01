@@ -14,6 +14,7 @@ pub mod format;
 pub mod graphics;
 pub mod frame;
 pub mod pty;
+pub mod search;
 pub mod render;
 pub mod config;
 pub mod settings;

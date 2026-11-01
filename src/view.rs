@@ -114,6 +114,19 @@ pub fn rows<L: EventListener>(term: &Term<L>, blocks: &BlockStore) -> Vec<Row> {
     rows
 }
 
+pub fn row_of(rows: &[Row], line: Line) -> Option<usize> {
+    rows.binary_search_by_key(&line, |row| row.line).ok()
+}
+
+/// The folded block that hides a line.
+pub fn block_of(rows: &[Row], line: Line) -> Option<u32> {
+    if row_of(rows, line).is_some() {
+        return None;
+    }
+    let header = rows.iter().rev().filter(|row| row.line <= line).find(|row| row.block.is_some())?;
+    header.block.filter(|_| header.hidden > 0)
+}
+
 /// The running command to show above the viewport once its header scrolled off.
 pub fn pinned(rows: &[Row], top: usize, blocks: &BlockStore) -> Option<u32> {
     let header = rows.get(..=top)?.iter().rposition(|row| row.block.is_some())?;
