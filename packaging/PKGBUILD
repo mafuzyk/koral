@@ -13,7 +13,7 @@ provides=('koral')
 conflicts=('koral')
 options=('!debug')
 source=("koral-$pkgver.tar.gz::$url/releases/download/v$pkgver/koral-x86_64-linux.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('2b0414c3cb31b860bb5ca21405afaeccd57ced75b76a5bb3d7f9fe18e6b89b2f')
 
 package() {
   install -Dm755 koral "$pkgdir/usr/bin/koral"
