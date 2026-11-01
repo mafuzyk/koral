@@ -17,7 +17,12 @@ Results for 1.0.0, from a headless sway session with software rendering on
 | neovim | Pass after a fix | Undercurl fell back to a plain underline; now answers DECRQSS. Cursor shape, italics, true colour, kitty keys, `:terminal` and resize work |
 | chafa | Pass | `-f kitty` draws the image. With no `-f` it picks text symbols, since it does not recognise Koral |
 | yazi | Pass after a fix | Image preview needs cropped placements, one per cell. Preview, clearing on move and resize work |
-| vttest | Not run | Not in the official repositories |
+| vttest | Pass after a fix | At 80x24: cursor movement, autowrap, screen features, VT102 and reports pass. A tab cell pushed text sideways; fixed. Limits below |
+
+vttest limits, all from `alacritty_terminal`, none used by a program tested here:
+132 column mode does not resize the grid, double-size lines draw at normal size,
+VT52 mode is not emulated, blinking text does not blink, and the British and
+alternate ROM character sets show plain ASCII.
 
 ## Stress
 
@@ -49,8 +54,10 @@ behind the first frame for fallback glyphs.
 | Fonts out of the page cache | 3222 to 3555 ms | 98 to 100 ms |
 
 The target of 100 ms holds in both. The first start ever, or the first after a
-font change, still lists every font: 3.3 s with a cold cache on the test machine.
-Glyphs from fallback fonts appear once the list is in.
+font change, has no list yet and asks fontconfig for those files: 106 to 154 ms
+with the fonts and fontconfig's cache out of the page cache, down from 3.3 s. If
+`fc-list` is missing or does not know the font, Koral waits for the full list.
+Glyphs from fallback fonts appear once the full list is in.
 
 ## Left to a person
 

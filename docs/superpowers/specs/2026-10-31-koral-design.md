@@ -37,6 +37,8 @@ which stays the user's decision, and the checks left to a person in
 - Internal splits: Hyprland and tmux already cover them.
 - Agent sessions, X11, macOS, Windows.
 - Kittens, remote control and unicode image placeholders.
+- What `alacritty_terminal` does not emulate: 132 column resize, double-size
+  lines, VT52, blinking text.
 - Warp-style input cards: sharky's line editor stays in charge of input.
 - Tear-out tabs and tab profiles.
 
