@@ -33,6 +33,7 @@ pub enum UserEvent {
     Copy(String),
     Color(u64, usize, ColorReply),
     Colors,
+    Blink,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +71,7 @@ impl EventListener for Listener {
             Event::PtyWrite(text) => UserEvent::Reply(self.tab, text),
             Event::ClipboardStore(_, text) => UserEvent::Copy(text),
             Event::ColorRequest(index, reply) => UserEvent::Color(self.tab, index, reply),
+            Event::CursorBlinkingChange => UserEvent::Blink,
             _ => return,
         };
         let _ = self.proxy.send_event(event);

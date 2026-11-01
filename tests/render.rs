@@ -5,7 +5,8 @@ use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::Rgb;
 use koral::frame::{CursorView, Frame, Underline, draw_terminal, underline};
-use koral::render::{Quad, rgba, surface_format};
+use glyphon::{Style, Weight};
+use koral::render::{Face, Quad, attrs, rgba, surface_format};
 use koral::session::Session;
 use koral::theme::Theme;
 use koral::view::rows;
@@ -100,4 +101,28 @@ fn curl_joins_between_cells() {
 fn an_underline_takes_its_own_colour() {
     let red = rgba(Rgb { r: 255, g: 0, b: 0 }, 1.0);
     assert!(drawn("\x1b[4:3;58:2::255:0:0mx").quads.iter().any(|quad| quad.color == red));
+}
+
+#[test]
+fn a_drawn_box_leaves_no_glyph() {
+    let frame = drawn("a\u{2502}b");
+    let text: String = frame.lines.iter().flat_map(|line| &line.spans).map(|span| span.text.as_str()).collect();
+    assert_eq!(text, "a b");
+    assert!(frame.quads.iter().any(|quad| quad.height == 20.0 && quad.x > 0.0));
+}
+
+#[test]
+fn bold_italic_takes_the_chosen_weight_and_style() {
+    let face = Face { family: "Iosevka".to_string(), weight: 500, bold: 800, bold_italic: 900, oblique: true };
+    let attrs = attrs(&face, true, true);
+    assert_eq!(attrs.weight, Weight(900));
+    assert_eq!(attrs.style, Style::Oblique);
+}
+
+#[test]
+fn plain_text_takes_the_regular_weight() {
+    let face = Face { family: "Iosevka".to_string(), weight: 500, bold: 800, bold_italic: 900, oblique: false };
+    assert_eq!(attrs(&face, false, false).weight, Weight(500));
+    assert_eq!(attrs(&face, true, false).weight, Weight(800));
+    assert_eq!(attrs(&face, false, true).style, Style::Italic);
 }

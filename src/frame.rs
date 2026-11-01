@@ -7,6 +7,7 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 
+use crate::boxes;
 use crate::blocks::{Activity, Block, BlockStore};
 use crate::format;
 use crate::config::Config;
@@ -230,7 +231,11 @@ pub fn draw_terminal<L: EventListener>(
             if let Some(extra) = cell.zerowidth() {
                 text.extend(extra.iter());
             }
-            let text = without_anchors(&text);
+            let mut text = without_anchors(&text);
+            if let Some(quads) = boxes::quads(cell.c, x, y, width, layout.cell.height, thickness, rgba(fg, 1.0)) {
+                frame.quads.extend(quads);
+                text = " ".to_string();
+            }
             let bold = cell.flags.intersects(Flags::BOLD);
             let italic = cell.flags.intersects(Flags::ITALIC);
             let color = (fg.r, fg.g, fg.b);

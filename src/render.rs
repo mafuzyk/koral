@@ -149,6 +149,15 @@ impl Span {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Face {
+    pub family: String,
+    pub weight: u16,
+    pub bold: u16,
+    pub bold_italic: u16,
+    pub oblique: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct TextLine {
     pub x: f32,
@@ -209,7 +218,7 @@ pub struct Renderer {
     atlas: TextAtlas,
     text: TextRenderer,
     lines: HashMap<u64, Buffer>,
-    font: String,
+    face: Face,
     points: f32,
     scale: f32,
     cell: Cell,
@@ -217,7 +226,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub async fn new(window: Arc<Window>, instance: wgpu::Instance, font: String, points: f32) -> Self {
+    pub async fn new(window: Arc<Window>, instance: wgpu::Instance, face: &Face, points: f32) -> Self {
         let size = window.inner_size();
         let scale = window.scale_factor() as f32;
         let surface = instance.create_surface(window.clone()).expect("create surface");
@@ -314,7 +323,7 @@ impl Renderer {
         let viewport = Viewport::new(&device, &cache);
         let mut atlas = TextAtlas::with_color_mode(&device, &queue, &cache, format, ColorMode::Web);
         let text = TextRenderer::new(&mut atlas, &device, wgpu::MultisampleState::default(), None);
-        let cell = measure(&mut font_system, &font, points, scale);
+        let cell = measure(&mut font_system, face, points, scale);
 
         Self {
             device,
@@ -336,7 +345,7 @@ impl Renderer {
             atlas,
             text,
             lines: HashMap::new(),
-            font,
+            face: face.clone(),
             points,
             scale,
             cell,
@@ -359,14 +368,14 @@ impl Renderer {
         self.remeasure();
     }
 
-    pub fn set_font(&mut self, font: &str, points: f32) {
-        self.font = font.to_string();
+    pub fn set_font(&mut self, face: &Face, points: f32) {
+        self.face = face.clone();
         self.points = points;
         self.remeasure();
     }
 
     fn remeasure(&mut self) {
-        self.cell = measure(&mut self.font_system, &self.font, self.points, self.scale);
+        self.cell = measure(&mut self.font_system, &self.face, self.points, self.scale);
         self.lines.clear();
     }
 
@@ -408,7 +417,7 @@ impl Renderer {
         }
         for (key, line) in keys.iter().zip(lines) {
             if !self.lines.contains_key(key) {
-                let buffer = shape(&mut self.font_system, line, &self.font, self.points, self.scale);
+                let buffer = shape(&mut self.font_system, line, &self.face, self.points, self.scale);
                 self.lines.insert(*key, buffer);
             }
         }
@@ -612,33 +621,36 @@ fn metrics(points: f32, scale: f32, small: bool) -> Metrics {
     Metrics::new(pixels * if small { SMALL } else { 1.0 }, (pixels * LINE_HEIGHT).round())
 }
 
-fn base_attrs(font: &str) -> Attrs<'_> {
-    Attrs::new().family(Family::Name(font)).weight(Weight::MEDIUM)
+pub fn attrs(face: &Face, bold: bool, italic: bool) -> Attrs<'_> {
+    let weight = match (bold, italic) {
+        (true, true) => face.bold_italic,
+        (true, false) => face.bold,
+        (false, _) => face.weight,
+    };
+    let attrs = Attrs::new().family(Family::Name(&face.family)).weight(Weight(weight));
+    match (italic, face.oblique) {
+        (false, _) => attrs,
+        (true, true) => attrs.style(Style::Oblique),
+        (true, false) => attrs.style(Style::Italic),
+    }
 }
 
-fn measure(font_system: &mut FontSystem, font: &str, points: f32, scale: f32) -> Cell {
+fn measure(font_system: &mut FontSystem, face: &Face, points: f32, scale: f32) -> Cell {
     let metrics = metrics(points, scale, false);
     let mut buffer = Buffer::new(font_system, metrics);
-    buffer.set_text("M", &base_attrs(font), Shaping::Advanced, None);
+    buffer.set_text("M", &attrs(face, false, false), Shaping::Advanced, None);
     buffer.shape_until_scroll(font_system, false);
     let width = buffer.layout_runs().next().map_or(metrics.font_size * 0.5, |run| run.line_w);
     Cell { width, height: metrics.line_height }
 }
 
-fn shape(font_system: &mut FontSystem, line: &TextLine, font: &str, points: f32, scale: f32) -> Buffer {
+fn shape(font_system: &mut FontSystem, line: &TextLine, face: &Face, points: f32, scale: f32) -> Buffer {
     let mut buffer = Buffer::new(font_system, metrics(points, scale, line.small));
     let spans = line.spans.iter().map(|span| {
         let (r, g, b) = span.color;
-        let mut attrs = base_attrs(font).color(Color::rgb(r, g, b));
-        if span.bold {
-            attrs = attrs.weight(Weight::BOLD);
-        }
-        if span.italic {
-            attrs = attrs.style(Style::Italic);
-        }
-        (span.text.as_str(), attrs)
+        (span.text.as_str(), attrs(face, span.bold, span.italic).color(Color::rgb(r, g, b)))
     });
-    buffer.set_rich_text(spans, &base_attrs(font), Shaping::Advanced, None);
+    buffer.set_rich_text(spans, &attrs(face, false, false), Shaping::Advanced, None);
     buffer.shape_until_scroll(font_system, false);
     buffer
 }

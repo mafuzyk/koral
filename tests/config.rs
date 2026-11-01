@@ -173,3 +173,16 @@ fn a_bare_word_ends_at_a_comment_as_in_sharky() {
     assert_eq!(config("polyp font a//why\n").font, "a");
     assert_eq!(set("polyp font a//why\n", "font", "c"), "polyp font c //why\n");
 }
+
+#[test]
+fn weights_parse_and_stay_in_range() {
+    assert_eq!(errors("polyp bold_weight 950\n").len(), 1);
+    assert_eq!(config("polyp bold_weight 700\n").face().bold, 700);
+}
+
+#[test]
+fn italic_style_is_oblique_or_italic() {
+    assert_eq!(errors("polyp italic_style slanted\n").len(), 1);
+    assert!(!config("polyp italic_style italic\n").face().oblique);
+    assert!(config("").face().oblique);
+}

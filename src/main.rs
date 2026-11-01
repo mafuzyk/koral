@@ -8,6 +8,7 @@ use alacritty_terminal::term::TermMode;
 use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use koral::blocks::Activity;
 use koral::config::{self, Config};
+use koral::blink::Blink;
 use koral::frame::{self, Chrome, CursorView, Frame, Layout, TabView};
 use koral::matugen;
 use koral::input::{self, Action, Clicks, Mouse, binding};
@@ -86,6 +87,8 @@ struct App {
     preedit: Option<String>,
     ime_cursor: Option<(f32, f32)>,
     zoom: f32,
+    blink: Blink,
+    blink_shown: bool,
 }
 
 impl App {
@@ -122,6 +125,8 @@ impl App {
             preedit: None,
             ime_cursor: None,
             zoom: 0.0,
+            blink: Blink::new(Instant::now()),
+            blink_shown: true,
         }
     }
 
@@ -291,7 +296,7 @@ impl App {
         let size = input::zoomed(self.config.font_size, zoom);
         self.zoom = size - self.config.font_size;
         if let Some(renderer) = &mut self.renderer {
-            renderer.set_font(&self.config.font, size);
+            renderer.set_font(&self.config.face(), size);
         }
         self.resize_all();
     }
@@ -331,13 +336,13 @@ impl App {
                 return;
             }
         };
-        let font_changed = config.font != self.config.font || config.font_size != self.config.font_size;
+        let font_changed = config.face() != self.config.face() || config.font_size != self.config.font_size;
         self.source = source;
         self.config = config;
         self.theme = matugen::theme(self.config.matugen);
 
         if font_changed && let Some(renderer) = &mut self.renderer {
-            renderer.set_font(&self.config.font, input::zoomed(self.config.font_size, self.zoom));
+            renderer.set_font(&self.config.face(), input::zoomed(self.config.font_size, self.zoom));
         }
         self.resize_all();
 
@@ -667,10 +672,15 @@ impl App {
         }
     }
 
+    fn blinking(&self) -> bool {
+        self.focused && self.active().is_some_and(|tab| tab.scroll == 0 && tab.session.lock().term.cursor_style().blinking)
+    }
+
     fn draw(&mut self) {
         let (Some(layout), Some(bar)) = (self.layout(), self.bar()) else {
             return;
         };
+        self.blink_shown = !self.blinking() || self.blink.visible(Instant::now());
         let Some(tabs) = &self.tabs else {
             return;
         };
@@ -699,7 +709,7 @@ impl App {
                 &session.blocks,
                 &rows,
                 tab.scroll,
-                CursorView { focused: self.focused, visible: true },
+                CursorView { focused: self.focused, visible: self.blink_shown },
                 layout,
                 &self.theme,
             );
@@ -769,8 +779,8 @@ impl ApplicationHandler<UserEvent> for App {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(Box::new(
             event_loop.owned_display_handle(),
         )));
-        let (font, points) = (self.config.font.clone(), self.config.font_size);
-        self.renderer = Some(pollster::block_on(Renderer::new(window.clone(), instance, font, points)));
+        let (face, points) = (self.config.face(), self.config.font_size);
+        self.renderer = Some(pollster::block_on(Renderer::new(window.clone(), instance, &face, points)));
         window.set_ime_allowed(true);
         self.window = Some(window);
         self.open_tab(event_loop);
@@ -791,6 +801,10 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             UserEvent::Copy(text) => self.store(text, LinuxClipboardKind::Clipboard),
+            UserEvent::Blink => {
+                self.blink.reset(Instant::now());
+                self.redraw();
+            }
             UserEvent::Colors => {
                 self.theme = matugen::theme(self.config.matugen);
                 self.redraw();
@@ -825,6 +839,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::ModifiersChanged(modifiers) => self.mods = modifiers.state(),
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
+                self.blink.reset(Instant::now());
                 if self.mode().contains(TermMode::FOCUS_IN_OUT)
                     && let Some(tab) = self.active()
                 {
@@ -833,6 +848,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.redraw();
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                self.blink.reset(Instant::now());
                 let action = binding(&event.logical_key, self.mods);
                 if self.settings.is_some() && action != Some(Action::OpenSettings) {
                     self.settings_key(&event.logical_key, event.text.as_deref());
@@ -892,8 +908,20 @@ impl ApplicationHandler<UserEvent> for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if self.confirming.is_some_and(|(_, at)| at.elapsed() >= CONFIRM_WINDOW) {
             self.confirming = None;
-            event_loop.set_control_flow(ControlFlow::Wait);
             self.redraw();
         }
+        let now = Instant::now();
+        let mut blink = None;
+        if self.blinking() {
+            blink = self.blink.next(now);
+            if self.blink.visible(now) != self.blink_shown {
+                self.redraw();
+            }
+        }
+        let confirm = self.confirming.map(|(_, at)| at + CONFIRM_WINDOW);
+        event_loop.set_control_flow(match blink.into_iter().chain(confirm).min() {
+            Some(deadline) => ControlFlow::WaitUntil(deadline),
+            None => ControlFlow::Wait,
+        });
     }
 }

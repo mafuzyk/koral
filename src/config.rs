@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use sharky_config::tokenize;
 
+use crate::render::Face;
+
 const INSTRUCTION: &str = "polyp";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -12,6 +14,10 @@ pub struct Config {
     pub padding: f32,
     pub shell: Option<String>,
     pub matugen: bool,
+    pub font_weight: u16,
+    pub bold_weight: u16,
+    pub bold_italic_weight: u16,
+    pub oblique: bool,
 }
 
 impl Default for Config {
@@ -23,6 +29,22 @@ impl Default for Config {
             padding: 8.0,
             shell: None,
             matugen: false,
+            font_weight: 500,
+            bold_weight: 800,
+            bold_italic_weight: 900,
+            oblique: true,
+        }
+    }
+}
+
+impl Config {
+    pub fn face(&self) -> Face {
+        Face {
+            family: self.font.clone(),
+            weight: self.font_weight,
+            bold: self.bold_weight,
+            bold_italic: self.bold_italic_weight,
+            oblique: self.oblique,
         }
     }
 }
@@ -86,6 +108,16 @@ fn apply(config: &mut Config, line: &str) -> Result<(), String> {
             config.font = value.clone();
             Ok(())
         }
+        "font_weight" => weight(value).map(|weight| config.font_weight = weight),
+        "bold_weight" => weight(value).map(|weight| config.bold_weight = weight),
+        "bold_italic_weight" => weight(value).map(|weight| config.bold_italic_weight = weight),
+        "italic_style" => match value.as_str() {
+            "oblique" | "italic" => {
+                config.oblique = value == "oblique";
+                Ok(())
+            }
+            _ => Err(format!("'{value}' is not oblique or italic")),
+        },
         "font_size" => number(value, 6.0, 72.0).map(|size| config.font_size = size),
         "opacity" => number(value, 0.1, 1.0).map(|opacity| config.opacity = opacity),
         "padding" => number(value, 0.0, 64.0).map(|padding| config.padding = padding),
@@ -102,6 +134,10 @@ fn apply(config: &mut Config, line: &str) -> Result<(), String> {
         },
         other => Err(format!("unknown setting '{other}'")),
     }
+}
+
+fn weight(value: &str) -> Result<u16, String> {
+    number(value, 100.0, 900.0).map(|weight| weight as u16)
 }
 
 fn number(value: &str, min: f32, max: f32) -> Result<f32, String> {
