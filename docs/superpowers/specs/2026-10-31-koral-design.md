@@ -26,12 +26,13 @@ Success means Koral replaces kitty on `SUPER + Return` for daily use.
 - Colours from `theme.sharky`; no second theme format.
 - Correct behaviour for full-screen apps: nvim, tmux, btop.
 - Images and video through the kitty graphics protocol (see Images).
+- Parity with what daily kitty use relies on (see Terminal parity).
 
 ## Non-goals (v1)
 
 - Internal splits: Hyprland and tmux already cover them.
-- Search and clickable links: first release after v1.
 - Agent sessions, X11, macOS, Windows.
+- Kittens, remote control and unicode image placeholders.
 - Warp-style input cards: sharky's line editor stays in charge of input.
 - Tear-out tabs and tab profiles.
 
@@ -114,11 +115,11 @@ after the prompt text, not on `A`, and sharky's redraw places it again.
   path crate, `sharky-config`, inside the sharky repo; sharky uses it by path and
   Koral by git tag. No copied parser.
 - `wave` keys are free-form, so no shell parser change is needed:
-  `wave terminal.background @abyss`, `wave terminal.ansi1 @danger`,
-  `wave tab.active @sea`. Missing keys fall back to a built-in palette.
-- `$XDG_CONFIG_HOME/koral/config.koral` uses the same statement format: font,
-  size, opacity, shell, padding, `anchor` bindings. Default shell: `sharky`,
-  then `$SHELL`.
+  `wave terminal.background @abyss`, `wave terminal.ansi1 @danger`. Sharky's own
+  colour names come next, then a built-in palette.
+- `$XDG_CONFIG_HOME/koral/config.sharky` uses sharky's config language, with its
+  own file and its own `polyp` statements: font, size, opacity, shell, padding.
+  Default shell: `sharky`, then `$SHELL`.
 - `TERM=xterm-256color` with `TERM_PROGRAM=koral`.
   `shortcut: no koral terminfo entry, add one if an app needs it.`
 
@@ -163,6 +164,17 @@ Details the builder must handle:
 - Images draw over cell backgrounds and under text, the cursor and the chrome.
 - Not supported: cropping, z-index, animation frames and unicode placeholders.
 
+## Terminal parity
+
+What daily kitty use relies on, shipped in steps after v0.1:
+
+- Input: the kitty keyboard protocol, word, line and block selection, input
+  methods and accents, font zoom.
+- Rendering: every underline style and colour, cursor blink, box characters
+  drawn without the font, chosen font weights and italic style.
+- Desktop: program titles, bell marks and window urgency, notifications.
+- Finding: scrollback search and clickable links, with OSC 8.
+
 ## Security
 
 - Any program can print OSC 133, so a crafted file could fake blocks. Marks are
@@ -175,6 +187,9 @@ Details the builder must handle:
 - Images arrive only inside the stream: file, temp-file and shared-memory media
   are refused, so a crafted file cannot make Koral read local paths.
 - Image, store and transfer sizes are capped.
+- Links open only on a deliberate click, with the real target shown first, and
+  only for `http`, `https`, `mailto` and `file`.
+- Titles and notifications from programs are cleaned and limited in size and rate.
 
 ## Milestones
 

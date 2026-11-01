@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Koral
-Comment=Terminal for the sharky shell
+Comment=A Rust terminal with native sharky shell support
 Exec=koral
 Icon=koral
 Terminal=false

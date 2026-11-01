@@ -2,7 +2,7 @@
 name = "koral"
 version = "0.1.0"
 edition = "2024"
-description = "A terminal built around the sharky shell"
+description = "A Rust terminal with native sharky shell support"
 license = "GPL-3.0-only"
 publish = false
 
