@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use glyphon::{FontSystem, fontdb};
 
@@ -56,11 +57,54 @@ fn face_files(db: &fontdb::Database, face: &Face) -> Vec<PathBuf> {
     files
 }
 
+/// Fontconfig's scale for a font weight.
+fn fontconfig_weight(weight: u16) -> &'static str {
+    match weight {
+        100 => "0",
+        200 => "40",
+        300 => "50",
+        500 => "100",
+        600 => "180",
+        700 => "200",
+        800 => "205",
+        900 => "210",
+        _ => "80",
+    }
+}
+
+/// The files for the four styles, from lines of `file|weight|slant`.
+pub fn listed_files(output: &str, face: &Face) -> Vec<PathBuf> {
+    let italic = if face.oblique { "110" } else { "100" };
+    let wanted = [(face.weight, "0"), (face.bold, "0"), (face.weight, italic), (face.bold_italic, italic)]
+        .map(|(weight, slant)| (fontconfig_weight(weight), slant));
+    output
+        .lines()
+        .filter_map(|line| {
+            let (rest, slant) = line.rsplit_once('|')?;
+            let (file, weight) = rest.rsplit_once('|')?;
+            (weight.starts_with('[') || wanted.contains(&(weight, slant))).then(|| PathBuf::from(file))
+        })
+        .collect()
+}
+
 /// Only the files of the chosen font, so a start does not wait on every font on the disk.
 pub fn quick(cache: &Path, face: &Face) -> Option<FontSystem> {
     let text = std::fs::read_to_string(cache).ok()?;
+    load(cached_files(&text, &key(face))?, face)
+}
+
+/// The same files found through fontconfig, whose cache answers with no list of ours.
+pub fn listed(face: &Face) -> Option<FontSystem> {
+    let output = Command::new("fc-list")
+        .args(["--format=%{file}|%{weight}|%{slant}\\n", "--", &face.family])
+        .output()
+        .ok()?;
+    load(listed_files(&String::from_utf8_lossy(&output.stdout), face), face)
+}
+
+fn load(files: Vec<PathBuf>, face: &Face) -> Option<FontSystem> {
     let mut db = fontdb::Database::new();
-    for file in cached_files(&text, &key(face))? {
+    for file in files {
         db.load_font_file(file).ok()?;
     }
     let found = db.faces().any(|info| info.families.iter().any(|(name, _)| *name == face.family));

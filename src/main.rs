@@ -927,7 +927,7 @@ impl ApplicationHandler<UserEvent> for App {
         )));
         let (face, points) = (self.config.face(), self.config.font_size);
         let cache = fonts::cache_path();
-        let quick = cache.as_deref().and_then(|path| fonts::quick(path, &face));
+        let quick = cache.as_deref().and_then(|path| fonts::quick(path, &face)).or_else(|| fonts::listed(&face));
         if quick.is_some() {
             let (proxy, face, cache) = (self.proxy.clone(), face.clone(), cache.clone());
             std::thread::spawn(move || {
