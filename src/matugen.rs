@@ -15,7 +15,7 @@ fn colors_path() -> Option<PathBuf> {
 
 pub fn theme(enabled: bool) -> Theme {
     let colors = colors_path().filter(|_| enabled).and_then(|path| std::fs::read_to_string(path).ok());
-    colors.map_or_else(Theme::default, |colors| Theme::with_colors(&colors))
+    colors.map_or_else(Theme::sharky, |colors| Theme::with_colors(&colors))
 }
 
 /// Matugen's config text with Koral's template in it, or None when it is already there.
@@ -50,8 +50,9 @@ pub fn install() -> Result<(), String> {
     Ok(())
 }
 
-fn modified() -> Option<std::time::SystemTime> {
-    std::fs::metadata(colors_path()?).ok()?.modified().ok()
+fn modified() -> [Option<std::time::SystemTime>; 2] {
+    let time = |path: Option<PathBuf>| std::fs::metadata(path?).ok()?.modified().ok();
+    [time(colors_path()), time(config::home().map(|home| home.join("sharky/theme.sharky")))]
 }
 
 // shortcut: polls once a second, swap for inotify if the wake-ups ever show up in a profile.

@@ -14,6 +14,15 @@ pub fn hex(text: &str) -> Option<Rgb> {
     Some(rgb(u32::from_str_radix(digits, 16).ok()?))
 }
 
+const SHARKY_NAMES: [(&str, &str); 6] = [
+    ("abyss", "background"),
+    ("foam", "foreground"),
+    ("sea", "accent"),
+    ("sea", "cursor"),
+    ("kelp", "success"),
+    ("danger", "failure"),
+];
+
 pub struct Theme {
     pub background: Rgb,
     pub foreground: Rgb,
@@ -25,7 +34,7 @@ pub struct Theme {
     pub ansi: [Rgb; 16],
 }
 
-// The colours of the example `theme.sharky`, until sharky-config can load the real one.
+// The colours of the example `theme.sharky`, for a machine without one.
 impl Default for Theme {
     fn default() -> Self {
         Self {
@@ -67,24 +76,63 @@ impl Theme {
             let (Some(name), Some(color)) = (words.next(), words.next().and_then(hex)) else {
                 continue;
             };
-            let slot = match name {
-                "background" => Some(&mut theme.background),
-                "foreground" => Some(&mut theme.foreground),
-                "cursor" => Some(&mut theme.cursor),
-                "accent" => Some(&mut theme.accent),
-                "success" => Some(&mut theme.success),
-                "failure" => Some(&mut theme.failure),
-                "muted" => Some(&mut theme.muted),
-                _ => name
-                    .strip_prefix("ansi")
-                    .and_then(|index| index.parse::<usize>().ok())
-                    .and_then(|index| theme.ansi.get_mut(index)),
-            };
+            let slot = theme.slot(name);
             if let Some(slot) = slot {
                 *slot = color;
             }
         }
         theme
+    }
+
+    fn slot(&mut self, name: &str) -> Option<&mut Rgb> {
+        match name {
+            "background" => Some(&mut self.background),
+            "foreground" => Some(&mut self.foreground),
+            "cursor" => Some(&mut self.cursor),
+            "accent" => Some(&mut self.accent),
+            "success" => Some(&mut self.success),
+            "failure" => Some(&mut self.failure),
+            "muted" => Some(&mut self.muted),
+            _ => name
+                .strip_prefix("ansi")
+                .and_then(|index| index.parse::<usize>().ok())
+                .and_then(|index| self.ansi.get_mut(index)),
+        }
+    }
+
+    /// Sharky's own colour names first, so a theme that never mentions the terminal still applies.
+    pub fn with_sharky(source: &str, file: &str) -> Result<Self, String> {
+        let config = sharky_config::parse_theme(source, file).map_err(|error| error.to_string())?;
+        let mut theme = Self::default();
+        for (name, slot) in SHARKY_NAMES {
+            if let (Some(color), Some(slot)) = (config.colors.get(name).and_then(|text| hex(text)), theme.slot(slot)) {
+                *slot = color;
+            }
+        }
+        for (key, value) in &config.styles {
+            let color = match value.strip_prefix('@') {
+                Some(name) => config.colors.get(name).map(String::as_str),
+                None => Some(value.as_str()),
+            };
+            let slot = key.strip_prefix("terminal.").and_then(|name| theme.slot(name));
+            if let (Some(color), Some(slot)) = (color.and_then(hex), slot) {
+                *slot = color;
+            }
+        }
+        Ok(theme)
+    }
+
+    /// The user's `theme.sharky`. A bad theme is reported and must not stop the terminal.
+    pub fn sharky() -> Self {
+        let path = crate::config::home().map(|home| home.join("sharky/theme.sharky"));
+        let source = path.as_ref().and_then(|path| std::fs::read_to_string(path).ok());
+        let Some((path, source)) = path.zip(source) else {
+            return Self::default();
+        };
+        Self::with_sharky(&source, &path.display().to_string()).unwrap_or_else(|message| {
+            eprintln!("koral: {message}");
+            Self::default()
+        })
     }
 
     pub fn resolve(&self, color: Color, overrides: &Colors) -> Rgb {

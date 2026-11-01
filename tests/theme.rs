@@ -93,3 +93,40 @@ fn a_damaged_colour_file_keeps_the_built_in_colours() {
     assert_eq!(theme.ansi, built_in.ansi);
     assert_eq!(theme.cursor, built_in.cursor);
 }
+
+#[test]
+fn sharky_names_colour_a_theme_with_no_terminal_keys() {
+    let theme = Theme::with_sharky("coral abyss #010203\ncoral sea #0A0B0C\n", "theme.sharky").unwrap();
+    assert_eq!(theme.background, rgb(1, 2, 3));
+    assert_eq!(theme.accent, rgb(10, 11, 12));
+    assert_eq!(theme.cursor, rgb(10, 11, 12));
+}
+
+#[test]
+fn terminal_keys_beat_sharky_names() {
+    let source = "coral abyss #010203\ncoral ink #0A0B0C\nwave terminal.background @ink\n";
+    assert_eq!(Theme::with_sharky(source, "theme.sharky").unwrap().background, rgb(10, 11, 12));
+}
+
+#[test]
+fn terminal_keys_take_a_literal_colour() {
+    let theme = Theme::with_sharky("wave terminal.ansi1 #112233\n", "theme.sharky").unwrap();
+    assert_eq!(theme.ansi[1], rgb(0x11, 0x22, 0x33));
+}
+
+#[test]
+fn keys_for_the_prompt_leave_the_terminal_alone() {
+    let theme = Theme::with_sharky("coral kelp #010203\nwave prompt.cwd @kelp\n", "theme.sharky").unwrap();
+    assert_eq!(theme.success, rgb(1, 2, 3));
+    assert_eq!(theme.foreground, Theme::default().foreground);
+}
+
+#[test]
+fn an_unknown_reference_is_an_error() {
+    assert!(Theme::with_sharky("wave terminal.cursor @nothing\n", "theme.sharky").is_err());
+}
+
+#[test]
+fn a_damaged_theme_is_an_error() {
+    assert!(Theme::with_sharky("coral abyss nope\n", "theme.sharky").is_err());
+}
