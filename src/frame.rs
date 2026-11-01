@@ -13,6 +13,7 @@ use crate::blocks::{Activity, Block, BlockStore};
 use crate::format;
 use crate::config::Config;
 use crate::graphics::Graphics;
+use crate::links::Link;
 use crate::render::{Cell, Clip, Picture, Pictures, Quad, Shape, Span, TextLine, rgba};
 use crate::settings::{FIELDS, Kind, Panel, Settings, value};
 use crate::tabs::{Bar, CLOSE_ZONE, Rect};
@@ -24,6 +25,7 @@ const TAB_TOP: f32 = 6.0;
 const TAB_RADIUS: f32 = 10.0;
 const GUTTER_CELLS: f32 = 2.0;
 const SEARCH_COLUMNS: f32 = 36.0;
+const PANEL_INSET: f32 = 12.0;
 const STRIP_SHADE: [f32; 4] = [0.0, 0.0, 0.0, 0.32];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -313,11 +315,11 @@ pub fn draw_search(
     }
 }
 
-pub fn draw_search_bar(frame: &mut Frame, query: &str, found: bool, layout: Layout, theme: &Theme) {
+/// A panel in the bottom right corner. Gives its x, width and the y of its text.
+fn bottom_panel(frame: &mut Frame, columns: f32, layout: Layout, theme: &Theme) -> (f32, f32, f32) {
     let scale = layout.scale;
     let cell = layout.cell;
-    let inset = 12.0 * scale;
-    let width = (SEARCH_COLUMNS * cell.width + inset * 2.0).min(layout.width - layout.left() * 2.0);
+    let width = (columns * cell.width + PANEL_INSET * scale * 2.0).min(layout.width - layout.left() * 2.0);
     let height = cell.height + 12.0 * scale;
     let (x, y) = (layout.width - layout.left() - width, layout.height - layout.left() - height);
     frame.clip = Clip { count: frame.lines.len(), x, top: y - cell.height, bottom: y + height };
@@ -329,8 +331,13 @@ pub fn draw_search_bar(frame: &mut Frame, query: &str, found: bool, layout: Layo
         color: rgba(theme.ansi[0], 1.0),
         shape: Shape::Rounded { radius: 10.0 * scale },
     });
+    (x, width, y + (height - cell.height) / 2.0)
+}
 
-    let text_y = y + (height - cell.height) / 2.0;
+pub fn draw_search_bar(frame: &mut Frame, query: &str, found: bool, layout: Layout, theme: &Theme) {
+    let (scale, cell) = (layout.scale, layout.cell);
+    let inset = PANEL_INSET * scale;
+    let (x, width, text_y) = bottom_panel(frame, SEARCH_COLUMNS, layout, theme);
     let status = if found || query.is_empty() { "" } else { "No matches" };
     let room = ((width - inset * 2.0) / cell.width) as usize - status.chars().count().min(10);
     let shown = fit(query, room.saturating_sub(1));
@@ -346,6 +353,31 @@ pub fn draw_search_bar(frame: &mut Frame, query: &str, found: bool, layout: Layo
         let status_x = x + width - inset - status.chars().count() as f32 * cell.width;
         frame.lines.push(TextLine { x: status_x, y: text_y, small: false, spans: vec![Span::plain(status, theme.failure)] });
     }
+}
+
+pub fn draw_link(frame: &mut Frame, rows: &[Row], top: usize, link: &Link, layout: Layout, theme: &Theme) {
+    let (start, end) = (link.range.start(), link.range.end());
+    let cell = layout.cell;
+    let line = layout.scale.max(1.0);
+    for (index, row) in rows.iter().enumerate().skip(top).take(layout.lines()) {
+        if row.line < start.line || row.line > end.line {
+            continue;
+        }
+        let first = if row.line == start.line { start.column.0 } else { 0 };
+        let last = if row.line == end.line { end.column.0 + 1 } else { layout.columns() };
+        let x = layout.grid_x() + first as f32 * cell.width;
+        let y = layout.grid_y() + (index - top + 1) as f32 * cell.height - 2.0 * line;
+        frame.quads.push(Quad::new(x, y, (last - first) as f32 * cell.width, line, rgba(theme.accent, 1.0)));
+    }
+}
+
+/// The real target, since the text on screen can say anything.
+pub fn draw_link_bar(frame: &mut Frame, uri: &str, layout: Layout, theme: &Theme) {
+    let cell = layout.cell;
+    let inset = PANEL_INSET * layout.scale;
+    let (x, width, y) = bottom_panel(frame, uri.chars().count() as f32, layout, theme);
+    let shown = fit(uri, ((width - inset * 2.0) / cell.width) as usize);
+    frame.lines.push(TextLine { x: x + inset, y, small: false, spans: vec![Span::plain(shown, theme.foreground)] });
 }
 
 /// Keeps the image's shape inside the cells it was given.

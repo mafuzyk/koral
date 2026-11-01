@@ -8,6 +8,7 @@ pub mod session;
 pub mod view;
 pub mod input;
 pub mod keyboard;
+pub mod links;
 pub mod tabs;
 pub mod theme;
 pub mod format;

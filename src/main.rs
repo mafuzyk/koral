@@ -11,6 +11,7 @@ use koral::blocks::Activity;
 use koral::config::{self, Config};
 use koral::blink::Blink;
 use koral::frame::{self, Chrome, CursorView, Frame, Layout, TabView};
+use koral::links::{self, Link};
 use koral::matugen;
 use koral::input::{self, Action, Clicks, Mouse, binding};
 use koral::keyboard::{self, KeyPress, Stage};
@@ -29,7 +30,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::platform::wayland::WindowAttributesExtWayland;
-use winit::window::{Window, WindowId, UserAttentionType};
+use winit::window::{CursorIcon, UserAttentionType, Window, WindowId};
 
 const CONFIRM_WINDOW: Duration = Duration::from_secs(3);
 
@@ -95,6 +96,7 @@ struct App {
     window_title: String,
     notices: Limiter,
     search: Option<Search>,
+    link: Option<Link>,
 }
 
 impl App {
@@ -136,6 +138,7 @@ impl App {
             window_title: String::new(),
             notices: Limiter::default(),
             search: None,
+            link: None,
         }
     }
 
@@ -686,7 +689,15 @@ impl App {
             _ => return,
         };
         let mode = self.mode();
-        if mode.intersects(TermMode::MOUSE_MODE) && !self.mods.shift_key() {
+        let app_mouse = mode.intersects(TermMode::MOUSE_MODE) && !self.mods.shift_key();
+        if button == MouseButton::Left && !app_mouse {
+            self.update_link();
+            if let Some(link) = &self.link {
+                links::open(&link.uri);
+                return;
+            }
+        }
+        if app_mouse {
             self.pressed = Some(code);
             self.report_mouse(code, true);
             return;
@@ -731,6 +742,20 @@ impl App {
         self.drag = Drag::None;
     }
 
+    fn update_link(&mut self) {
+        let in_grid = self.drag == Drag::None
+            && self.layout().is_some_and(|layout| self.cursor.1 >= layout.strip() && !layout.in_gutter(self.cursor.0));
+        let point = self.point_under_cursor().filter(|_| self.mods.control_key() && in_grid);
+        let link = point.and_then(|(point, _)| links::at(&self.active()?.session.lock().term, point));
+        if link != self.link {
+            if let Some(window) = &self.window {
+                window.set_cursor(if link.is_some() { CursorIcon::Pointer } else { CursorIcon::Default });
+            }
+            self.link = link;
+            self.redraw();
+        }
+    }
+
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.cursor = (position.x as f32, position.y as f32);
         match self.drag {
@@ -756,6 +781,7 @@ impl App {
         if self.layout().is_some_and(|layout| self.cursor.1 < layout.strip()) || self.drag != Drag::None {
             self.redraw();
         }
+        self.update_link();
     }
 
     fn resize_all(&mut self) {
@@ -822,6 +848,9 @@ impl App {
                 let matches = search.visible(&session.term, first.line, last.line);
                 frame::draw_search(&mut frame, &rows, top, &matches, search.current.as_ref(), layout, &self.theme);
             }
+            if let Some(link) = &self.link {
+                frame::draw_link(&mut frame, &rows, top, link, layout, &self.theme);
+            }
         }
         if let (Some(text), Some((x, y))) = (&self.preedit, cursor) {
             frame::draw_preedit(&mut frame, text, x, y, layout, &self.theme);
@@ -844,6 +873,8 @@ impl App {
         frame::draw_chrome(&mut frame, &chrome, layout, &self.theme);
         if let Some(search) = &self.search {
             frame::draw_search_bar(&mut frame, &search.query, search.current.is_some(), layout, &self.theme);
+        } else if let Some(link) = &self.link {
+            frame::draw_link_bar(&mut frame, &link.uri, layout, &self.theme);
         }
         if let Some(settings) = &self.settings {
             frame::draw_settings(
@@ -962,7 +993,10 @@ impl ApplicationHandler<UserEvent> for App {
                 self.redraw();
             }
             WindowEvent::RedrawRequested => self.draw(),
-            WindowEvent::ModifiersChanged(modifiers) => self.mods = modifiers.state(),
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.mods = modifiers.state();
+                self.update_link();
+            }
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
                 self.blink.reset(Instant::now());
