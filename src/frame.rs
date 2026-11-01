@@ -299,7 +299,7 @@ pub fn draw_search(
             let first = if row.line == start.line { start.column.0 } else { 0 };
             let last = if row.line == end.line { end.column.0 + 1 } else { layout.columns() };
             let (x, y) = (layout.grid_x() + first as f32 * cell.width, layout.grid_y() + (index - top) as f32 * cell.height);
-            let width = (last - first) as f32 * cell.width;
+            let width = last.saturating_sub(first) as f32 * cell.width;
             let focused = current == Some(found);
             let alpha = if focused { 0.6 } else { 0.25 };
             frame.quads.push(Quad::new(x, y, width, cell.height, rgba(theme.accent, alpha)));
@@ -339,7 +339,7 @@ pub fn draw_search_bar(frame: &mut Frame, query: &str, found: bool, layout: Layo
     let inset = PANEL_INSET * scale;
     let (x, width, text_y) = bottom_panel(frame, SEARCH_COLUMNS, layout, theme);
     let status = if found || query.is_empty() { "" } else { "No matches" };
-    let room = ((width - inset * 2.0) / cell.width) as usize - status.chars().count().min(10);
+    let room = (((width - inset * 2.0) / cell.width) as usize).saturating_sub(status.chars().count());
     let shown = fit(query, room.saturating_sub(1));
     let caret = x + inset + shown.chars().count() as f32 * cell.width;
     frame.quads.push(Quad::new(caret, text_y, (2.0 * scale).round(), cell.height, rgba(theme.cursor, 0.9)));
@@ -367,7 +367,7 @@ pub fn draw_link(frame: &mut Frame, rows: &[Row], top: usize, link: &Link, layou
         let last = if row.line == end.line { end.column.0 + 1 } else { layout.columns() };
         let x = layout.grid_x() + first as f32 * cell.width;
         let y = layout.grid_y() + (index - top + 1) as f32 * cell.height - 2.0 * line;
-        frame.quads.push(Quad::new(x, y, (last - first) as f32 * cell.width, line, rgba(theme.accent, 1.0)));
+        frame.quads.push(Quad::new(x, y, last.saturating_sub(first) as f32 * cell.width, line, rgba(theme.accent, 1.0)));
     }
 }
 

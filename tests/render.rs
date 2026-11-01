@@ -151,3 +151,11 @@ fn a_rung_tab_shows_a_mark() {
     assert!(shown(true));
     assert!(!shown(false));
 }
+
+#[test]
+fn a_narrow_window_still_draws_the_search_bar() {
+    let narrow = koral::frame::Layout { width: 60.0, ..layout() };
+    let mut frame = Frame::default();
+    koral::frame::draw_search_bar(&mut frame, "needle", false, narrow, &Theme::default());
+    assert!(!frame.quads.is_empty());
+}

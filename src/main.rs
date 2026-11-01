@@ -743,9 +743,10 @@ impl App {
     }
 
     fn update_link(&mut self) {
-        let in_grid = self.drag == Drag::None
+        let held = self.mods.control_key()
+            && self.drag == Drag::None
             && self.layout().is_some_and(|layout| self.cursor.1 >= layout.strip() && !layout.in_gutter(self.cursor.0));
-        let point = self.point_under_cursor().filter(|_| self.mods.control_key() && in_grid);
+        let point = if held { self.point_under_cursor() } else { None };
         let link = point.and_then(|(point, _)| links::at(&self.active()?.session.lock().term, point));
         if link != self.link {
             if let Some(window) = &self.window {
