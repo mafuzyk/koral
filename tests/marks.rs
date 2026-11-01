@@ -16,6 +16,7 @@ fn scan(chunks: &[&[u8]]) -> Vec<Out> {
                 _ => out.push(Out::Bytes(bytes.to_vec())),
             },
             Piece::Mark(mark) => out.push(Out::Mark(mark)),
+            Piece::Graphics(_) => {}
         });
     }
     out
@@ -140,4 +141,48 @@ fn an_unterminated_mark_is_released_at_the_size_limit() {
 fn an_escape_inside_a_mark_abandons_it_and_keeps_every_byte() {
     let input = b"\x1b]133;D\x1b[0m";
     assert_eq!(scan(&[input]), vec![bytes(input)]);
+}
+
+#[test]
+fn a_graphics_command_leaves_the_stream_whole() {
+    let mut scanner = Scanner::default();
+    let mut seen = Vec::new();
+    scanner.feed(b"a\x1b_Ga=t;QUJD\x1b\\b", &mut |piece| match piece {
+        Piece::Bytes(bytes) => seen.push(format!("bytes {}", String::from_utf8_lossy(bytes))),
+        Piece::Graphics(body) => seen.push(format!("graphics {}", String::from_utf8_lossy(body))),
+        Piece::Mark(_) => {}
+    });
+    assert_eq!(seen, ["bytes a", "graphics Ga=t;QUJD", "bytes b"]);
+}
+
+#[test]
+fn a_graphics_command_split_across_reads_is_still_found() {
+    let mut scanner = Scanner::default();
+    let mut found = 0;
+    let mut sink = |piece: Piece<'_>| found += i32::from(matches!(piece, Piece::Graphics(_)));
+    for part in [&b"\x1b"[..], b"_", b"Ga=t;", b"QUJD\x1b", b"\\"] {
+        scanner.feed(part, &mut sink);
+    }
+    assert_eq!(found, 1);
+}
+
+#[test]
+fn an_endless_graphics_command_is_let_go() {
+    let mut scanner = Scanner::default();
+    let mut found = false;
+    let endless = [b"\x1b_Ga=t;".to_vec(), vec![b'A'; 4 * 1024 * 1024]].concat();
+    scanner.feed(&endless, &mut |piece| found |= matches!(piece, Piece::Bytes(bytes) if bytes.len() > 1024));
+    assert!(found);
+}
+
+#[test]
+fn other_application_commands_pass_through() {
+    let mut scanner = Scanner::default();
+    let mut text = Vec::new();
+    scanner.feed(b"\x1b_Xhello\x1b\\", &mut |piece| {
+        if let Piece::Bytes(bytes) = piece {
+            text.extend_from_slice(bytes);
+        }
+    });
+    assert_eq!(text, b"\x1b_Xhello\x1b\\");
 }

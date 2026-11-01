@@ -7,6 +7,7 @@ pub mod input;
 pub mod tabs;
 pub mod theme;
 pub mod format;
+pub mod graphics;
 pub mod frame;
 pub mod pty;
 pub mod render;

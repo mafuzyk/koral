@@ -1,8 +1,11 @@
 const ESC: u8 = 0x1b;
 const BEL: u8 = 0x07;
-const PREFIXES: [&[u8]; 2] = [b"\x1b]133;", b"\x1b]7;"];
+const GRAPHICS: &[u8] = b"\x1b_G";
+const PREFIXES: [&[u8]; 3] = [b"\x1b]133;", b"\x1b]7;", GRAPHICS];
 // The stream is untrusted: an unterminated mark must not grow without bound.
 const MAX_MARK: usize = 64 * 1024;
+// Programs send images in 4096-byte chunks, this leaves room for the ones that do not.
+const MAX_GRAPHICS: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mark {
@@ -17,15 +20,17 @@ pub enum Mark {
 pub enum Piece<'a> {
     Bytes(&'a [u8]),
     Mark(Mark),
+    Graphics(&'a [u8]),
 }
 
 enum Step {
     Keep,
     Release,
     Found(Mark),
+    Graphics,
 }
 
-/// Takes OSC 133 and OSC 7 marks out of a PTY stream; vte would drop them.
+/// Takes OSC 133, OSC 7 and image commands out of a PTY stream; vte would drop them.
 // shortcut: marks inside DCS or tmux passthrough also match, harmless for now.
 #[derive(Default)]
 pub struct Scanner {
@@ -62,6 +67,11 @@ impl Scanner {
                     sink(Piece::Mark(mark));
                     self.pending.clear();
                 }
+                Step::Graphics => {
+                    let end = self.pending.len() - 2;
+                    sink(Piece::Graphics(&self.pending[2..end]));
+                    self.pending.clear();
+                }
             }
         }
     }
@@ -78,6 +88,13 @@ impl Scanner {
 
         let byte = seen[seen.len() - 1];
         let after_escape = seen[seen.len() - 2] == ESC;
+        if seen.starts_with(GRAPHICS) {
+            return match byte {
+                b'\\' if after_escape => Step::Graphics,
+                _ if after_escape || seen.len() >= MAX_GRAPHICS => Step::Release,
+                _ => Step::Keep,
+            };
+        }
         let body = match byte {
             BEL => &seen[2..seen.len() - 1],
             b'\\' if after_escape => &seen[2..seen.len() - 2],

@@ -25,11 +25,11 @@ Success means Koral replaces kitty on `SUPER + Return` for daily use.
 - Per-command status, duration, jump between prompts, copy one command's output.
 - Colours from `theme.sharky`; no second theme format.
 - Correct behaviour for full-screen apps: nvim, tmux, btop.
+- Images and video through the kitty graphics protocol (see Images).
 
 ## Non-goals (v1)
 
 - Internal splits: Hyprland and tmux already cover them.
-- Images (kitty graphics protocol).
 - Search and clickable links: first release after v1.
 - Agent sessions, X11, macOS, Windows.
 - Warp-style input cards: sharky's line editor stays in charge of input.
@@ -151,6 +151,18 @@ Details the builder must handle:
   repeated marks as no-ops.
 - `tests/interactive.rs` may assert exact output and need updating.
 
+## Images
+
+- `src/graphics.rs` parses kitty graphics commands (`a=t,T,p,q,d`; formats 24, 32
+  and 100; `o=z`; chunks) and keeps the images. The marks scanner takes the APCs
+  out of the stream, since `vte` ignores them.
+- A placement rides on its top-left cell as a zero-width anchor in plane 16,
+  above the block ids, so it scrolls, folds and clears with the text. A second
+  anchor on the last row makes a clear take the image's whole height.
+- Frames with no id on the same cell replace each other: mpv sends video this way.
+- Images draw over cell backgrounds and under text, the cursor and the chrome.
+- Not supported: cropping, z-index, animation frames and unicode placeholders.
+
 ## Security
 
 - Any program can print OSC 133, so a crafted file could fake blocks. Marks are
@@ -160,6 +172,9 @@ Details the builder must handle:
 - Strip ESC and `\x1b[201~` from pasted text in bracketed paste mode.
 - `cmdline_url` is display-only data, never executed.
 - OSC 52 clipboard reads are disabled.
+- Images arrive only inside the stream: file, temp-file and shared-memory media
+  are refused, so a crafted file cannot make Koral read local paths.
+- Image, store and transfer sizes are capped.
 
 ## Milestones
 
@@ -205,8 +220,8 @@ change. Follow sharky's memory-capped cargo commands from `rust/PORTING.md`.
 
 ## Assumptions to check
 
-- Tabs yes, splits and images no: Claude's call after the feature question went
-  unanswered. Tabs later confirmed by the user.
+- Tabs yes, splits no: Claude's call after the feature question went unanswered.
+  Tabs later confirmed by the user. Images were requested later and are in.
 - Separate repository, `sharky-config` extraction, and the `wave terminal.*` keys:
   Claude's calls.
 - Multi-line paste into sharky has no bracketed paste yet, so pasted lines run one

@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -9,6 +9,8 @@ use glyphon::{
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
 };
 use winit::window::Window;
+
+use crate::graphics::Image;
 
 const LINE_HEIGHT: f32 = 1.2;
 const SMALL: f32 = 0.82;
@@ -74,6 +76,15 @@ fn fs_main(in: Varying) -> @location(0) vec4<f32> {
     }
     let alpha = in.color.a * coverage;
     return vec4<f32>(in.color.rgb * alpha, alpha);
+}
+
+@group(1) @binding(0) var picture: texture_2d<f32>;
+@group(1) @binding(1) var picture_sampler: sampler;
+
+@fragment
+fn fs_picture(in: Varying) -> @location(0) vec4<f32> {
+    let color = textureSample(picture, picture_sampler, (in.pixel - in.rect.xy) / in.rect.zw);
+    return vec4<f32>(color.rgb * color.a, color.a);
 }
 "#;
 
@@ -155,6 +166,23 @@ pub struct Clip {
     pub bottom: f32,
 }
 
+#[derive(Clone)]
+pub struct Picture {
+    pub image: Arc<Image>,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// Images go over the first `over` quads and under everything else.
+#[derive(Clone, Default)]
+pub struct Pictures {
+    pub list: Vec<Picture>,
+    pub over: usize,
+    pub area: [f32; 4],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Cell {
     pub width: f32,
@@ -168,6 +196,10 @@ pub struct Renderer {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
+    picture_pipeline: wgpu::RenderPipeline,
+    picture_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    textures: HashMap<u64, wgpu::BindGroup>,
     globals: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     quads: wgpu::Buffer,
@@ -246,46 +278,34 @@ impl Renderer {
             layout: &layout,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() }],
         });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let picture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("quads"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: 48,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x4,
-                        1 => Float32x4,
-                        2 => Float32x4,
-                    ],
-                })],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
+        let pipeline = pipeline(&device, &shader, format, &[Some(&layout)], "fs_main");
+        let picture_pipeline =
+            self::pipeline(&device, &shader, format, &[Some(&layout), Some(&picture_layout)], "fs_picture");
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
         });
         let quads = quad_buffer(&device, 1024);
 
@@ -303,6 +323,10 @@ impl Renderer {
             surface,
             config,
             pipeline,
+            picture_pipeline,
+            picture_layout,
+            sampler,
+            textures: HashMap::new(),
             globals,
             bind_group,
             quads,
@@ -346,7 +370,38 @@ impl Renderer {
         self.lines.clear();
     }
 
-    pub fn draw(&mut self, quads: &[Quad], lines: &[TextLine], clip: Clip, clear: [f32; 4]) {
+    fn upload(&mut self, image: &Image) {
+        let size = wgpu::Extent3d { width: image.width, height: image.height, depth_or_array_layers: 1 };
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("picture"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // Not an sRGB format: the surface takes plain values, see `surface_format`.
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            texture.as_image_copy(),
+            &image.rgba,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(image.width * 4), rows_per_image: None },
+            size,
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.picture_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+            ],
+        });
+        self.textures.insert(image.generation, bind_group);
+    }
+
+    pub fn draw(&mut self, quads: &[Quad], pictures: &Pictures, lines: &[TextLine], clip: Clip, clear: [f32; 4]) {
         let keys: Vec<u64> = lines.iter().map(line_key).collect();
         if self.lines.len() + keys.len() > MAX_CACHED_LINES {
             self.lines.clear();
@@ -418,10 +473,28 @@ impl Renderer {
             .collect();
         self.queue.write_buffer(&self.globals, 0, &globals);
 
-        let instances: Vec<u8> =
-            quads.iter().flat_map(Quad::floats).flat_map(|value| value.to_ne_bytes()).collect();
+        // shortcut: an image over the texture limit is not drawn, scale it down if one shows up.
+        let limit = self.device.limits().max_texture_dimension_2d;
+        let drawn: Vec<&Picture> =
+            pictures.list.iter().filter(|picture| picture.image.width.max(picture.image.height) <= limit).collect();
+        let used: HashSet<u64> = drawn.iter().map(|picture| picture.image.generation).collect();
+        self.textures.retain(|generation, _| used.contains(generation));
+        for picture in &drawn {
+            if !self.textures.contains_key(&picture.image.generation) {
+                self.upload(&picture.image);
+            }
+        }
+
+        let boxes = drawn.iter().map(|p| Quad::new(p.x, p.y, p.width, p.height, [0.0; 4]));
+        let instances: Vec<u8> = quads
+            .iter()
+            .copied()
+            .chain(boxes)
+            .flat_map(|quad| quad.floats())
+            .flat_map(|value| value.to_ne_bytes())
+            .collect();
         if instances.len() as u64 > self.quads.size() {
-            self.quads = quad_buffer(&self.device, quads.len() * 2);
+            self.quads = quad_buffer(&self.device, (quads.len() + drawn.len()) * 2);
         }
         self.queue.write_buffer(&self.quads, 0, &instances);
 
@@ -449,7 +522,23 @@ impl Renderer {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_vertex_buffer(0, self.quads.slice(..));
-            pass.draw(0..4, 0..quads.len() as u32);
+            let (count, over) = (quads.len() as u32, pictures.over as u32);
+            pass.draw(0..4, 0..over);
+            if !drawn.is_empty() {
+                let [x, y, area_width, area_height] = pictures.area;
+                let (left, top) = ((x as u32).min(width), (y as u32).min(height));
+                let right = ((x + area_width) as u32).min(width);
+                let bottom = ((y + area_height) as u32).min(height);
+                pass.set_scissor_rect(left, top, right - left, bottom - top);
+                pass.set_pipeline(&self.picture_pipeline);
+                for (index, picture) in drawn.iter().enumerate() {
+                    pass.set_bind_group(1, &self.textures[&picture.image.generation], &[]);
+                    pass.draw(0..4, count + index as u32..count + index as u32 + 1);
+                }
+                pass.set_scissor_rect(0, 0, width, height);
+                pass.set_pipeline(&self.pipeline);
+            }
+            pass.draw(0..4, over..count);
             self.text.render(&self.atlas, &self.viewport, &mut pass).expect("render text");
         }
         self.queue.submit(Some(encoder.finish()));
@@ -457,6 +546,56 @@ impl Renderer {
         self.queue.present(frame);
         self.atlas.trim();
     }
+}
+
+fn pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    groups: &[Option<&wgpu::BindGroupLayout>],
+    fragment: &str,
+) -> wgpu::RenderPipeline {
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: groups,
+        immediate_size: 0,
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(fragment),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: 48,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &wgpu::vertex_attr_array![
+                    0 => Float32x4,
+                    1 => Float32x4,
+                    2 => Float32x4,
+                ],
+            })],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(fragment),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 fn quad_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {

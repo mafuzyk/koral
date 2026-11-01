@@ -10,11 +10,12 @@ use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 use crate::blocks::{Activity, Block, BlockStore};
 use crate::format;
 use crate::config::Config;
-use crate::render::{Cell, Clip, Quad, Shape, Span, TextLine, rgba};
+use crate::graphics::Graphics;
+use crate::render::{Cell, Clip, Picture, Pictures, Quad, Shape, Span, TextLine, rgba};
 use crate::settings::{FIELDS, Kind, Panel, Settings, value};
 use crate::tabs::{Bar, CLOSE_ZONE, Rect};
 use crate::theme::Theme;
-use crate::view::{Row, pinned, without_anchors};
+use crate::view::{Row, pinned, placed, without_anchors};
 
 const STRIP_HEIGHT: f32 = 38.0;
 const TAB_TOP: f32 = 6.0;
@@ -76,6 +77,7 @@ impl Layout {
 pub struct Frame {
     pub quads: Vec<Quad>,
     pub lines: Vec<TextLine>,
+    pub pictures: Pictures,
     pub clip: Clip,
 }
 
@@ -188,6 +190,8 @@ pub fn draw_terminal<L: EventListener>(
         }
     }
 
+    frame.pictures.over = frame.quads.len();
+
     if scroll == 0 && term.mode().contains(TermMode::SHOW_CURSOR) {
         let cursor = grid.cursor.point;
         let position = rows[top..].iter().take(layout.lines()).position(|row| row.line == cursor.line);
@@ -199,6 +203,36 @@ pub fn draw_terminal<L: EventListener>(
     if let Some(block) = pinned(rows, top, blocks).and_then(|id| blocks.get(id)) {
         draw_pinned(frame, block, layout, theme);
     }
+}
+
+/// Keeps the image's shape inside the cells it was given.
+// shortcut: c and r that ask for a stretch are ignored, honour them if a program needs it.
+pub fn fit_picture(image: (u32, u32), area: (f32, f32)) -> (f32, f32) {
+    let (width, height) = (image.0 as f32, image.1 as f32);
+    let scale = (area.0 / width).min(area.1 / height);
+    (width * scale, height * scale)
+}
+
+pub fn draw_pictures<L: EventListener>(
+    frame: &mut Frame,
+    term: &Term<L>,
+    graphics: &Graphics,
+    rows: &[Row],
+    scroll: usize,
+    layout: Layout,
+) {
+    let cell = layout.cell;
+    let top = visible_top(rows, layout.lines(), scroll);
+    for found in placed(term, graphics, rows, top, layout.lines()) {
+        let Some(image) = graphics.image(found.image) else { continue };
+        let area = (found.columns as f32 * cell.width, found.rows as f32 * cell.height);
+        let (width, height) = fit_picture((image.width, image.height), area);
+        let x = layout.grid_x() + found.column as f32 * cell.width;
+        let y = layout.grid_y() + found.row as f32 * cell.height;
+        frame.pictures.list.push(Picture { image: image.clone(), x, y, width, height });
+    }
+    let area = (layout.columns() as f32 * cell.width, layout.lines() as f32 * cell.height);
+    frame.pictures.area = [layout.grid_x(), layout.grid_y(), area.0, area.1];
 }
 
 fn draw_block_marks(

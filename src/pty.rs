@@ -91,7 +91,9 @@ impl Terminal {
         let config = Config { scrolling_history: SCROLLBACK, ..Config::default() };
         let listener = Listener { tab: id, proxy: proxy.clone() };
         let term = Term::new(config, &geometry.term_size(), listener);
-        let session = Arc::new(FairMutex::new(Session::new(term)));
+        let mut session = Session::new(term);
+        session.graphics.set_cell(geometry.cell_width.into(), geometry.cell_height.into());
+        let session = Arc::new(FairMutex::new(session));
 
         // shortcut: no koral terminfo entry, add one if an app needs it.
         let env = HashMap::from([
@@ -127,7 +129,10 @@ impl Terminal {
     }
 
     pub fn resize(&mut self, geometry: Geometry) {
-        self.session.lock().term.resize(geometry.term_size());
+        let mut session = self.session.lock();
+        session.term.resize(geometry.term_size());
+        session.graphics.set_cell(geometry.cell_width.into(), geometry.cell_height.into());
+        drop(session);
         self.pty.on_resize(geometry.window_size());
     }
 }
@@ -202,7 +207,12 @@ fn read_loop(
                     return;
                 }
                 Ok(count) => {
-                    session.lock().feed(&buffer[..count], Instant::now());
+                    let mut session = session.lock();
+                    session.feed(&buffer[..count], Instant::now());
+                    for reply in session.replies.drain(..) {
+                        let _ = proxy.send_event(UserEvent::Reply(id, reply));
+                    }
+                    drop(session);
                     if pacer.read(Instant::now()) {
                         let _ = proxy.send_event(UserEvent::Redraw);
                     }

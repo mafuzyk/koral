@@ -646,6 +646,7 @@ impl App {
                 layout,
                 &self.theme,
             );
+            frame::draw_pictures(&mut frame, &session.term, &session.graphics, &rows, tab.scroll, layout);
         }
 
         let hit = hit_at(&bar, self.cursor);
@@ -678,7 +679,7 @@ impl App {
             window.set_title(&view.title);
         }
         if let Some(renderer) = &mut self.renderer {
-            renderer.draw(&frame.quads, &frame.lines, frame.clip, rgba(self.theme.background, self.config.opacity));
+            renderer.draw(&frame.quads, &frame.pictures, &frame.lines, frame.clip, rgba(self.theme.background, self.config.opacity));
         }
     }
 }

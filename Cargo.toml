@@ -9,7 +9,10 @@ publish = false
 [dependencies]
 alacritty_terminal = "0.26.0"
 arboard = { version = "3.7.0", default-features = false, features = ["wayland-data-control"] }
+base64 = "0.22"
+flate2 = "1.1.10"
 glyphon = "0.12"
+png = "0.18.1"
 polling = "3.11.0"
 pollster = "1.0.1"
 wgpu = "30"

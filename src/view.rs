@@ -7,8 +7,13 @@ use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::{Cell, Flags};
 
 use crate::blocks::{Activity, BlockStore};
+use crate::graphics::{Graphics, Placement};
 
 const ANCHOR_BASE: u32 = 0x10_0000;
+// Plane 16 stays free of real text: Nerd Font icons live in plane 15.
+const PICTURE_BASE: u32 = ANCHOR_BASE + 0x8000;
+// A cell the grid must count as used, so a clear takes an image's whole height.
+const PICTURE_FOOT: u32 = 0x7FFF;
 
 /// A visible row. `hidden` counts the folded lines that belong under it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,6 +21,57 @@ pub struct Row {
     pub line: Line,
     pub block: Option<u32>,
     pub hidden: usize,
+}
+
+/// An image on screen. `row` counts from the top of the view and can be
+/// negative for one that started above it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Placed {
+    pub image: u32,
+    pub row: isize,
+    pub column: usize,
+    pub columns: u32,
+    pub rows: u32,
+}
+
+pub fn picture_char(anchor: u32) -> char {
+    char::from_u32(PICTURE_BASE + anchor).expect("picture anchors stay inside plane 16")
+}
+
+pub fn picture_anchor(ch: char) -> Option<u32> {
+    (ch as u32).checked_sub(PICTURE_BASE).filter(|anchor| *anchor != PICTURE_FOOT)
+}
+
+pub fn picture_foot() -> char {
+    picture_char(PICTURE_FOOT)
+}
+
+pub fn placed<L: EventListener>(
+    term: &Term<L>,
+    graphics: &Graphics,
+    rows: &[Row],
+    top: usize,
+    lines: usize,
+) -> Vec<Placed> {
+    let tallest = graphics.tallest();
+    if tallest == 0 {
+        return Vec::new();
+    }
+    let grid = term.grid();
+    let mut found = Vec::new();
+    for (index, row) in rows.iter().enumerate().take(top + lines).skip(top.saturating_sub(tallest)) {
+        for column in 0..grid.columns() {
+            let anchors = grid[row.line][Column(column)].zerowidth().unwrap_or(&[]);
+            for placement in anchors.iter().filter_map(|ch| graphics.placement(picture_anchor(*ch)?)) {
+                let row = index as isize - top as isize;
+                if row + placement.rows as isize > 0 {
+                    let Placement { image, columns, rows, .. } = *placement;
+                    found.push(Placed { image, row, column, columns, rows });
+                }
+            }
+        }
+    }
+    found
 }
 
 pub fn anchor_char(id: u32) -> char {

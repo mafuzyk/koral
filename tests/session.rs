@@ -6,7 +6,7 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term};
 use koral::session::Session;
-use koral::view::{Row, output_text, pinned, rows};
+use koral::view::{Placed, Row, output_text, pinned, placed, rows};
 
 const PROMPT: &str = "\x1b]133;A\x1b\\$ \x1b]133;B\x1b\\";
 const TALL_PROMPT: &str = "\x1b]133;A\x1b\\\r\ninfo\r\n$ \x1b]133;B\x1b\\";
@@ -43,6 +43,18 @@ impl Fixture {
             self.feed(&format!("{line}\r\n"));
         }
         self.feed("\x1b]133;D;0\x1b\\");
+    }
+
+    /// A 1x1 image shown over `columns` by `rows` cells.
+    fn show(&mut self, keys: &str) {
+        self.feed(&format!("\x1b_Ga=T,f=24,s=1,v=1,q=2,{keys};AAAA\x1b\\"));
+    }
+
+    fn pictures(&self) -> Vec<Placed> {
+        let rows = self.rows();
+        let lines = self.session.term.screen_lines();
+        let top = rows.len().saturating_sub(lines);
+        placed(&self.session.term, &self.session.graphics, &rows, top, lines)
     }
 
     fn start(&mut self, name: &str) {
@@ -334,4 +346,165 @@ mod navigation {
         assert_eq!(fold_target(&sample(), sample().len(), &blocks), Some(1));
         assert_eq!(fold_target(&sample(), 2, &blocks), Some(0));
     }
+}
+
+#[test]
+fn an_image_command_never_reaches_the_screen() {
+    let mut f = Fixture::new(20, 5);
+    f.show("i=1,c=2,r=2");
+    assert_eq!(f.visible(), Vec::<String>::new());
+}
+
+#[test]
+fn an_image_sits_on_the_cursor_cell() {
+    let mut f = Fixture::new(20, 10);
+    f.feed("ab\r\ncd");
+    f.show("i=1,c=3,r=2");
+    let picture = f.pictures()[0];
+    assert_eq!((picture.row, picture.column, picture.columns, picture.rows), (1, 2, 3, 2));
+}
+
+#[test]
+fn an_image_moves_the_cursor_past_itself() {
+    let mut f = Fixture::new(20, 10);
+    f.show("i=1,c=3,r=4");
+    let cursor = f.session.term.grid().cursor.point;
+    assert_eq!((cursor.line, cursor.column), (Line(3), Column(3)));
+}
+
+#[test]
+fn the_cursor_key_leaves_the_cursor_alone() {
+    let mut f = Fixture::new(20, 10);
+    f.show("i=1,c=3,r=4,C=1");
+    let cursor = f.session.term.grid().cursor.point;
+    assert_eq!((cursor.line, cursor.column), (Line(0), Column(0)));
+}
+
+#[test]
+fn an_image_scrolls_with_the_text() {
+    let mut f = Fixture::new(20, 5);
+    f.show("i=1,c=2,r=2");
+    f.feed("\r\na\r\nb\r\nc\r\nd");
+    assert_eq!(f.pictures()[0].row, -1);
+}
+
+#[test]
+fn an_image_scrolled_past_its_height_is_not_listed() {
+    let mut f = Fixture::new(20, 5);
+    f.show("i=1,c=2,r=2");
+    f.feed("\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n");
+    assert!(f.pictures().is_empty());
+}
+
+#[test]
+fn a_folded_command_hides_its_image() {
+    let mut f = Fixture::new(20, 12);
+    f.start("one");
+    f.show("i=1,c=2,r=2");
+    f.feed("\r\n\x1b]133;D;0\x1b\\");
+    f.command("two", &["c"], 0);
+    assert_eq!(f.pictures().len(), 1);
+    f.fold_latest_finished();
+    assert!(f.pictures().is_empty());
+}
+
+#[test]
+fn clearing_the_screen_removes_the_image() {
+    let mut f = Fixture::new(20, 5);
+    f.show("i=1,c=2,r=2");
+    f.feed("\x1b[H\x1b[2J");
+    assert!(f.pictures().is_empty());
+}
+
+#[test]
+fn deleting_placements_removes_the_image_from_view() {
+    let mut f = Fixture::new(20, 5);
+    f.show("i=1,c=2,r=2");
+    f.feed("\x1b_Ga=d,d=a\x1b\\");
+    assert!(f.pictures().is_empty());
+}
+
+#[test]
+fn a_video_repainting_one_cell_keeps_one_anchor() {
+    let mut f = Fixture::new(20, 5);
+    for _ in 0..100 {
+        f.feed("\x1b[H");
+        f.show("i=1,c=2,r=2,C=1");
+    }
+    let cell = &f.session.term.grid()[Line(0)][Column(0)];
+    assert_eq!(cell.zerowidth().map_or(0, <[char]>::len), 1);
+    assert_eq!(f.pictures().len(), 1);
+}
+
+#[test]
+fn replies_wait_for_the_terminal_to_send_them() {
+    let mut f = Fixture::new(20, 5);
+    f.feed("\x1b_Ga=q,f=24,s=1,v=1,i=31;AAAA\x1b\\");
+    assert_eq!(f.session.replies, vec!["\x1b_Gi=31;OK\x1b\\"]);
+}
+
+#[test]
+fn images_also_work_on_the_alternate_screen() {
+    let mut f = Fixture::new(20, 5);
+    f.feed("\x1b[?1049h");
+    f.show("i=1,c=2,r=2,C=1");
+    assert_eq!(f.pictures().len(), 1);
+}
+
+#[test]
+fn text_with_an_image_anchor_is_copied_clean() {
+    let mut f = Fixture::new(20, 5);
+    f.show("i=1,c=2,r=2,C=1");
+    f.feed("hi");
+    let line = f.text(Line(0));
+    assert_eq!(line, "hi");
+}
+
+#[test]
+fn a_one_row_video_keeps_one_anchor() {
+    let mut f = Fixture::new(20, 5);
+    for _ in 0..3 {
+        f.feed("\x1b[H");
+        f.show("i=1,c=2,r=1,C=1");
+    }
+    let cell = &f.session.term.grid()[Line(0)][Column(0)];
+    assert_eq!(cell.zerowidth().map_or(0, <[char]>::len), 1);
+}
+
+#[test]
+fn an_image_over_the_foot_of_another_keeps_its_own_anchor() {
+    let mut f = Fixture::new(20, 10);
+    f.show("i=1,c=2,r=3,C=1");
+    f.feed("\x1b[3;1H");
+    f.show("i=1,c=2,r=1,C=1");
+    assert_eq!(f.pictures().len(), 2);
+}
+
+#[test]
+fn a_video_without_ids_keeps_one_anchor() {
+    let mut f = Fixture::new(20, 5);
+    for _ in 0..5 {
+        f.feed("\x1b[H\x1b_Ga=T,f=24,s=1,v=1,c=2,r=2,C=1,q=2;AAAA\x1b\\");
+    }
+    let cell = &f.session.term.grid()[Line(0)][Column(0)];
+    assert_eq!(cell.zerowidth().map_or(0, <[char]>::len), 1);
+    assert_eq!(f.pictures().len(), 1);
+}
+
+#[test]
+fn a_frame_without_an_id_leaves_the_store_when_replaced() {
+    let mut f = Fixture::new(20, 5);
+    let frame = "\x1b[H\x1b_Ga=T,f=24,s=1,v=1,c=2,r=2,C=1,q=2;AAAA\x1b\\";
+    f.feed(frame);
+    let first = f.pictures()[0].image;
+    f.feed(frame);
+    assert!(f.session.graphics.image(first).is_none());
+}
+
+#[test]
+fn named_images_on_one_cell_both_stay() {
+    let mut f = Fixture::new(20, 5);
+    f.show("i=1,c=2,r=2,C=1");
+    f.show("i=2,c=2,r=2,C=1");
+    assert_eq!(f.pictures().len(), 2);
 }

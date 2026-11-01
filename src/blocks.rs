@@ -5,7 +5,7 @@ use crate::marks::Mark;
 
 pub const MAX_BLOCKS: usize = 20_000;
 // Ids become private-use characters in the grid, so they have to stay small.
-const ID_RANGE: u32 = 0xFFFE;
+const ID_RANGE: u32 = 0x8000;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Block {
