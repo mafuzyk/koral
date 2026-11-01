@@ -1,5 +1,5 @@
 use koral::boxes::quads;
-use koral::render::Quad;
+use koral::render::{Quad, Shape};
 
 const INK: [f32; 4] = [1.0; 4];
 
@@ -116,8 +116,30 @@ fn a_light_shade_is_translucent() {
 }
 
 #[test]
-fn arcs_stay_with_the_font() {
-    assert!(cell('╭').is_none());
+fn an_arc_reaches_the_edges_it_points_at() {
+    assert_eq!(reaches(&cell('╭').unwrap()), (4.0, 9.0, 10.0, 20.0));
+    assert_eq!(reaches(&cell('╮').unwrap()), (0.0, 9.0, 6.0, 20.0));
+    assert_eq!(reaches(&cell('╯').unwrap()), (0.0, 0.0, 6.0, 11.0));
+    assert_eq!(reaches(&cell('╰').unwrap()), (4.0, 0.0, 10.0, 11.0));
+}
+
+#[test]
+fn an_arc_curves_around_the_inside_of_its_corner() {
+    let quads = cell('╭').unwrap();
+    assert!(quads.iter().any(|quad| quad.shape == Shape::Arc { x: 10.0, y: 15.0, radius: 5.0 }));
+}
+
+#[test]
+fn an_arc_meets_a_line_in_the_next_cell() {
+    let line = cell('─').unwrap();
+    let curve = cell('╰').unwrap();
+    assert_eq!(curve.iter().map(|quad| quad.y + quad.height).fold(0.0, f32::max), line[0].y + line[0].height);
+}
+
+#[test]
+fn dashes_and_diagonals_stay_with_the_font() {
+    assert!(cell('╌').is_none());
+    assert!(cell('╱').is_none());
     assert!(cell('a').is_none());
     assert!(cell('┄').is_none());
 }

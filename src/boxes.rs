@@ -1,7 +1,7 @@
-use crate::render::Quad;
+use crate::render::{Quad, Shape};
 
 /// Arms of U+2500 to U+257F as left, right, up, down: 1 light, 2 heavy, 3 double.
-// shortcut: arcs, diagonals and dashed lines stay with the font, quads cannot draw curves; a mask atlas is the upgrade.
+// shortcut: diagonals and dashed lines stay with the font, a mask atlas is the upgrade.
 #[rustfmt::skip]
 const ARMS: [&[u8; 4]; 128] = [
     b"1100", b"2200", b"0011", b"0022", b"0000", b"0000", b"0000", b"0000",
@@ -26,6 +26,7 @@ const ARMS: [&[u8; 4]; 128] = [
 pub fn quads(ch: char, x: f32, y: f32, width: f32, height: f32, thickness: f32, color: [f32; 4]) -> Option<Vec<Quad>> {
     let area = Area { left: x.round(), top: y.round(), right: (x + width).round(), bottom: (y + height).round() };
     match ch as u32 {
+        0x256D..=0x2570 => Some(arc(ch as u32, area, thickness.round().max(1.0), color)),
         0x2500..=0x257F => lines(ch as usize - 0x2500, area, thickness.round().max(1.0), color),
         0x2580..=0x259F => Some(blocks(ch as u32, area, x, y, width, height, color)),
         _ => None,
@@ -51,6 +52,29 @@ fn lines(index: usize, area: Area, thickness: f32, color: [f32; 4]) -> Option<Ve
     let wide = across.into_iter().map(|[start, end, top, bottom]| Quad::new(start, top, end - start, bottom - top, color));
     let tall = along.into_iter().map(|[start, end, left, right]| Quad::new(left, start, right - left, end - start, color));
     Some(wide.chain(tall).collect())
+}
+
+/// A rounded corner: a font's curve would not line up with the lines Koral draws next to it.
+fn arc(ch: u32, area: Area, thickness: f32, color: [f32; 4]) -> Vec<Quad> {
+    let (right, down) = (matches!(ch, 0x256D | 0x2570), ch <= 0x256E);
+    let half = thickness / 2.0;
+    let x = edges(((area.left + area.right) / 2.0).floor(), 1, thickness).0 + half;
+    let y = edges(((area.top + area.bottom) / 2.0).floor(), 1, thickness).0 + half;
+
+    let across = if right { area.right - x } else { x - area.left };
+    let along = if down { area.bottom - y } else { y - area.top };
+    let radius = across.min(along);
+    let center_x = if right { x + radius } else { x - radius };
+    let center_y = if down { y + radius } else { y - radius };
+
+    let size = radius + half;
+    let (box_x, box_y) = (if right { x - half } else { center_x }, if down { y - half } else { center_y });
+    let curve = Quad { shape: Shape::Arc { x: center_x, y: center_y, radius }, ..Quad::new(box_x, box_y, size, size, color) };
+    let (start, end) = if right { (center_x, area.right) } else { (area.left, center_x) };
+    let (top, bottom) = if down { (center_y, area.bottom) } else { (area.top, center_y) };
+    let wide = Quad::new(start, y - half, end - start, thickness, color);
+    let tall = Quad::new(x - half, top, thickness, bottom - top, color);
+    [curve, wide, tall].into_iter().filter(|quad| quad.width > 0.0 && quad.height > 0.0).collect()
 }
 
 /// The whole pixels a line of this weight covers around `center`.

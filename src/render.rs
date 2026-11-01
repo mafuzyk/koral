@@ -53,7 +53,12 @@ fn fs_main(in: Varying) -> @location(0) vec4<f32> {
     let mode = in.shape.w;
     let radius = in.shape.z;
     var coverage = 1.0;
-    if mode > 3.5 {
+    if mode > 4.5 {
+        // The box ends half a stroke past the radius, which is how the stroke width gets here.
+        let half_stroke = in.rect.z - radius;
+        let distance = abs(length(in.pixel - in.shape.xy) - radius) - half_stroke;
+        coverage = clamp(0.5 - distance, 0.0, 1.0);
+    } else if mode > 3.5 {
         let point = in.pixel - in.rect.xy - in.rect.zw * 0.5;
         let distance_from_centre = length(point);
         let sector = 6.2831853 / 8.0;
@@ -96,6 +101,7 @@ pub enum Shape {
     OutsideCircle { x: f32, y: f32, radius: f32 },
     Rounded { radius: f32 },
     Gear { radius: f32 },
+    Arc { x: f32, y: f32, radius: f32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -121,6 +127,7 @@ impl Quad {
             Shape::OutsideCircle { x, y, radius } => (x, y, radius, 2.0),
             Shape::Rounded { radius } => (0.0, 0.0, radius, 3.0),
             Shape::Gear { radius } => (0.0, 0.0, radius, 4.0),
+            Shape::Arc { x, y, radius } => (x, y, radius, 5.0),
         };
         [self.x, self.y, self.width, self.height, r, g, b, a, cx, cy, radius, mode]
     }
