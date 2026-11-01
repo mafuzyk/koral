@@ -5,7 +5,7 @@ A Rust terminal with native sharky shell support. It understands
 fold, shows its status and duration, and can be copied or jumped to on its own.
 Tabs are native, with no tmux involved.
 
-![Koral with a folded command, an image, and command status on the right](docs/screenshot.png)
+![Koral with a folded command, an image, and command status on the right](assets/screenshot.png)
 
 Koral runs on Linux under Wayland and is developed on Hyprland.
 
@@ -89,7 +89,6 @@ that use it work.
 
 Programs can set the tab title, ring the bell and send desktop notifications with
 `OSC 777` or `OSC 9`. Notifications need `libnotify`, and links need `xdg-utils`.
-Test results are in [docs/testing.md](docs/testing.md).
 
 ## Licence
 
