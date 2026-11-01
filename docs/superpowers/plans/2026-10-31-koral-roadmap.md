@@ -90,7 +90,7 @@ gh repo create mafuzyk/koral --public --source=. --remote=origin --description "
 
 **Interfaces:**
 - Consumes: `docs/RELEASING.md` from Task 1.
-- Produces: AUR package `koral`, built from the tagged tarball. No `-git` or `-bin` package for now.
+- Produces: AUR package `koral-bin`, installing the tarball that `.github/workflows/release.yml` builds for the tag. The user asked for a binary package, and local builds use `target-cpu=native`.
 
 - [ ] **Step 1: Confirm the optional package names** with `pacman -Si` and the AUR (`sharky-shell-git`, matugen, later `libnotify`, `xdg-utils`).
 - [ ] **Step 2: Write `packaging/PKGBUILD`:**
@@ -151,7 +151,7 @@ gh release create v0.1.0 --generate-notes
 - [ ] **Step 6: Inspect it** with `pacman -Qlp koral-0.1.0-1-x86_64.pkg.tar.zst`. Expected: the binary, desktop entry, icon and licence.
 - [ ] **Step 7: Write** `.SRCINFO` with `makepkg --printsrcinfo > .SRCINFO`, and commit `build: package koral for the AUR`.
 - [ ] **Step 8: Ask the user for the ok,** then push `packaging/PKGBUILD` and `.SRCINFO` to `ssh://aur@aur.archlinux.org/koral.git` with message `upgpkg: koral 0.1.0`, and push the commit to GitHub.
-- [ ] **Step 9: Ask the user and their girlfriend to install it** with `yay -S koral`. Their result closes the phase, since it is the first run outside this machine.
+- [ ] **Step 9: Ask the user and their girlfriend to install it** with `yay -S koral-bin`. Their result closes the phase, since it is the first run outside this machine.
 
 ---
 

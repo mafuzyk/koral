@@ -12,7 +12,7 @@ Koral runs on Linux under Wayland and is developed on Hyprland.
 ## Install
 
 ```sh
-yay -S koral
+yay -S koral-bin
 ```
 
 To build from source:

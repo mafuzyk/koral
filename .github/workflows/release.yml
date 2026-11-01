@@ -1,0 +1,40 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  binary:
+    name: Binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test
+        run: cargo test --release --locked
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package
+        run: |
+          ./target/release/koral --version
+          cp target/release/koral assets/koral.desktop assets/koral.svg .
+          tar -czf koral-x86_64-linux.tar.gz koral koral.desktop koral.svg LICENSE
+      - name: Publish
+        run: |
+          gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --generate-notes --title "koral ${TAG#v}"
+          gh release upload "$TAG" koral-x86_64-linux.tar.gz --clobber
