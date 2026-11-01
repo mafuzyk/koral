@@ -1,6 +1,6 @@
 use koral::config::{Config, parse, update};
 use koral::input::{Action, binding};
-use koral::settings::{Command, FIELDS, Outcome, Panel, Settings, Zone, value, zone};
+use koral::settings::{Command, FIELDS, Outcome, Panel, Picker, Settings, Zone, value, visible, zone};
 use koral::tabs::{Hit, hit, layout};
 use winit::keyboard::{Key, ModifiersState};
 
@@ -9,7 +9,17 @@ fn index(key: &str) -> usize {
 }
 
 fn on(key: &str) -> Settings {
-    Settings { selected: index(key), editing: None }
+    Settings { selected: index(key), ..Settings::default() }
+}
+
+fn fonts() -> Vec<String> {
+    ["Fira Code", "Fira Mono", "IosevkaTerm Nerd Font Mono", "Monocraft"].map(String::from).to_vec()
+}
+
+fn picking() -> Settings {
+    let mut settings = Settings { fonts: fonts(), ..on("font") };
+    settings.handle(Command::Confirm, &Config::default());
+    settings
 }
 
 #[test]
@@ -61,14 +71,15 @@ fn numbers_stop_at_their_limits() {
 
 #[test]
 fn less_and_more_do_nothing_on_text_fields() {
-    assert_eq!(on("font").handle(Command::More, &Config::default()), Outcome::Nothing);
+    assert_eq!(on("shell").handle(Command::More, &Config::default()), Outcome::Nothing);
 }
 
 #[test]
 fn confirm_starts_editing_text_with_the_current_value() {
-    let mut settings = on("font");
-    settings.handle(Command::Confirm, &Config::default());
-    assert_eq!(settings.editing.as_deref(), Some("IosevkaTerm Nerd Font Mono"));
+    let mut settings = on("shell");
+    let config = Config { shell: Some("fish".to_string()), ..Config::default() };
+    settings.handle(Command::Confirm, &config);
+    assert_eq!(settings.editing.as_deref(), Some("fish"));
 }
 
 #[test]
@@ -199,4 +210,110 @@ fn a_toggle_row_applies_through_update() {
     let (source, config) = update("", "matugen", "on").unwrap();
     assert_eq!(source, "polyp matugen on\n");
     assert!(config.matugen);
+}
+
+#[test]
+fn confirm_on_the_font_opens_the_list_at_the_current_font() {
+    let settings = picking();
+    assert_eq!(settings.editing, None);
+    assert_eq!(settings.picker, Some(Picker { query: String::new(), selected: 2 }));
+}
+
+#[test]
+fn a_font_that_is_not_listed_opens_the_list_at_the_top() {
+    let mut settings = Settings { fonts: fonts(), ..on("font") };
+    let config = Config { font: "Missing".to_string(), ..Config::default() };
+    settings.handle(Command::Confirm, &config);
+    assert_eq!(settings.picker.unwrap().selected, 0);
+}
+
+#[test]
+fn the_list_moves_and_wraps_around() {
+    let mut settings = picking();
+    let config = Config::default();
+    settings.handle(Command::Down, &config);
+    settings.handle(Command::Down, &config);
+    assert_eq!(settings.picker.as_ref().unwrap().selected, 0);
+    settings.handle(Command::Up, &config);
+    assert_eq!(settings.picker.as_ref().unwrap().selected, 3);
+}
+
+#[test]
+fn confirm_applies_the_chosen_font_and_closes_the_list() {
+    let mut settings = picking();
+    let config = Config::default();
+    settings.handle(Command::Down, &config);
+    assert_eq!(settings.handle(Command::Confirm, &config), Outcome::Change("font", "Monocraft".to_string()));
+    assert_eq!(settings.picker, None);
+}
+
+#[test]
+fn typing_filters_the_list_whatever_the_case() {
+    let mut settings = picking();
+    let config = Config::default();
+    settings.handle(Command::Type('F'), &config);
+    settings.handle(Command::Type('i'), &config);
+    assert_eq!(settings.found(), ["Fira Code", "Fira Mono"]);
+    assert_eq!(settings.picker.as_ref().unwrap().selected, 0);
+    settings.handle(Command::Erase, &config);
+    settings.handle(Command::Erase, &config);
+    assert_eq!(settings.found().len(), 4);
+}
+
+#[test]
+fn confirm_with_no_match_keeps_the_list_open() {
+    let mut settings = picking();
+    let config = Config::default();
+    settings.handle(Command::Type('z'), &config);
+    assert_eq!(settings.handle(Command::Confirm, &config), Outcome::Nothing);
+    assert!(settings.picker.is_some());
+}
+
+#[test]
+fn moving_in_an_empty_list_does_nothing() {
+    let mut settings = on("font");
+    let config = Config::default();
+    settings.handle(Command::Confirm, &config);
+    settings.handle(Command::Down, &config);
+    settings.handle(Command::Up, &config);
+    assert_eq!(settings.picker.unwrap().selected, 0);
+}
+
+#[test]
+fn cancel_leaves_the_list_before_it_closes() {
+    let mut settings = picking();
+    let config = Config::default();
+    assert_eq!(settings.handle(Command::Cancel, &config), Outcome::Nothing);
+    assert_eq!(settings.picker, None);
+    assert_eq!(settings.handle(Command::Cancel, &config), Outcome::Close);
+}
+
+#[test]
+fn the_visible_part_of_the_list_follows_the_selection() {
+    assert_eq!(visible(0, 100), 0..6);
+    assert_eq!(visible(50, 100), 47..53);
+    assert_eq!(visible(99, 100), 94..100);
+    assert_eq!(visible(1, 3), 0..3);
+}
+
+#[test]
+fn a_click_selects_the_font_on_its_row() {
+    let mut settings = picking();
+    assert!(settings.pick(3));
+    assert_eq!(settings.picker.unwrap().selected, 3);
+}
+
+#[test]
+fn a_click_below_the_last_font_selects_nothing() {
+    let mut settings = picking();
+    assert!(!settings.pick(4));
+    assert_eq!(settings.picker.unwrap().selected, 2);
+}
+
+#[test]
+fn a_click_counts_from_the_top_of_the_scrolled_list() {
+    let fonts = (0..20).map(|number| format!("Font {number}")).collect();
+    let mut settings = Settings { fonts, picker: Some(Picker { query: String::new(), selected: 10 }), ..on("font") };
+    assert!(settings.pick(0));
+    assert_eq!(settings.picker.unwrap().selected, 7);
 }

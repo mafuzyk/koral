@@ -41,7 +41,7 @@ pub enum UserEvent {
     Bell(u64),
     Notify(u64, Notice),
     Size(u64, SizeReply),
-    Fonts(Box<FontSystem>),
+    Fonts(Box<FontSystem>, Vec<String>),
 }
 
 pub type SizeReply = Arc<dyn Fn(WindowSize) -> String + Sync + Send>;

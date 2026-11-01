@@ -3,6 +3,7 @@ use crate::config::Config;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Kind {
     Text,
+    Font,
     Number { min: f32, max: f32, step: f32 },
     Toggle,
 }
@@ -15,7 +16,7 @@ pub struct Field {
 }
 
 pub const FIELDS: [Field; 6] = [
-    Field { key: "font", label: "Font", kind: Kind::Text },
+    Field { key: "font", label: "Font", kind: Kind::Font },
     Field { key: "font_size", label: "Font size", kind: Kind::Number { min: 6.0, max: 72.0, step: 0.5 } },
     Field { key: "opacity", label: "Opacity", kind: Kind::Number { min: 0.1, max: 1.0, step: 0.05 } },
     Field { key: "padding", label: "Padding", kind: Kind::Number { min: 0.0, max: 64.0, step: 2.0 } },
@@ -46,12 +47,24 @@ pub enum Outcome {
 pub struct Settings {
     pub selected: usize,
     pub editing: Option<String>,
+    pub picker: Option<Picker>,
+    pub fonts: Vec<String>,
+}
+
+/// The installed fonts in place of the fields. `selected` counts inside the filtered list.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Picker {
+    pub query: String,
+    pub selected: usize,
 }
 
 impl Settings {
     pub fn handle(&mut self, command: Command, config: &Config) -> Outcome {
         if self.editing.is_some() {
             return self.handle_editing(command);
+        }
+        if self.picker.is_some() {
+            return self.handle_picker(command);
         }
         let toggle = FIELDS[self.selected].kind == Kind::Toggle;
         match command {
@@ -62,6 +75,10 @@ impl Settings {
             Command::More => return step(self.selected, 1.0, config),
             Command::Confirm if FIELDS[self.selected].kind == Kind::Text => {
                 self.editing = Some(value(self.selected, config));
+            }
+            Command::Confirm if FIELDS[self.selected].kind == Kind::Font => {
+                let selected = self.fonts.iter().position(|name| *name == config.font).unwrap_or(0);
+                self.picker = Some(Picker { query: String::new(), selected });
             }
             Command::Cancel => return Outcome::Close,
             _ => {}
@@ -84,6 +101,56 @@ impl Settings {
             _ => {}
         }
         Outcome::Nothing
+    }
+
+    fn handle_picker(&mut self, command: Command) -> Outcome {
+        let chosen = self.chosen().map(str::to_string);
+        let count = self.found().len().max(1);
+        let Some(picker) = &mut self.picker else {
+            return Outcome::Nothing;
+        };
+        match command {
+            Command::Up => picker.selected = (picker.selected + count - 1) % count,
+            Command::Down => picker.selected = (picker.selected + 1) % count,
+            Command::Type(ch) => {
+                picker.query.push(ch);
+                picker.selected = 0;
+            }
+            Command::Erase => {
+                picker.query.pop();
+                picker.selected = 0;
+            }
+            Command::Cancel => self.picker = None,
+            Command::Confirm => {
+                if let Some(name) = chosen {
+                    self.picker = None;
+                    return Outcome::Change("font", name);
+                }
+            }
+            _ => {}
+        }
+        Outcome::Nothing
+    }
+
+    /// The fonts that match what was typed.
+    pub fn found(&self) -> Vec<&str> {
+        let query = self.picker.as_ref().map_or(String::new(), |picker| picker.query.to_lowercase());
+        self.fonts.iter().map(String::as_str).filter(|name| name.to_lowercase().contains(&query)).collect()
+    }
+
+    /// Selects the font drawn on a row of the panel. False when the row is empty.
+    pub fn pick(&mut self, row: usize) -> bool {
+        let count = self.found().len();
+        let Some(picker) = &mut self.picker else {
+            return false;
+        };
+        let index = visible(picker.selected, count).nth(row);
+        picker.selected = index.unwrap_or(picker.selected);
+        index.is_some()
+    }
+
+    fn chosen(&self) -> Option<&str> {
+        self.found().get(self.picker.as_ref()?.selected).copied()
     }
 
     fn edit(&mut self, change: impl FnOnce(&mut String)) {
@@ -123,6 +190,12 @@ pub fn value(field: usize, config: &Config) -> String {
         "matugen" => if config.matugen { "on" } else { "off" }.to_string(),
         _ => config.shell.clone().unwrap_or_default(),
     }
+}
+
+/// The part of a list the panel shows, with the selection near the middle.
+pub fn visible(selected: usize, count: usize) -> std::ops::Range<usize> {
+    let first = selected.saturating_sub(FIELDS.len() / 2).min(count.saturating_sub(FIELDS.len()));
+    first..(first + FIELDS.len()).min(count)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

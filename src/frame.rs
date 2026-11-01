@@ -15,7 +15,7 @@ use crate::config::Config;
 use crate::graphics::Graphics;
 use crate::links::Link;
 use crate::render::{Cell, Clip, Picture, Pictures, Quad, Shape, Span, TextLine, rgba};
-use crate::settings::{FIELDS, Kind, Panel, Settings, value};
+use crate::settings::{FIELDS, Kind, Panel, Picker, Settings, value, visible};
 use crate::tabs::{Bar, CLOSE_ZONE, Rect};
 use crate::theme::Theme;
 use crate::view::{Row, pinned, placed, without_anchors};
@@ -557,20 +557,18 @@ pub fn draw_settings(
         shape: Shape::Rounded { radius: 10.0 * scale },
     });
 
+    if let Some(picker) = &settings.picker {
+        draw_picker(frame, settings, picker, config, area, layout, theme);
+        return;
+    }
+
     let small_cell = layout.cell.width * 0.82;
     for (index, field) in FIELDS.iter().enumerate() {
         let top = area.y + index as f32 * area.row_height;
         let y = top + (area.row_height - layout.cell.height) / 2.0;
         let selected = index == settings.selected;
         if selected {
-            frame.quads.push(Quad {
-                x: area.x + 4.0 * scale,
-                y: top + 2.0 * scale,
-                width: area.width - 8.0 * scale,
-                height: area.row_height - 4.0 * scale,
-                color: rgba(theme.foreground, 0.08),
-                shape: Shape::Rounded { radius: 7.0 * scale },
-            });
+            frame.quads.push(selected_row(area, top, scale, theme));
         }
         let label = if selected { theme.foreground } else { theme.muted };
         frame.lines.push(TextLine {
@@ -624,7 +622,7 @@ pub fn draw_settings(
                     shape: Shape::Rounded { radius: knob / 2.0 },
                 });
             }
-            (Kind::Text, editing) => {
+            (Kind::Text | Kind::Font, editing) => {
                 let room = ((area.width * 0.55 - inset) / small_cell) as usize;
                 let text = editing.cloned().unwrap_or_else(|| value(index, config));
                 let shown = if text.is_empty() && editing.is_none() {
@@ -648,11 +646,12 @@ pub fn draw_settings(
         }
     }
 
-    let toggle = FIELDS[settings.selected].kind == Kind::Toggle;
+    let kind = FIELDS[settings.selected].kind;
     let (hint, color) = match (error, settings.editing.is_some()) {
         (Some(message), _) => (message, theme.failure),
         (None, true) => ("Enter saves. Esc cancels.", theme.muted),
-        (None, false) if toggle => ("Colours update on each matugen run.", theme.muted),
+        (None, false) if kind == Kind::Toggle => ("Colours update on each matugen run.", theme.muted),
+        (None, false) if kind == Kind::Font => ("Enter lists the installed fonts.", theme.muted),
         (None, false) => ("Arrows change a setting. Esc closes.", theme.muted),
     };
     let room = ((area.width - inset * 2.0) / small_cell) as usize;
@@ -662,6 +661,53 @@ pub fn draw_settings(
         small: true,
         spans: vec![Span::plain(fit(hint, room), color)],
     });
+}
+
+fn selected_row(area: Panel, top: f32, scale: f32, theme: &Theme) -> Quad {
+    Quad {
+        x: area.x + 4.0 * scale,
+        y: top + 2.0 * scale,
+        width: area.width - 8.0 * scale,
+        height: area.row_height - 4.0 * scale,
+        color: rgba(theme.foreground, 0.08),
+        shape: Shape::Rounded { radius: 7.0 * scale },
+    }
+}
+
+/// The installed fonts in the rows of the fields, with the filter on the hint line.
+fn draw_picker(frame: &mut Frame, settings: &Settings, picker: &Picker, config: &Config, area: Panel, layout: Layout, theme: &Theme) {
+    let scale = layout.scale;
+    let inset = 14.0 * scale;
+    let small_cell = layout.cell.width * 0.82;
+    let room = ((area.width - inset * 2.0) / small_cell) as usize;
+    let text_y = |row: usize| area.y + row as f32 * area.row_height + (area.row_height - layout.cell.height) / 2.0;
+
+    let found = settings.found();
+    for (row, index) in visible(picker.selected, found.len()).enumerate() {
+        if index == picker.selected {
+            frame.quads.push(selected_row(area, area.y + row as f32 * area.row_height, scale, theme));
+        }
+        let color = if found[index] == config.font { theme.accent } else { theme.foreground };
+        frame.lines.push(TextLine {
+            x: area.x + inset,
+            y: text_y(row),
+            small: true,
+            spans: vec![Span::plain(fit(found[index], room), color)],
+        });
+    }
+
+    let (hint, color) = match (picker.query.is_empty(), found.is_empty()) {
+        (true, true) => ("Looking for installed fonts.".to_string(), theme.muted),
+        (true, false) => ("Type to filter. Enter applies. Esc goes back.".to_string(), theme.muted),
+        (false, true) => (format!("No font matches {}", picker.query), theme.failure),
+        (false, false) => (picker.query.clone(), theme.foreground),
+    };
+    let hint = fit(&hint, room);
+    if !picker.query.is_empty() {
+        let (x, y) = (area.x + inset + hint.chars().count() as f32 * small_cell, text_y(FIELDS.len()));
+        frame.quads.push(Quad::new(x + scale, y + 3.0 * scale, 2.0 * scale, layout.cell.height - 6.0 * scale, rgba(theme.accent, 1.0)));
+    }
+    frame.lines.push(TextLine { x: area.x + inset, y: text_y(FIELDS.len()), small: true, spans: vec![Span::plain(hint, color)] });
 }
 
 pub fn draw_chrome(frame: &mut Frame, chrome: &Chrome<'_>, layout: Layout, theme: &Theme) {

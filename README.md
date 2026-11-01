@@ -22,7 +22,7 @@ cargo build --release
 ./target/release/koral
 ```
 
-The default font is IosevkaTerm Nerd Font Mono.
+The default font is IosevkaTerm Nerd Font Mono. The settings panel lists the fixed-width fonts on your system. A font that is missing or proportional is replaced by a fixed-width one, and the panel says so.
 
 ## Shortcuts
 

@@ -79,6 +79,7 @@ struct App {
     source: String,
     settings: Option<Settings>,
     settings_error: Option<String>,
+    fonts: Vec<String>,
     theme: Theme,
     home: Option<String>,
     clipboard: Option<Clipboard>,
@@ -122,6 +123,7 @@ impl App {
             source,
             settings: None,
             settings_error: None,
+            fonts: Vec::new(),
             home: std::env::var("HOME").ok(),
             clipboard: Clipboard::new().ok(),
             mods: ModifiersState::empty(),
@@ -327,7 +329,7 @@ impl App {
     fn toggle_settings(&mut self) {
         self.settings = match self.settings {
             Some(_) => None,
-            None => Some(Settings::default()),
+            None => Some(Settings { fonts: self.fonts.clone(), ..Settings::default() }),
         };
         self.settings_error = None;
         self.redraw();
@@ -461,7 +463,17 @@ impl App {
             return false;
         };
         let (x, y) = self.cursor;
-        match settings::zone(frame::panel(layout), x, y) {
+        let zone = settings::zone(frame::panel(layout), x, y);
+        if open.picker.is_some() {
+            if let Zone::Row(row) | Zone::Less(row) | Zone::More(row) = zone
+                && open.pick(row)
+            {
+                self.settings_command(Command::Confirm);
+            }
+            self.redraw();
+            return zone != Zone::Outside;
+        }
+        match zone {
             Zone::Outside => return false,
             Zone::Inside => {}
             Zone::Row(row) => {
@@ -606,6 +618,11 @@ impl App {
     }
 
     fn wheel(&mut self, lines: i64) {
+        if self.settings.as_ref().is_some_and(|settings| settings.picker.is_some()) {
+            let step = if lines > 0 { Command::Up } else { Command::Down };
+            (0..lines.abs()).for_each(|_| self.settings_command(step));
+            return;
+        }
         let mode = self.mode();
         if lines == 0 {
             return;
@@ -879,11 +896,13 @@ impl App {
             frame::draw_link_bar(&mut frame, &link.uri, layout, &self.theme);
         }
         if let Some(settings) = &self.settings {
+            let substitute = self.renderer.as_ref().and_then(|renderer| renderer.substitute());
+            let notice = substitute.map(|used| format!("Can't use {}. Showing {used}.", self.config.font));
             frame::draw_settings(
                 &mut frame,
                 settings,
                 &self.config,
-                self.settings_error.as_deref(),
+                self.settings_error.as_deref().or(notice.as_deref()),
                 layout,
                 &self.theme,
             );
@@ -932,10 +951,15 @@ impl ApplicationHandler<UserEvent> for App {
             let (proxy, face, cache) = (self.proxy.clone(), face.clone(), cache.clone());
             std::thread::spawn(move || {
                 let fonts = fonts::full(cache.as_deref(), &face);
-                let _ = proxy.send_event(UserEvent::Fonts(Box::new(fonts)));
+                let list = fonts::monospaced(fonts.db());
+                let _ = proxy.send_event(UserEvent::Fonts(Box::new(fonts), list));
             });
         }
-        let fonts = quick.unwrap_or_else(|| fonts::full(cache.as_deref(), &face));
+        let fonts = quick.unwrap_or_else(|| {
+            let fonts = fonts::full(cache.as_deref(), &face);
+            self.fonts = fonts::monospaced(fonts.db());
+            fonts
+        });
         self.renderer = Some(pollster::block_on(Renderer::new(window.clone(), instance, &face, points, fonts)));
         window.set_ime_allowed(true);
         self.window = Some(window);
@@ -978,10 +1002,14 @@ impl ApplicationHandler<UserEvent> for App {
                 self.theme = matugen::theme(self.config.matugen);
                 self.redraw();
             }
-            UserEvent::Fonts(fonts) => {
+            UserEvent::Fonts(fonts, list) => {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.set_fonts(*fonts);
                 }
+                if let Some(settings) = &mut self.settings {
+                    settings.fonts = list.clone();
+                }
+                self.fonts = list;
                 self.resize_all();
                 self.redraw();
             }
