@@ -96,7 +96,8 @@ fn alternate(press: &KeyPress, mode: TermMode) -> Option<u32> {
 
 fn associated(press: &KeyPress, mode: TermMode) -> Option<String> {
     let wanted = TermMode::REPORT_ALL_KEYS_AS_ESC | TermMode::REPORT_ASSOCIATED_TEXT;
-    if !mode.contains(wanted) || press.stage == Stage::Release {
+    let typed = !press.mods.intersects(ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER);
+    if !mode.contains(wanted) || press.stage == Stage::Release || !typed {
         return None;
     }
     let text = press.text.filter(|text| !text.is_empty() && !text.chars().any(char::is_control))?;

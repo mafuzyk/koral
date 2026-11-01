@@ -3,14 +3,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::index::{Column, Point, Side};
-use alacritty_terminal::selection::{Selection, SelectionType};
+use alacritty_terminal::selection::Selection;
 use alacritty_terminal::term::TermMode;
 use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use koral::blocks::Activity;
 use koral::config::{self, Config};
 use koral::frame::{self, Chrome, Frame, Layout, TabView};
 use koral::matugen;
-use koral::input::{self, Action, Mouse, binding};
+use koral::input::{self, Action, Clicks, Mouse, binding};
 use koral::keyboard::{self, KeyPress, Stage};
 use koral::pty::{Geometry, Terminal, UserEvent};
 use koral::render::{Renderer, rgba};
@@ -19,8 +19,8 @@ use koral::tabs::{self, Bar, Hit, Tabs};
 use koral::theme::Theme;
 use koral::view;
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalPosition};
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, KeyEvent, WindowEvent};
+use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
+use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
@@ -82,6 +82,10 @@ struct App {
     drag: Drag,
     focused: bool,
     confirming: Option<(u64, Instant)>,
+    clicks: Clicks,
+    preedit: Option<String>,
+    ime_cursor: Option<(f32, f32)>,
+    zoom: f32,
 }
 
 impl App {
@@ -114,6 +118,10 @@ impl App {
             drag: Drag::None,
             focused: true,
             confirming: None,
+            clicks: Clicks::default(),
+            preedit: None,
+            ime_cursor: None,
+            zoom: 0.0,
         }
     }
 
@@ -227,6 +235,23 @@ impl App {
         self.active().map_or(TermMode::empty(), |tab| *tab.session.lock().term.mode())
     }
 
+    fn ime(&mut self, ime: Ime) {
+        match ime {
+            Ime::Preedit(text, _) => self.preedit = Some(text).filter(|text| !text.is_empty()),
+            Ime::Commit(text) if self.settings.is_some() => {
+                self.preedit = None;
+                text.chars().for_each(|ch| self.settings_command(Command::Type(ch)));
+            }
+            Ime::Commit(text) => {
+                self.preedit = None;
+                self.write_active(text.into_bytes());
+            }
+            Ime::Enabled => {}
+            Ime::Disabled => self.preedit = None,
+        }
+        self.redraw();
+    }
+
     fn kitty_key(&self, event: &KeyEvent, stage: Stage) -> Option<Vec<u8>> {
         let unshifted = event.key_without_modifiers();
         let text = event.text.as_deref();
@@ -254,8 +279,21 @@ impl App {
             Action::PageUp => self.scroll_lines(self.page()),
             Action::PageDown => self.scroll_lines(-self.page()),
             Action::OpenSettings => self.toggle_settings(),
+            Action::ZoomIn => self.zoom_to(self.zoom + 1.0),
+            Action::ZoomOut => self.zoom_to(self.zoom - 1.0),
+            Action::ZoomReset => self.zoom_to(0.0),
         }
         self.redraw();
+    }
+
+    /// For this run only: the font size in the config stays what the user chose.
+    fn zoom_to(&mut self, zoom: f32) {
+        let size = input::zoomed(self.config.font_size, zoom);
+        self.zoom = size - self.config.font_size;
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_font(&self.config.font, size);
+        }
+        self.resize_all();
     }
 
     fn toggle_settings(&mut self) {
@@ -299,7 +337,7 @@ impl App {
         self.theme = matugen::theme(self.config.matugen);
 
         if font_changed && let Some(renderer) = &mut self.renderer {
-            renderer.set_font(&self.config.font, self.config.font_size);
+            renderer.set_font(&self.config.font, input::zoomed(self.config.font_size, self.zoom));
         }
         self.resize_all();
 
@@ -572,8 +610,10 @@ impl App {
             self.redraw();
             return;
         }
+        let clicks = self.clicks.press((point.line.0, point.column.0), Instant::now());
+        let kind = input::selection_kind(clicks, self.mods);
         if let Some(tab) = self.active() {
-            tab.session.lock().term.selection = Some(Selection::new(SelectionType::Simple, point, Side::Left));
+            tab.session.lock().term.selection = Some(Selection::new(kind, point, Side::Left));
         }
         self.drag = Drag::Selecting;
         self.redraw();
@@ -649,6 +689,7 @@ impl App {
             .collect();
 
         let mut frame = Frame::default();
+        let mut cursor = None;
         if let Some(tab) = tabs.active() {
             let session = tab.session.lock();
             let rows = view::rows(&session.term, &session.blocks);
@@ -663,6 +704,10 @@ impl App {
                 &self.theme,
             );
             frame::draw_pictures(&mut frame, &session.term, &session.graphics, &rows, tab.scroll, layout);
+            cursor = frame::cursor_position(&session.term, &rows, tab.scroll, layout);
+        }
+        if let (Some(text), Some((x, y))) = (&self.preedit, cursor) {
+            frame::draw_preedit(&mut frame, text, x, y, layout, &self.theme);
         }
 
         let hit = hit_at(&bar, self.cursor);
@@ -694,6 +739,11 @@ impl App {
         if let (Some(window), Some(view)) = (&self.window, views.get(tabs.active_index())) {
             window.set_title(&view.title);
         }
+        if let (Some(window), Some((x, y)), true) = (&self.window, cursor, cursor != self.ime_cursor) {
+            let size = PhysicalSize::new(layout.cell.width, layout.cell.height);
+            window.set_ime_cursor_area(PhysicalPosition::new(x, y), size);
+            self.ime_cursor = cursor;
+        }
         if let Some(renderer) = &mut self.renderer {
             renderer.draw(&frame.quads, &frame.pictures, &frame.lines, frame.clip, rgba(self.theme.background, self.config.opacity));
         }
@@ -721,6 +771,7 @@ impl ApplicationHandler<UserEvent> for App {
         )));
         let (font, points) = (self.config.font.clone(), self.config.font_size);
         self.renderer = Some(pollster::block_on(Renderer::new(window.clone(), instance, font, points)));
+        window.set_ime_allowed(true);
         self.window = Some(window);
         self.open_tab(event_loop);
     }
@@ -807,6 +858,7 @@ impl ApplicationHandler<UserEvent> for App {
                     tab.write(bytes);
                 }
             }
+            WindowEvent::Ime(ime) => self.ime(ime),
             WindowEvent::CursorMoved { position, .. } => self.cursor_moved(position),
             WindowEvent::MouseInput { state: ElementState::Pressed, button, .. } => {
                 if button == MouseButton::Left && self.press_settings() {

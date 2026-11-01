@@ -283,6 +283,24 @@ fn draw_block_marks(
     frame.lines.push(TextLine { x, y, small: true, spans });
 }
 
+/// Where the cursor sits on screen, when it is on screen.
+pub fn cursor_position<L: EventListener>(term: &Term<L>, rows: &[Row], scroll: usize, layout: Layout) -> Option<(f32, f32)> {
+    let top = visible_top(rows, layout.lines(), scroll);
+    let cursor = term.grid().cursor.point;
+    let index = rows[top..].iter().take(layout.lines()).position(|row| row.line == cursor.line)?;
+    let x = layout.grid_x() + cursor.column.0 as f32 * layout.cell.width;
+    Some((x, layout.grid_y() + index as f32 * layout.cell.height))
+}
+
+/// Text an input method is still composing.
+// shortcut: counts characters as one cell each, wide scripts underline short.
+pub fn draw_preedit(frame: &mut Frame, text: &str, x: f32, y: f32, layout: Layout, theme: &Theme) {
+    let width = text.chars().count() as f32 * layout.cell.width;
+    let thickness = layout.scale.max(1.0);
+    frame.quads.push(Quad::new(x, y + layout.cell.height - 2.0 * thickness, width, thickness, rgba(theme.accent, 1.0)));
+    frame.lines.push(TextLine { x, y, small: false, spans: vec![Span::plain(text.to_string(), theme.foreground)] });
+}
+
 fn draw_cursor<L>(
     frame: &mut Frame,
     term: &Term<L>,

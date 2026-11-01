@@ -140,3 +140,8 @@ fn a_release_needs_event_types() {
 fn legacy_mode_sends_nothing_new() {
     assert_eq!(press(letter("a"), None, CTRL, TermMode::empty()), None);
 }
+
+#[test]
+fn ctrl_sends_no_associated_text() {
+    assert_eq!(press(letter("a"), Some("a"), CTRL, A | T).as_deref(), Some("\x1b[97;5u"));
+}

@@ -1,5 +1,8 @@
 use alacritty_terminal::term::TermMode;
-use koral::input::{Mouse, encode, mouse_report, paste};
+use std::time::{Duration, Instant};
+
+use alacritty_terminal::selection::SelectionType;
+use koral::input::{Clicks, Mouse, encode, mouse_report, paste, selection_kind, zoomed};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 const NONE: ModifiersState = ModifiersState::empty();
@@ -144,4 +147,45 @@ fn legacy_mouse_cannot_report_past_its_range() {
 fn ctrl_cedilla_stays_silent_in_legacy_mode() {
     let cedilla = Key::Character("ç".into());
     assert_eq!(encode(&cedilla, None, ModifiersState::CONTROL, TermMode::empty()), None);
+}
+
+#[test]
+fn clicks_on_one_cell_count_up() {
+    let (mut clicks, start) = (Clicks::default(), Instant::now());
+    let at = |ms| start + Duration::from_millis(ms);
+    let counts: Vec<u8> = [0, 100, 200, 300].map(|ms| clicks.press((1, 2), at(ms))).to_vec();
+    assert_eq!(counts, [1, 2, 3, 1]);
+}
+
+#[test]
+fn a_slow_click_starts_again() {
+    let (mut clicks, start) = (Clicks::default(), Instant::now());
+    clicks.press((1, 2), start);
+    assert_eq!(clicks.press((1, 2), start + Duration::from_millis(500)), 1);
+}
+
+#[test]
+fn a_click_elsewhere_starts_again() {
+    let (mut clicks, start) = (Clicks::default(), Instant::now());
+    clicks.press((1, 2), start);
+    assert_eq!(clicks.press((1, 3), start + Duration::from_millis(100)), 1);
+}
+
+#[test]
+fn click_counts_choose_the_selection() {
+    assert_eq!(selection_kind(1, NONE), SelectionType::Simple);
+    assert_eq!(selection_kind(2, NONE), SelectionType::Semantic);
+    assert_eq!(selection_kind(3, NONE), SelectionType::Lines);
+}
+
+#[test]
+fn ctrl_alt_selects_a_block() {
+    assert_eq!(selection_kind(2, CTRL | ALT), SelectionType::Block);
+}
+
+#[test]
+fn zoom_stays_in_range() {
+    assert_eq!(zoomed(71.5, 1.0), 72.0);
+    assert_eq!(zoomed(6.5, -1.0), 6.0);
+    assert_eq!(zoomed(13.5, 1.0), 14.5);
 }

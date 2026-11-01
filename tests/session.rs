@@ -2,7 +2,8 @@ use std::time::Instant;
 
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use koral::session::Session;
@@ -515,4 +516,14 @@ fn an_app_can_turn_the_keyboard_protocol_on() {
     let mut session = Session::new(term);
     session.feed(b"\x1b[>1u", Instant::now());
     assert!(session.term.mode().contains(TermMode::DISAMBIGUATE_ESC_CODES));
+}
+
+#[test]
+fn a_word_selection_stops_at_a_space_after_an_anchor() {
+    let mut fixture = Fixture::new(20, 5);
+    fixture.feed(&format!("{PROMPT}foo bar"));
+    let line = fixture.session.term.grid().cursor.point.line;
+    let point = Point::new(line, Column(3));
+    fixture.session.term.selection = Some(Selection::new(SelectionType::Semantic, point, Side::Left));
+    assert_eq!(fixture.session.term.selection_to_string().as_deref(), Some("foo"));
 }

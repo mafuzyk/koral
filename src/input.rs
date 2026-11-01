@@ -1,3 +1,6 @@
+use std::time::{Duration, Instant};
+
+use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::TermMode;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
@@ -170,6 +173,43 @@ pub enum Action {
     PageUp,
     PageDown,
     OpenSettings,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+}
+
+const CLICK_WINDOW: Duration = Duration::from_millis(400);
+
+/// Counts clicks on one cell: a double click takes a word, a third a line.
+#[derive(Debug, Default)]
+pub struct Clicks {
+    last: Option<(Instant, (i32, usize), u8)>,
+}
+
+impl Clicks {
+    pub fn press(&mut self, cell: (i32, usize), now: Instant) -> u8 {
+        let count = match self.last {
+            Some((at, seen, count)) if seen == cell && now.duration_since(at) < CLICK_WINDOW => count % 3 + 1,
+            _ => 1,
+        };
+        self.last = Some((now, cell, count));
+        count
+    }
+}
+
+pub fn selection_kind(clicks: u8, mods: ModifiersState) -> SelectionType {
+    if mods.control_key() && mods.alt_key() {
+        return SelectionType::Block;
+    }
+    match clicks {
+        2 => SelectionType::Semantic,
+        3 => SelectionType::Lines,
+        _ => SelectionType::Simple,
+    }
+}
+
+pub fn zoomed(size: f32, delta: f32) -> f32 {
+    (size + delta).clamp(6.0, 72.0)
 }
 
 pub fn binding(key: &Key, mods: ModifiersState) -> Option<Action> {
@@ -195,6 +235,9 @@ pub fn binding(key: &Key, mods: ModifiersState) -> Option<Action> {
                 "g" => Some(Action::CopyOutput),
                 "f" => Some(Action::ToggleFold),
                 "," | "<" => Some(Action::OpenSettings),
+                "=" | "+" => Some(Action::ZoomIn),
+                "-" | "_" => Some(Action::ZoomOut),
+                "0" | ")" => Some(Action::ZoomReset),
                 _ => None,
             }
         }
