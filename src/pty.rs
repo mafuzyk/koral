@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,6 +18,7 @@ use winit::event_loop::EventLoopProxy;
 use crate::session::Session;
 
 const SCROLLBACK: usize = 10_000;
+const FRAME: Duration = Duration::from_millis(16);
 
 type ColorReply = Arc<dyn Fn(Rgb) -> String + Send + Sync>;
 
@@ -146,13 +146,36 @@ fn write_all(file: &mut File, mut bytes: &[u8]) {
     }
 }
 
+/// When the window should repaint while a PTY is being read.
+#[derive(Debug, Default)]
+pub struct Pacer {
+    painted: Option<Instant>,
+    held: bool,
+}
+
+impl Pacer {
+    pub fn read(&mut self, now: Instant) -> bool {
+        let due = self.painted.is_none_or(|at| now.duration_since(at) >= FRAME);
+        self.held = !due;
+        if due {
+            self.painted = Some(now);
+        }
+        due
+    }
+
+    pub fn drained(&mut self) -> bool {
+        self.painted = None;
+        std::mem::take(&mut self.held)
+    }
+}
+
 fn read_loop(
     id: u64,
     mut file: File,
     session: Arc<FairMutex<Session<Listener>>>,
     proxy: EventLoopProxy<UserEvent>,
 ) {
-    let dirty = AtomicBool::new(false);
+    let mut pacer = Pacer::default();
 
     let Ok(poller) = Poller::new() else {
         let _ = proxy.send_event(UserEvent::Exited(id));
@@ -180,7 +203,7 @@ fn read_loop(
                 }
                 Ok(count) => {
                     session.lock().feed(&buffer[..count], Instant::now());
-                    if !dirty.swap(true, Ordering::Relaxed) {
+                    if pacer.read(Instant::now()) {
                         let _ = proxy.send_event(UserEvent::Redraw);
                     }
                 }
@@ -193,7 +216,9 @@ fn read_loop(
                 }
             }
         }
-        dirty.store(false, Ordering::Relaxed);
+        if pacer.drained() {
+            let _ = proxy.send_event(UserEvent::Redraw);
+        }
         if poller.modify(&file, PollEvent::readable(0)).is_err() {
             break;
         }
