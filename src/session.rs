@@ -29,11 +29,14 @@ pub struct Session<L> {
     prompt_start: Option<Line>,
     /// Columns at the last read: a change means every prompt was rewrapped.
     columns: usize,
+    /// Whether the program is on the alternate screen, which takes its images with it.
+    alt_screen: bool,
 }
 
 impl<L: EventListener> Session<L> {
     pub fn new(term: Term<L>) -> Self {
         Self {
+            alt_screen: term.mode().contains(TermMode::ALT_SCREEN),
             columns: term.grid().columns(),
             term,
             blocks: BlockStore::default(),
@@ -47,7 +50,8 @@ impl<L: EventListener> Session<L> {
     }
 
     pub fn feed(&mut self, bytes: &[u8], now: Instant) {
-        let Self { term, blocks, graphics, replies, notices, parser, scanner, prompt_start, columns } = self;
+        let Self { term, blocks, graphics, replies, notices, parser, scanner, prompt_start, columns, alt_screen } =
+            self;
         let width = term.grid().columns();
         // shortcut: the row counts are read again on the next read, so a frame drawn
         // straight after a resize can still use the wrapping the prompt had before it.
@@ -91,6 +95,12 @@ impl<L: EventListener> Session<L> {
                 }
             }
         });
+        let alt = term.mode().contains(TermMode::ALT_SCREEN);
+        // Leaving the alternate screen leaves its images behind: an app that dies must not ghost.
+        if *alt_screen && !alt {
+            graphics.clear_placements();
+        }
+        *alt_screen = alt;
     }
 }
 
@@ -189,7 +199,9 @@ fn place<L: EventListener>(term: &mut Term<L>, parser: &mut Processor, graphics:
     let here: Vec<u32> = term.grid()[point.line][point.column]
         .zerowidth()
         .map_or(Vec::new(), |extra| extra.iter().filter_map(|ch| picture_anchor(*ch)).collect());
-    let anchor = graphics.place(request, &here);
+    let Some(anchor) = graphics.place(request, &here) else {
+        return;
+    };
     if !here.contains(&anchor) {
         term.grid_mut()[point.line][point.column].push_zerowidth(picture_char(anchor));
     }

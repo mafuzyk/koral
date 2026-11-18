@@ -208,7 +208,7 @@ fn shown(image: u32) -> Request {
 fn an_image_on_screen_survives_a_burst_of_previews() {
     let mut g = graphics();
     transmit_a_fifth(&mut g, 1);
-    let anchor = g.place(shown(1), &[]);
+    let anchor = g.place(shown(1), &[]).expect("a placement");
     for id in 2..=6 {
         transmit_a_fifth(&mut g, id);
     }
@@ -222,9 +222,9 @@ fn an_image_on_screen_survives_a_burst_of_previews() {
 fn a_soft_deleted_image_leaves_before_one_on_screen() {
     let mut g = graphics();
     transmit_a_fifth(&mut g, 1);
-    let anchor = g.place(shown(1), &[]);
+    let anchor = g.place(shown(1), &[]).expect("a placement");
     transmit_a_fifth(&mut g, 2);
-    g.place(shown(2), &[]);
+    g.place(shown(2), &[]).expect("a placement");
     send(&mut g, "a=d,d=i,i=2", &[]);
     for id in 3..=6 {
         transmit_a_fifth(&mut g, id);
@@ -305,8 +305,8 @@ fn a_placement_with_a_number_replaces_the_old_one() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
     let request = Request { image: 1, number: 3, columns: 1, rows: 1, keep_cursor: false, crop: [0, 0, 1, 1] };
-    let first = g.place(request, &[]);
-    let second = g.place(request, &[]);
+    let first = g.place(request, &[]).expect("a placement");
+    let second = g.place(request, &[]).expect("a placement");
     assert_ne!(first, second);
     assert!(g.placement(first).is_none());
     assert!(g.placement(second).is_some());
@@ -317,15 +317,17 @@ fn placing_again_on_the_same_cell_reuses_its_anchor() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
     let request = Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] };
-    let first = g.place(request, &[]);
-    assert_eq!(g.place(request, &[first]), first);
+    let first = g.place(request, &[]).expect("a placement");
+    assert_eq!(g.place(request, &[first]), Some(first));
 }
 
 #[test]
 fn deleting_everything_removes_placements_and_keeps_images() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
-    let anchor = g.place(Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] }, &[]);
+    let anchor = g
+        .place(Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] }, &[])
+        .expect("a placement");
     send(&mut g, "a=d,d=a", &[]);
     assert!(g.placement(anchor).is_none());
     assert!(g.image(1).is_some());
@@ -344,8 +346,10 @@ fn deleting_by_id_leaves_the_others() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
     send(&mut g, "a=t,f=24,s=1,v=1,i=2", &[0; 3]);
-    let one = g.place(Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] }, &[]);
-    let two = g.place(Request { image: 2, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] }, &[]);
+    let one = g.place(Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] }, &[])
+        .expect("a placement");
+    let two = g.place(Request { image: 2, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] }, &[])
+        .expect("a placement");
     send(&mut g, "a=d,d=I,i=1", &[]);
     assert!(g.placement(one).is_none() && g.image(1).is_none());
     assert!(g.placement(two).is_some() && g.image(2).is_some());
@@ -367,4 +371,95 @@ fn a_new_transmission_of_an_id_counts_as_a_new_picture() {
     let first = g.image(1).unwrap().generation;
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[1; 3]);
     assert_ne!(g.image(1).unwrap().generation, first);
+}
+
+/// A thumbnail and the viewer show one transmission in two places.
+#[test]
+fn one_image_shows_in_two_places() {
+    let mut g = graphics();
+    send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
+    let first = g.place(shown(1), &[]).expect("a placement");
+    let second = g.place(shown(1), &[]).expect("a placement");
+    assert_ne!(first, second);
+    assert!(g.placement(first).is_some() && g.placement(second).is_some());
+}
+
+#[test]
+fn a_placement_id_tells_two_placements_of_one_image_apart() {
+    let mut g = graphics();
+    send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
+    let one = g.place(Request { number: 4, ..shown(1) }, &[]).expect("a placement");
+    let two = g.place(Request { number: 5, ..shown(1) }, &[]).expect("a placement");
+    assert!(g.placement(one).is_some() && g.placement(two).is_some());
+}
+
+/// The same placement id is the same placement: the second one replaces the first, as kitty says.
+#[test]
+fn the_same_placement_id_replaces_the_earlier_one() {
+    let mut g = graphics();
+    send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
+    let one = g.place(Request { number: 4, ..shown(1) }, &[]).expect("a placement");
+    let two = g.place(Request { number: 4, ..shown(1) }, &[]).expect("a placement");
+    assert_eq!(g.placement(one), None);
+    assert!(g.placement(two).is_some());
+}
+
+#[test]
+fn a_transmit_then_a_place_shows_the_stored_image() {
+    let mut g = graphics();
+    send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
+    let outcome = send(&mut g, "a=p,i=1,c=2,r=1,C=1", &[]);
+    assert_eq!(outcome.place.expect("a placement").image, 1);
+    assert!(g.image(1).is_some());
+}
+
+/// A smaller re-transmission cannot show through the rectangle the old size asked for.
+#[test]
+fn transmitting_a_different_size_drops_the_placements() {
+    let mut g = graphics();
+    send(&mut g, "a=t,f=24,s=2,v=2,i=1", &[0; 12]);
+    let anchor = g.place(shown(1), &[]).expect("a placement");
+    send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[1; 3]);
+    assert!(g.placement(anchor).is_none());
+    assert!(g.image(1).is_some());
+}
+
+/// The frame contract: repainting the same id at the same size keeps the anchor on its cell.
+#[test]
+fn repainting_an_id_at_the_same_size_keeps_its_placement() {
+    let mut g = graphics();
+    send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
+    let anchor = g.place(shown(1), &[]).expect("a placement");
+    send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[1; 3]);
+    assert!(g.placement(anchor).is_some());
+}
+
+#[test]
+fn a_placement_with_no_cells_is_refused() {
+    let mut g = graphics();
+    send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
+    assert_eq!(g.place(Request { columns: 0, ..shown(1) }, &[]), None);
+    assert_eq!(g.place(Request { rows: 0, ..shown(1) }, &[]), None);
+    assert_eq!(g.tallest(), 0);
+}
+
+#[test]
+fn a_delete_mode_this_terminal_cannot_resolve_answers() {
+    let mut g = graphics();
+    send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
+    let anchor = g.place(shown(1), &[]).expect("a placement");
+    let reply = send(&mut g, "a=d,d=c,i=1", &[]).reply.expect("an answer");
+    assert!(reply.contains("ENOTSUPPORTED"), "{reply:?}");
+    assert!(g.placement(anchor).is_some());
+}
+
+#[test]
+fn a_delete_by_placement_id_leaves_the_other_placements() {
+    let mut g = graphics();
+    send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
+    let one = g.place(Request { number: 4, ..shown(1) }, &[]).expect("a placement");
+    let two = g.place(Request { number: 5, ..shown(1) }, &[]).expect("a placement");
+    send(&mut g, "a=d,d=i,i=1,p=4", &[]);
+    assert!(g.placement(one).is_none());
+    assert!(g.placement(two).is_some());
 }

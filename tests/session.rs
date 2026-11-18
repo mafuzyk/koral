@@ -531,6 +531,30 @@ fn deleting_placements_removes_the_image_from_view() {
     assert!(f.pictures().is_empty());
 }
 
+/// A thumbnail and a viewer show one transmission in two places, so both must survive.
+#[test]
+fn one_transmission_shows_on_two_cells() {
+    let mut f = Fixture::new(20, 10);
+    f.feed("\x1b_Ga=t,f=24,s=2,v=2,i=1,q=2;AAAAAAAAAAAAAAAA\x1b\\");
+    f.feed("\x1b[H\x1b_Ga=p,i=1,c=2,r=2,C=1,q=2\x1b\\");
+    f.feed("\x1b[4;1H\x1b_Ga=p,i=1,c=2,r=2,C=1,q=2\x1b\\");
+    let mut pictures = f.pictures();
+    pictures.sort_by_key(|picture| picture.row);
+    assert_eq!(pictures.len(), 2);
+    assert_eq!((pictures[0].row, pictures[1].row), (0, 3));
+}
+
+#[test]
+fn leaving_the_alternate_screen_takes_its_images_away() {
+    let mut f = Fixture::new(20, 5);
+    f.feed("\x1b[?1049h");
+    f.show("i=1,c=2,r=2,C=1");
+    assert_eq!(f.pictures().len(), 1);
+    f.feed("\x1b[?1049l");
+    assert!(f.pictures().is_empty());
+    assert_eq!(f.session.graphics.tallest(), 0, "the placement outlived the screen");
+}
+
 #[test]
 fn a_video_repainting_one_cell_keeps_one_anchor() {
     let mut f = Fixture::new(20, 5);

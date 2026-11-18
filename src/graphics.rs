@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
-use std::io::{Cursor, Read};
-use std::sync::Arc;
+use std::io::{Cursor, Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
@@ -138,6 +138,11 @@ impl Graphics {
     }
 
     pub fn handle(&mut self, body: &[u8]) -> Outcome {
+        if let Some(rest) = body.strip_prefix(b"G") {
+            let split = rest.iter().position(|byte| *byte == b';');
+            let (control, payload) = split.map_or((rest, &rest[rest.len()..]), |at| (&rest[..at], &rest[at + 1..]));
+            trace(control, payload.len());
+        }
         let Some((sent, payload)) = parse(body) else {
             return Outcome::default();
         };
@@ -166,10 +171,7 @@ impl Graphics {
             return Outcome { reply: reply(keys, Err("ENOTSUPPORTED:only direct transmission")), place: None };
         }
         match keys.action {
-            b'd' => {
-                self.delete(keys);
-                Outcome::default()
-            }
+            b'd' => self.delete(keys),
             b'p' => match self.request(keys, keys.image) {
                 Some(request) => Outcome { reply: reply(keys, Ok(())), place: Some(request) },
                 None => Outcome { reply: reply(keys, Err("ENOENT:no such image")), place: None },
@@ -194,7 +196,14 @@ impl Graphics {
         } else {
             id
         };
+        // A repaint of the same size keeps its placements: video frames and clients that refresh
+        // one spot rely on the anchor staying on its cell. A different size makes the stored cell
+        // rectangle meaningless, so the placements that used it go.
+        let was = self.images.get(&id).map(|image| (image.width, image.height));
         self.forget(id);
+        if was.is_some_and(|size| size != (decoded.width, decoded.height)) {
+            self.placements.retain(|_, placement| placement.image != id);
+        }
 
         self.used += decoded.rgba.len();
         self.order.push_back(id);
@@ -253,9 +262,13 @@ impl Graphics {
     }
 
     /// The anchor for a placement. `here` holds the anchors already on the target
-    /// cell: a video repainting one spot must not pile anchors onto it.
-    pub fn place(&mut self, request: Request, here: &[u32]) -> u32 {
+    /// cell: a video repainting one spot must not pile anchors onto it. A rectangle with
+    /// no cells is refused: it would hold a cell and draw nothing.
+    pub fn place(&mut self, request: Request, here: &[u32]) -> Option<u32> {
         let Request { image, number, columns, rows, crop, .. } = request;
+        if columns == 0 || rows == 0 {
+            return None;
+        }
         let same = |placement: &Placement| placement.image == image && placement.number == number;
         let placement = Placement { image, number, columns, rows, crop };
 
@@ -270,7 +283,7 @@ impl Graphics {
             if old != image && frame(old) && !self.placements.values().any(|placement| placement.image == old) {
                 self.forget(old);
             }
-            return anchor;
+            return Some(anchor);
         }
         if number != 0 {
             self.placements.retain(|_, placement| !same(placement));
@@ -278,11 +291,16 @@ impl Graphics {
         let anchor = self.next_anchor;
         self.next_anchor = (anchor + 1) % ANCHOR_RANGE;
         self.placements.insert(anchor, placement);
-        anchor
+        Some(anchor)
     }
 
     pub fn placement(&self, anchor: u32) -> Option<&Placement> {
         self.placements.get(&anchor)
+    }
+
+    /// Drops every placement and keeps the data, for a screen that goes away under the images.
+    pub fn clear_placements(&mut self) {
+        self.placements.clear();
     }
 
     pub fn image(&self, id: u32) -> Option<&Arc<Image>> {
@@ -299,24 +317,44 @@ impl Graphics {
         self.placements.values().map(|placement| placement.rows as usize).max().unwrap_or(0)
     }
 
-    fn delete(&mut self, keys: Keys) {
-        match keys.delete {
-            b'a' => self.placements.clear(),
-            b'A' => {
+    /// `d` names what to delete. Answering the modes this terminal cannot resolve is the point:
+    /// a client that deletes by position must not leave its image on screen, and must not guess.
+    fn delete(&mut self, keys: Keys) -> Outcome {
+        let free = keys.delete.is_ascii_uppercase();
+        let chosen = |placement: &Placement| keys.number == 0 || placement.number == keys.number;
+        match keys.delete.to_ascii_lowercase() {
+            b'a' => {
                 self.placements.clear();
-                self.images.clear();
-                self.order.clear();
-                self.used = 0;
+                if free {
+                    self.images.clear();
+                    self.order.clear();
+                    self.used = 0;
+                }
             }
-            b'i' | b'I' => {
-                self.placements.retain(|_, placement| placement.image != keys.image);
-                if keys.delete == b'I' {
+            b'i' => {
+                self.placements.retain(|_, placement| placement.image != keys.image || !chosen(placement));
+                if free && !self.placements.values().any(|other| other.image == keys.image) {
                     self.forget(keys.image);
                 }
             }
-            _ => {}
+            _ => return Outcome { reply: reply(keys, Err("ENOTSUPPORTED:delete mode")), place: None },
         }
+        Outcome::default()
     }
+}
+
+/// `KORAL_GRAPHICS_LOG=<path>` appends every command as the client sent it, keys and payload
+/// length, which is the only way to see what a program actually asks this terminal for.
+fn trace(control: &[u8], length: usize) {
+    static LOG: OnceLock<Option<std::fs::File>> = OnceLock::new();
+    let Some(file) = LOG.get_or_init(|| {
+        let path = std::env::var_os("KORAL_GRAPHICS_LOG")?;
+        std::fs::OpenOptions::new().append(true).create(true).open(path).ok()
+    }) else {
+        return;
+    };
+    let mut out = file;
+    let _ = writeln!(out, "{} payload={length}", String::from_utf8_lossy(control));
 }
 
 fn parse(body: &[u8]) -> Option<(Keys, &[u8])> {
