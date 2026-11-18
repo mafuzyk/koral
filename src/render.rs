@@ -613,6 +613,10 @@ impl Renderer {
                 let bottom = ((y + area_height) as u32).min(height);
                 target.set_scissor_rect(left, top, right.saturating_sub(left), bottom.saturating_sub(top));
                 target.set_pipeline(&self.picture_pipeline);
+                // The band after the text inherits glyphon's bind group 0 and vertex buffer unless
+                // each band binds its own: the atlas layout and stride are not ours.
+                target.set_bind_group(0, &self.bind_group, &[]);
+                target.set_vertex_buffer(0, self.quads.slice(..));
                 for index in order {
                     let picture = &drawn[*index];
                     target.set_bind_group(1, &self.textures[&picture.image.generation], &[]);
