@@ -583,6 +583,7 @@ impl Renderer {
         let (face, points, scale) = (&self.face, self.points, self.scale);
         let timed = lag::enabled();
         let mut worst = lag::LineCost::default();
+        let mut worst_line = None;
         let shape_from = Instant::now();
         cost.shaped += self.lines.prepare(&keys, |_, index| {
             let line = &lines[index];
@@ -592,14 +593,30 @@ impl Renderer {
                 let micros = start.elapsed().as_micros() as u64;
                 if micros > worst.micros {
                     worst = describe(line, micros);
+                    worst_line = Some(index);
                 }
             }
             buffer
         });
         if timed {
             cost.shape = lag::millis(shape_from);
-            cost.worst = worst;
+            if let Some(index) = worst_line {
+                // The same line again, warm: a cheap shape says the frame paid for a face, not for the work.
+                let again_from = Instant::now();
+                let buffer = shape(font_system, &lines[index], face, points, scale);
+                worst.again = again_from.elapsed().as_micros() as u64;
+                let families = fonts::families(&self.font_system, &buffer);
+                worst.fallback = families.iter().any(|family| *family != face.family);
+                worst.face = families.join(",");
+            }
             (cost.fresh, cost.again, cost.evicted) = (self.lines.fresh(), self.lines.again(), self.lines.evicted());
+            // What the prepare walks: the more glyphs, the more rasterizing and instances it has to do.
+            cost.glyphs = keys
+                .iter()
+                .filter_map(|key| self.lines.get(key))
+                .map(|buffer| buffer.layout_runs().map(|run| run.glyphs.len()).sum::<usize>())
+                .sum();
+            cost.worst = worst;
         }
 
         let (width, height) = (self.config.width, self.config.height);
@@ -874,11 +891,15 @@ fn describe(line: &TextLine, micros: u64) -> lag::LineCost {
     let mut colors: Vec<(u8, u8, u8)> = line.spans.iter().map(|span| span.color).collect();
     colors.sort_unstable();
     colors.dedup();
+    let codes: Vec<String> =
+        line.spans.iter().flat_map(|span| span.text.chars()).take(lag::CODES).map(|ch| format!("{:x}", ch as u32)).collect();
     lag::LineCost {
         micros,
         chars: line.spans.iter().map(|span| span.text.chars().count()).sum(),
         spans: line.spans.len(),
         colors: colors.len(),
         non_ascii: line.spans.iter().any(|span| !span.text.is_ascii()),
+        codes: codes.join(" "),
+        ..lag::LineCost::default()
     }
 }

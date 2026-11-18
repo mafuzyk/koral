@@ -234,3 +234,27 @@ fn a_font_without_the_styles_asked_for_keeps_all_its_files() {
     let files = listed_files(output, &face());
     assert_eq!(files, [PathBuf::from("/fonts/a.ttf"), PathBuf::from("/fonts/b.ttf")]);
 }
+
+/// The warm-up runs off the frame, so all it must do is leave the system able to draw the sample.
+#[test]
+fn warming_leaves_the_sample_shapeable_again() {
+    use glyphon::{Buffer, Metrics, Shaping};
+    use koral::fonts::{WARM_SAMPLE, full, warm};
+    use koral::render::attrs;
+
+    let mut font_system = full(None, &face());
+    if font_system.db().faces().next().is_none() {
+        // cosmic-text panics with no font installed, and so would the renderer this warms for.
+        return;
+    }
+    let installed = usable(&face(), font_system.db());
+    warm(&mut font_system, &installed, 13.0);
+
+    let pixels: f32 = 13.0 * 96.0 / 72.0;
+    let metrics = Metrics::new(pixels, (pixels * 1.2).round());
+    let mut buffer = Buffer::new(&mut font_system, metrics);
+    buffer.set_text(WARM_SAMPLE, &attrs(&installed, false, false), Shaping::Advanced, None);
+    buffer.shape_until_scroll(&mut font_system, false);
+    let glyphs: usize = buffer.layout_runs().map(|run| run.glyphs.len()).sum();
+    assert_eq!(glyphs, WARM_SAMPLE.chars().count(), "every character of the sample keeps a glyph");
+}

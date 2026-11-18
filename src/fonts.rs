@@ -1,11 +1,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use glyphon::{FontSystem, fontdb};
+use glyphon::{Buffer, FontSystem, Metrics, Shaping, fontdb};
 
 use crate::render::Face;
 
 const LOCALE: &str = "en-US";
+/// The line height the renderer draws with, as a multiple of the font size in pixels.
+const LINE_HEIGHT: f32 = 1.2;
 
 pub fn cache_path() -> Option<PathBuf> {
     let cache = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from);
@@ -189,6 +191,48 @@ fn load(files: Vec<PathBuf>, face: &Face) -> Option<FontSystem> {
     }
     let found = db.faces().any(|info| info.families.iter().any(|(name, _)| *name == face.family));
     found.then(|| FontSystem::new_with_locale_and_db(LOCALE.to_string(), db))
+}
+
+/// Every glyph a screen is likely to ask for, so the first frame that shows a fallback face does not
+/// pay for reading it. One character per block, each picked by asking the db which face draws it:
+/// Latin accents, arrows and box drawing (primary), geometric and dingbats, math operators (primary),
+/// math alphanumerics `𝐀` (Noto Sans Math), misc technical `⏵` (Noto Sans Symbols 2), supplemental
+/// arrows `⤈` (Math), misc symbols `⚙` (Noto Sans Symbols), geometric extended `🞀` (Math), braille
+/// `⣿` and the Nerd Font private use `\u{e0b0}` (primary), and emoji.
+pub const WARM_SAMPLE: &str = "Revisão Migração ação ← → ↑ ↓ ─ │ ┌ ┐ ◆ ◇ ● ○ ✓ ✗ • … ≈ ≠ ≤ ± ∑ 𝐀 ⏵ ✦ ⤈ ⚙ 🞀 ⣿ 😀 🚀 ❤ \u{e0b0}";
+
+/// The families that shaped these glyphs, in the order they appear: the log names them.
+pub fn families(font_system: &FontSystem, buffer: &Buffer) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for run in buffer.layout_runs() {
+        for glyph in run.glyphs {
+            let family = font_system.db().face(glyph.font_id).and_then(|info| info.families.first().map(|(name, _)| name.clone()));
+            if let Some(family) = family
+                && !found.contains(&family)
+            {
+                found.push(family);
+            }
+        }
+    }
+    found
+}
+
+/// Shapes the sample once, so the faces it reaches are loaded before a frame needs them.
+// shortcut: no CJK on purpose. Its face is a 32 MB ttc that a screen without CJK never needs, and a
+// screen that does need it pays 0.18 ms on the first such line, measured. Do not add 漢 here.
+pub fn warm(font_system: &mut FontSystem, face: &Face, points: f32) {
+    let logged = crate::lag::enabled();
+    let start = std::time::Instant::now();
+    let pixels = points * 96.0 / 72.0;
+    let metrics = Metrics::new(pixels, (pixels * LINE_HEIGHT).round());
+    let attrs = crate::render::attrs(face, false, false);
+    let mut buffer = Buffer::new(font_system, metrics);
+    buffer.set_text(WARM_SAMPLE, &attrs, Shaping::Advanced, None);
+    buffer.shape_until_scroll(font_system, false);
+    if logged {
+        let touched = families(font_system, &buffer);
+        crate::lag::warmed(crate::lag::millis(start), &touched, WARM_SAMPLE);
+    }
 }
 
 /// Every font on the system. Reads thousands of file headers, seconds on a cold disk.

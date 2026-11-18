@@ -1030,13 +1030,20 @@ impl ApplicationHandler<UserEvent> for App {
         if quick.is_some() {
             let (proxy, face, cache) = (self.proxy.clone(), face.clone(), cache.clone());
             std::thread::spawn(move || {
-                let fonts = fonts::full(cache.as_deref(), &face);
+                let mut fonts = fonts::full(cache.as_deref(), &face);
+                // Off the window thread: no frame pays for reading the fallback faces.
+                let usable = fonts::usable(&face, fonts.db());
+                fonts::warm(&mut fonts, &usable, points);
                 let list = fonts::monospaced(fonts.db());
                 let _ = proxy.send_event(UserEvent::Fonts(Box::new(fonts), list));
             });
         }
         let fonts = quick.unwrap_or_else(|| {
-            let fonts = fonts::full(cache.as_deref(), &face);
+            let mut fonts = fonts::full(cache.as_deref(), &face);
+            // No cache file and nothing fontconfig knows: this runs before the first frame, so the
+            // same warm-up costs the window thread its start-up rather than a later frame.
+            let usable = fonts::usable(&face, fonts.db());
+            fonts::warm(&mut fonts, &usable, points);
             self.fonts = fonts::monospaced(fonts.db());
             fonts
         });
