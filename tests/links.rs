@@ -32,6 +32,22 @@ fn drops_trailing_punctuation() {
 }
 
 #[test]
+fn keeps_a_closing_bracket_that_opens_one() {
+    assert_eq!(link("https://a.b/(c)", point(0, 8)).unwrap().uri, "https://a.b/(c)");
+}
+
+#[test]
+fn drops_a_closing_bracket_that_opens_nothing() {
+    assert_eq!(link("(https://a.b/c)", point(0, 5)).unwrap().uri, "https://a.b/c");
+}
+
+#[test]
+fn keeps_a_bang_or_a_colon_at_the_end() {
+    assert_eq!(link("https://a.b/c!", point(0, 3)).unwrap().uri, "https://a.b/c!");
+    assert_eq!(link("https://a.b/c:", point(0, 3)).unwrap().uri, "https://a.b/c:");
+}
+
+#[test]
 fn trailing_punctuation_is_not_a_link() {
     assert!(link("see https://a.b/c.", point(0, 17)).is_none());
 }

@@ -8,8 +8,8 @@ use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 
 const SCHEMES: [&str; 4] = ["http", "https", "mailto", "file"];
 const URL: &str = r#"(https?://|mailto:|file:)[^\x00-\x1F\x7F-\x9F<>"\s{}\^`]+"#;
-// shortcut: a closing bracket at the end is always dropped, keep it when the URL opens one if a site needs it.
-const TRAILING: &str = ".,;:!?)";
+// A closing round bracket stays when the URL opens one, as Wikipedia links do.
+const TRAILING: &str = ".,;?";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Link {
@@ -47,7 +47,7 @@ fn plain<L: EventListener>(term: &Term<L>, point: Point) -> Option<Link> {
     let found = RegexIter::new(first, last, Direction::Right, term, &mut regex).find(|found| found.contains(&point))?;
     let grid = term.grid();
     let (start, mut end) = (*found.start(), *found.end());
-    while end > start && TRAILING.contains(grid[end].c) {
+    while end > start && (TRAILING.contains(grid[end].c) || (grid[end].c == ')' && unclosed(term, start, end))) {
         end = end.sub(term, Boundary::Grid, 1);
     }
     if point > end {
@@ -66,6 +66,25 @@ fn plain<L: EventListener>(term: &Term<L>, point: Point) -> Option<Link> {
         at = at.add(term, Boundary::Grid, 1);
     }
     Some(Link { uri, range: start..=end })
+}
+
+/// Whether the range ends with a closing round bracket that opens nothing.
+fn unclosed<L: EventListener>(term: &Term<L>, start: Point, end: Point) -> bool {
+    let grid = term.grid();
+    let (mut opens, mut closes) = (0, 0);
+    let mut at = start;
+    loop {
+        match grid[at].c {
+            '(' => opens += 1,
+            ')' => closes += 1,
+            _ => {}
+        }
+        if at == end {
+            break;
+        }
+        at = at.add(term, Boundary::Grid, 1);
+    }
+    closes > opens
 }
 
 pub fn allowed(uri: &str) -> bool {
