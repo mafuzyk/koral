@@ -131,6 +131,24 @@ fn underline_style(flags: Flags) -> Option<Underline> {
     .find_map(|(flag, style)| flags.contains(flag).then_some(style))
 }
 
+/// Decoration stroke width, and how far above the cell bottom the line sits.
+/// Both follow the cell so an underline stays visible as the font grows.
+pub fn decoration(cell: Cell) -> (f32, f32) {
+    let thickness = (cell.height * 0.08).max(1.0).round();
+    (thickness, (cell.height * 0.12).max(2.0 * thickness))
+}
+
+/// The strike line crosses the middle of the cell.
+pub fn strike(cell: Cell) -> f32 {
+    cell.height / 2.0
+}
+
+/// Drops the font a substitution notice replaced, so the reason fits one line.
+/// Other errors stay whole: the part after a full stop may be the point.
+pub fn brief(message: &str) -> &str {
+    message.find(". Showing ").map_or(message, |end| &message[..=end])
+}
+
 /// The marks of one cell. Dots and curls follow the window position, so neighbours join.
 pub fn underline(style: Underline, x: f32, y: f32, width: f32, thickness: f32, color: [f32; 4]) -> Vec<Quad> {
     let beats = |period: f32, mark: f32| -> Vec<Quad> {
@@ -193,6 +211,25 @@ pub fn draw_terminal<L: EventListener>(
     let columns = grid.columns();
     let colors = term.colors();
     let default_bg = theme.resolve(Color::Named(NamedColor::Background), colors);
+    let (thickness, offset) = decoration(layout.cell);
+    // A solid block hides the glyph under it, so that glyph takes the background colour.
+    let solid = matches!(term.cursor_style().shape, CursorShape::Block);
+    let caret = (scroll == 0 && cursor.visible && term.mode().contains(TermMode::SHOW_CURSOR))
+        .then(|| grid.cursor.point)
+        .and_then(|point| {
+            rows[top..].iter().take(layout.lines()).position(|row| row.line == point.line).map(|index| {
+                let flags = grid[point].flags;
+                // A wide glyph takes two cells: the cursor covers both from the leading one.
+                let (column, wide) = if flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    (point.column.0.saturating_sub(1), 2.0)
+                } else if flags.contains(Flags::WIDE_CHAR) {
+                    (point.column.0, 2.0)
+                } else {
+                    (point.column.0, 1.0)
+                };
+                (index, column, wide)
+            })
+        });
 
     for (index, row) in rows[top..].iter().take(layout.lines()).enumerate() {
         let y = layout.grid_y() + index as f32 * layout.cell.height;
@@ -217,6 +254,13 @@ pub fn draw_terminal<L: EventListener>(
             if cell.flags.contains(Flags::HIDDEN) {
                 fg = bg;
             }
+            if solid
+                && let Some((caret_row, caret_column, _)) = caret
+                && caret_row == index
+                && caret_column == column
+            {
+                fg = bg;
+            }
 
             let x = layout.grid_x() + column as f32 * layout.cell.width;
             let wide = if cell.flags.contains(Flags::WIDE_CHAR) { 2.0 } else { 1.0 };
@@ -227,23 +271,22 @@ pub fn draw_terminal<L: EventListener>(
             } else if bg != default_bg {
                 frame.quads.push(Quad::new(x, y, width, layout.cell.height, rgba(bg, 1.0)));
             }
-            let thickness = layout.scale.max(1.0);
             if let Some(style) = underline_style(cell.flags) {
                 let color = cell.underline_color().map_or(fg, |color| theme.resolve(color, colors));
-                let top = y + layout.cell.height - 3.0 * thickness;
+                let top = y + layout.cell.height - offset;
                 frame.quads.extend(underline(style, x, top, width, thickness, rgba(color, 1.0)));
             }
             if cell.flags.contains(Flags::STRIKEOUT) {
-                let strike = y + layout.cell.height / 2.0;
-                frame.quads.push(Quad::new(x, strike, width, thickness, rgba(fg, 1.0)));
+                frame.quads.push(Quad::new(x, y + strike(layout.cell), width, thickness, rgba(fg, 1.0)));
             }
+            let box_thickness = layout.scale.max(1.0);
 
             let mut text = String::from(shown(cell.c));
             if let Some(extra) = cell.zerowidth() {
                 text.extend(extra.iter());
             }
             let mut text = without_anchors(&text);
-            if let Some(quads) = boxes::quads(cell.c, x, y, width, layout.cell.height, thickness, rgba(fg, 1.0)) {
+            if let Some(quads) = boxes::quads(cell.c, x, y, width, layout.cell.height, box_thickness, rgba(fg, 1.0)) {
                 frame.quads.extend(quads);
                 text = " ".to_string();
             }
@@ -282,12 +325,9 @@ pub fn draw_terminal<L: EventListener>(
 
     frame.pictures.over = frame.quads.len();
 
-    if scroll == 0 && cursor.visible && term.mode().contains(TermMode::SHOW_CURSOR) {
-        let point = grid.cursor.point;
-        let position = rows[top..].iter().take(layout.lines()).position(|row| row.line == point.line);
-        if let Some(index) = position {
-            draw_cursor(frame, term, index, point.column.0, cursor.focused, layout, theme);
-        }
+    if let Some((index, column, wide)) = caret {
+        let shape = term.cursor_style().shape;
+        draw_cursor(frame, shape, index, column, layout.cell.width * wide, cursor.focused, layout, theme);
     }
 
     if let Some(block) = pinned(rows, top, blocks).and_then(|id| blocks.get(id)) {
@@ -500,16 +540,17 @@ pub fn cursor_position<L: EventListener>(term: &Term<L>, rows: &[Row], scroll: u
 // shortcut: counts characters as one cell each, wide scripts underline short.
 pub fn draw_preedit(frame: &mut Frame, text: &str, x: f32, y: f32, layout: Layout, theme: &Theme) {
     let width = text.chars().count() as f32 * layout.cell.width;
-    let thickness = layout.scale.max(1.0);
-    frame.quads.push(Quad::new(x, y + layout.cell.height - 2.0 * thickness, width, thickness, rgba(theme.accent, 1.0)));
+    let (thickness, offset) = decoration(layout.cell);
+    frame.quads.push(Quad::new(x, y + layout.cell.height - offset, width, thickness, rgba(theme.accent, 1.0)));
     frame.lines.push(TextLine { x, y, small: false, spans: vec![Span::plain(text.to_string(), theme.foreground)] });
 }
 
-fn draw_cursor<L>(
+fn draw_cursor(
     frame: &mut Frame,
-    term: &Term<L>,
+    shape: CursorShape,
     index: usize,
     column: usize,
+    width: f32,
     focused: bool,
     layout: Layout,
     theme: &Theme,
@@ -518,8 +559,8 @@ fn draw_cursor<L>(
     let y = layout.grid_y() + index as f32 * layout.cell.height;
     let thickness = (2.0 * layout.scale).round();
     let color = rgba(theme.cursor, if focused { 0.9 } else { 0.4 });
-    let (width, height) = (layout.cell.width, layout.cell.height);
-    frame.quads.push(match term.cursor_style().shape {
+    let height = layout.cell.height;
+    frame.quads.push(match shape {
         CursorShape::Beam => Quad::new(x, y, thickness, height, color),
         CursorShape::Underline => Quad::new(x, y + height - thickness, width, thickness, color),
         CursorShape::Hidden => return,
@@ -572,6 +613,13 @@ pub fn draw_settings(
         shape: Shape::Rounded { radius: 10.0 * scale },
     });
 
+    frame.lines.push(TextLine {
+        x: area.x + inset,
+        y: area.y + (area.row_height - layout.cell.height) / 2.0,
+        small: false,
+        spans: vec![Span::plain("Settings", theme.foreground)],
+    });
+
     if let Some(picker) = &settings.picker {
         draw_picker(frame, settings, picker, config, area, layout, theme);
         return;
@@ -579,7 +627,7 @@ pub fn draw_settings(
 
     let small_cell = layout.cell.width * 0.82;
     for (index, field) in FIELDS.iter().enumerate() {
-        let top = area.y + index as f32 * area.row_height;
+        let top = area.y + (index + 1) as f32 * area.row_height;
         let y = top + (area.row_height - layout.cell.height) / 2.0;
         let selected = index == settings.selected;
         if selected {
@@ -618,6 +666,14 @@ pub fn draw_settings(
             (Kind::Toggle, _) => {
                 let on = value(index, config) == "on";
                 let (width, height, gap) = (30.0 * scale, 16.0 * scale, 3.0 * scale);
+                let state = if on { "on" } else { "off" };
+                let state_width = state.chars().count() as f32 * small_cell;
+                frame.lines.push(TextLine {
+                    x: right - width - 8.0 * scale - state_width,
+                    y,
+                    small: true,
+                    spans: vec![Span::plain(state, theme.muted)],
+                });
                 let track = top + (area.row_height - height) / 2.0;
                 let knob = height - gap * 2.0;
                 frame.quads.push(Quad {
@@ -663,7 +719,7 @@ pub fn draw_settings(
 
     let kind = FIELDS[settings.selected].kind;
     let (hint, color) = match (error, settings.editing.is_some()) {
-        (Some(message), _) => (message, theme.failure),
+        (Some(message), _) => (brief(message), theme.failure),
         (None, true) => ("Enter saves. Esc cancels.", theme.muted),
         (None, false) if kind == Kind::Toggle => ("Colours update on each matugen run.", theme.muted),
         (None, false) if kind == Kind::Font => ("Enter lists the installed fonts.", theme.muted),
@@ -695,7 +751,8 @@ fn draw_picker(frame: &mut Frame, settings: &Settings, picker: &Picker, config: 
     let inset = 14.0 * scale;
     let small_cell = layout.cell.width * 0.82;
     let room = ((area.width - inset * 2.0) / small_cell) as usize;
-    let text_y = |row: usize| area.y + row as f32 * area.row_height + (area.row_height - layout.cell.height) / 2.0;
+    // The list starts under the title, the hint takes the last row.
+    let text_y = |row: usize| area.y + (row + 1) as f32 * area.row_height + (area.row_height - layout.cell.height) / 2.0;
 
     let found = settings.found();
     for (row, index) in visible(picker.selected, found.len()).enumerate() {

@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use alacritty_terminal::event::VoidListener;
+use alacritty_terminal::index::Column;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::Rgb;
@@ -72,8 +73,70 @@ fn drawn(text: &str) -> Frame {
     frame
 }
 
+fn drawn_with_caret(text: &str, column: usize) -> Frame {
+    let term = Term::new(Config::default(), &TermSize::new(20, 5), VoidListener);
+    let mut session = Session::new(term);
+    session.feed(text.as_bytes(), Instant::now());
+    session.term.grid_mut().cursor.point.column = Column(column);
+    let rows = rows(&session.term, &session.blocks);
+    let mut frame = Frame::default();
+    let cursor = CursorView { focused: true, visible: true };
+    draw_terminal(&mut frame, &session.term, &session.blocks, &rows, 0, cursor, layout(), &Theme::default());
+    frame
+}
+
 fn covered(quads: &[Quad]) -> f32 {
     quads.iter().map(|quad| quad.width).sum()
+}
+
+fn cell(width: f32, height: f32) -> koral::render::Cell {
+    koral::render::Cell { width, height }
+}
+
+#[test]
+fn decorations_grow_with_the_cell() {
+    let (thin, offset) = koral::frame::decoration(cell(8.0, 20.0));
+    let (thick, _) = koral::frame::decoration(cell(16.0, 40.0));
+    assert!(thin >= 1.0);
+    assert!(thick > thin);
+    assert!(offset >= thin);
+    assert!(offset + thin <= 20.0);
+}
+
+#[test]
+fn a_strike_line_sits_at_the_middle_of_the_cell() {
+    assert_eq!(koral::frame::strike(cell(10.0, 20.0)), 10.0);
+    assert_eq!(koral::frame::strike(cell(10.0, 34.0)), 17.0);
+}
+
+#[test]
+fn an_underline_hangs_above_the_cell_bottom() {
+    let frame = drawn("\x1b[4mx");
+    let (thickness, offset) = koral::frame::decoration(layout().cell);
+    let expected = layout().grid_y() + layout().cell.height - offset;
+    assert!(frame.quads.iter().any(|quad| quad.y == expected && quad.height == thickness));
+}
+
+#[test]
+fn a_strikeout_crosses_the_letters() {
+    let frame = drawn("\x1b[9mx");
+    let (thickness, _) = koral::frame::decoration(layout().cell);
+    let expected = layout().grid_y() + koral::frame::strike(layout().cell);
+    assert!(frame.quads.iter().any(|quad| quad.y == expected && quad.height == thickness));
+}
+
+#[test]
+fn every_underline_style_draws_a_different_line() {
+    let marks = [Underline::Single, Underline::Double, Underline::Curl, Underline::Dotted, Underline::Dashed]
+        .map(|style| underline(style, 0.0, 10.0, 40.0, 1.0, INK).len());
+    assert_eq!(marks, [1, 2, 40, 20, 7]);
+}
+
+#[test]
+fn a_hint_keeps_its_point() {
+    assert_eq!(koral::frame::brief("Can't use Missing. Showing Iosevka."), "Can't use Missing.");
+    assert_eq!(koral::frame::brief("Not saved: no config folder"), "Not saved: no config folder");
+    assert_eq!(koral::frame::brief("Not saved: disk full. Retry."), "Not saved: disk full. Retry.");
 }
 
 #[test]
@@ -124,6 +187,32 @@ fn a_drawn_box_leaves_no_glyph() {
     let text: String = frame.lines.iter().flat_map(|line| &line.spans).map(|span| span.text.as_str()).collect();
     assert_eq!(text, "a b");
     assert!(frame.quads.iter().any(|quad| quad.height == 20.0 && quad.x > 0.0));
+}
+
+#[test]
+fn a_block_cursor_covers_exactly_one_cell() {
+    let frame = drawn("x");
+    let cursor = layout().grid_x() + layout().cell.width;
+    assert!(frame.quads.iter().any(|quad| {
+        quad.x == cursor && quad.width == layout().cell.width && quad.height == layout().cell.height
+    }));
+}
+
+#[test]
+fn a_wide_glyph_takes_a_two_cell_cursor() {
+    let frame = drawn_with_caret("日", 0);
+    assert!(frame.quads.iter().any(|quad| {
+        quad.x == layout().grid_x() && quad.width == 2.0 * layout().cell.width && quad.height == layout().cell.height
+    }));
+    assert!(frame.quads.iter().all(|quad| quad.height <= layout().cell.height));
+}
+
+#[test]
+fn a_block_cursor_lets_the_glyph_fall_back_to_the_background() {
+    let frame = drawn_with_caret("x", 0);
+    let ink = frame.lines.iter().flat_map(|line| &line.spans).find(|span| span.text == "x").map(|span| span.color);
+    let background = Theme::default().background;
+    assert_eq!(ink, Some((background.r, background.g, background.b)));
 }
 
 #[test]
