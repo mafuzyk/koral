@@ -146,6 +146,37 @@ fn asking_for(family: &str) -> Face {
     Face { family: family.to_string(), weight: 400, bold: 400, bold_italic: 400, oblique: false }
 }
 
+/// A plain monospace next to the two Nerd Font patches a terminal may meet.
+fn icon_system() -> Database {
+    let mut db = Database::new();
+    db.load_font_data(font("DejaVu Sans Mono", 600, 600));
+    db.load_font_data(font("JetBrainsMono Nerd Font", 600, 600));
+    db.load_font_data(font("JetBrainsMono Nerd Font Mono", 600, 600));
+    db
+}
+
+#[test]
+fn a_missing_font_becomes_the_icon_font_when_one_is_installed() {
+    let mut db = icon_system();
+    db.set_monospace_family("DejaVu Sans Mono");
+    assert_eq!(usable(&asking_for("Monocraft"), &db), asking_for("JetBrainsMono Nerd Font Mono"));
+}
+
+#[test]
+fn a_proportional_font_still_becomes_the_icon_font() {
+    let mut db = icon_system();
+    db.load_font_data(font("Zed Sans", 300, 800));
+    assert_eq!(usable(&asking_for("Zed Sans"), &db), asking_for("JetBrainsMono Nerd Font Mono"));
+}
+
+#[test]
+fn an_icon_font_off_the_grid_is_not_a_substitute() {
+    let mut db = Database::new();
+    db.load_font_data(font("DejaVu Sans Mono", 600, 600));
+    db.load_font_data(font("Symbols Nerd Font Mono", 300, 900));
+    assert_eq!(usable(&asking_for("Monocraft"), &db), asking_for("DejaVu Sans Mono"));
+}
+
 fn family(faces: &[(u16, bool)]) -> Database {
     let mut db = Database::new();
     for (weight, oblique) in faces {
