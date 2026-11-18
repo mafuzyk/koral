@@ -4,6 +4,11 @@ version = "1.0.3"
 edition = "2024"
 description = "A Rust terminal with native sharky shell support"
 license = "GPL-3.0-only"
+repository = "https://github.com/mafuzyk/koral"
+homepage = "https://github.com/mafuzyk/koral"
+keywords = ["terminal", "wayland", "wgpu"]
+categories = ["command-line-interface"]
+rust-version = "1.85"
 publish = false
 
 [dependencies]

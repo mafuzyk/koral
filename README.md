@@ -15,12 +15,14 @@ Koral runs on Linux under Wayland and is developed on Hyprland.
 yay -S koral-bin
 ```
 
-To build from source:
+To build from source (edition 2024, Rust >= 1.85):
 
 ```sh
 cargo build --release
 ./target/release/koral
 ```
+
+With Nix: `nix run .` builds and starts Koral, `nix build .#` builds it in the store.
 
 The default font is IosevkaTerm Nerd Font Mono. The settings panel lists the fixed-width fonts on your system. A font that is missing or proportional is replaced by a fixed-width one, and the panel says so.
 
@@ -69,7 +71,8 @@ polyp shell /usr/bin/sharky
 polyp matugen on
 ```
 
-Weights go from 100 to 900, and `italic_style` is `oblique` or `italic`. The file
+`font_weight`, `bold_weight`, `bold_italic_weight` and `italic_style` are file-only
+settings. Weights go from 100 to 900, and `italic_style` is `oblique` or `italic`. The file
 uses sharky's config language. Colours come from `theme.sharky`, with
 `wave terminal.background @abyss` and the like.
 
@@ -78,9 +81,9 @@ colours from the next wallpaper change.
 
 ## Without sharky
 
-Koral starts sharky when it finds it, and `$SHELL` otherwise. Any shell works as a
-plain terminal with tabs, search, links, images and video. Folds, status and prompt
-jumps need the marks sharky prints.
+The shell comes from `$KORAL_SHELL`, then the `shell` config key, then sharky if found on
+`PATH`, then `$SHELL`. Any shell works as a plain terminal with tabs, search, links, images
+and video. Folds, status and prompt jumps need the marks sharky prints.
 
 ## Images and video
 
