@@ -1,5 +1,5 @@
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Instant;
@@ -17,7 +17,75 @@ use crate::lag;
 
 const LINE_HEIGHT: f32 = 1.2;
 const SMALL: f32 = 0.82;
-const MAX_CACHED_LINES: usize = 4_000;
+pub const MAX_CACHED_LINES: usize = 4_000;
+/// Evicting down to here leaves about twenty screens of headroom, so the next screens fill the cache
+/// again instead of evicting on every line.
+const EVICT_TO: usize = MAX_CACHED_LINES * 3 / 4;
+
+/// The shaped lines, by a hash of what they say. Bounded by eviction, never by emptying: a screen
+/// of unseen lines must not cost the lines of the screen before it, and the frame being drawn keeps
+/// its own.
+pub struct LineCache<V> {
+    entries: HashMap<u64, V>,
+    /// Insertion order, the oldest first: what to evict when the cap is reached.
+    order: VecDeque<u64>,
+}
+
+impl<V> Default for LineCache<V> {
+    fn default() -> Self {
+        Self { entries: HashMap::new(), order: VecDeque::new() }
+    }
+}
+
+impl<V> LineCache<V> {
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn get(&self, key: &u64) -> Option<&V> {
+        self.entries.get(key)
+    }
+
+    /// The entry for every key, shaping the ones it lacks with `shape`. Returns how many it shaped:
+    /// a key is shaped once however often it repeats in the frame.
+    pub fn prepare(&mut self, keys: &[u64], mut shape: impl FnMut(&u64, usize) -> V) -> usize {
+        debug_assert_eq!(self.order.len(), self.entries.len(), "the order holds every key once");
+        let mut shaped = 0;
+        for (index, key) in keys.iter().enumerate() {
+            if self.entries.contains_key(key) {
+                continue;
+            }
+            let entry = shape(key, index);
+            self.entries.insert(*key, entry);
+            self.order.push_back(*key);
+            shaped += 1;
+        }
+        self.evict(keys);
+        shaped
+    }
+
+    /// Drops the oldest lines this frame is not showing, down to `EVICT_TO`. A frame larger than the
+    /// cap keeps itself whole: those lines would have to be shaped again on the next frame, which is
+    /// the cost eviction exists to avoid.
+    fn evict(&mut self, frame: &[u64]) {
+        if self.entries.len() <= MAX_CACHED_LINES {
+            return;
+        }
+        let shown: HashSet<u64> = frame.iter().copied().collect();
+        // One pass at most: a cache of nothing but this frame's lines has nothing to evict.
+        for _ in 0..self.order.len() {
+            if self.entries.len() <= EVICT_TO {
+                break;
+            }
+            let Some(key) = self.order.pop_front() else { break };
+            if shown.contains(&key) {
+                self.order.push_back(key);
+                continue;
+            }
+            self.entries.remove(&key);
+        }
+    }
+}
 
 const SHADER: &str = r#"
 struct Globals { size: vec2<f32>, unused: vec2<f32> };
@@ -259,7 +327,7 @@ pub struct Renderer {
     viewport: Viewport,
     atlas: TextAtlas,
     text: TextRenderer,
-    lines: HashMap<u64, Buffer>,
+    lines: LineCache<Buffer>,
     wanted: Face,
     face: Face,
     points: f32,
@@ -389,7 +457,7 @@ impl Renderer {
             viewport,
             atlas,
             text,
-            lines: HashMap::new(),
+            lines: LineCache::default(),
             wanted,
             face,
             points,
@@ -440,7 +508,7 @@ impl Renderer {
 
     fn remeasure(&mut self) {
         self.cell = measure(&mut self.font_system, &self.face, self.points, self.scale);
-        self.lines.clear();
+        self.lines = LineCache::default();
     }
 
     fn upload(&mut self, image: &Image) {
@@ -479,18 +547,9 @@ impl Renderer {
         let text_from = Instant::now();
         cost.lines = lines.len();
         let keys: Vec<u64> = lines.iter().map(line_key).collect();
-        // A screen of symbols repeats its pieces: counting them all would empty the cache each frame.
-        let new: HashSet<&u64> = keys.iter().filter(|key| !self.lines.contains_key(*key)).collect();
-        if self.lines.len() + new.len() > MAX_CACHED_LINES {
-            self.lines.clear();
-        }
-        for (key, line) in keys.iter().zip(lines) {
-            if !self.lines.contains_key(key) {
-                let buffer = shape(&mut self.font_system, line, &self.face, self.points, self.scale);
-                self.lines.insert(*key, buffer);
-                cost.shaped += 1;
-            }
-        }
+        let font_system = &mut self.font_system;
+        let (face, points, scale) = (&self.face, self.points, self.scale);
+        cost.shaped += self.lines.prepare(&keys, |_, index| shape(font_system, &lines[index], face, points, scale));
 
         let (width, height) = (self.config.width, self.config.height);
         self.viewport.update(&self.queue, Resolution { width, height });
@@ -499,7 +558,7 @@ impl Renderer {
         let areas = keys.iter().zip(lines).enumerate().map(|(index, (key, line))| {
             let clipped = index < clip.count && (clip.top..clip.bottom).contains(&line.y);
             TextArea {
-                buffer: &cached[key],
+                buffer: cached.get(key).expect("prepare holds every line of the frame"),
                 left: line.x,
                 top: line.y,
                 scale: 1.0,

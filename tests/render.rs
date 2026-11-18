@@ -8,7 +8,7 @@ use alacritty_terminal::vte::ansi::Rgb;
 use koral::blocks::Activity;
 use koral::frame::{Chrome, CursorView, Frame, TabView, Underline, draw_chrome, draw_terminal, underline};
 use glyphon::{Style, Weight};
-use koral::render::{Face, Quad, attrs, rgba, surface_format};
+use koral::render::{Face, LineCache, MAX_CACHED_LINES, Quad, attrs, rgba, surface_format};
 use koral::session::Session;
 use koral::theme::Theme;
 use koral::view::rows;
@@ -405,4 +405,60 @@ fn plain_and_accented_text_stay_in_one_piece() {
 #[test]
 fn spaces_after_a_symbol_draw_nothing() {
     assert_eq!(pieces("❯   "), [(0, "❯".to_string())]);
+}
+
+/// The shape closure of these tests: the entry is the key itself.
+fn shape_into(cache: &mut LineCache<u64>, keys: &[u64]) -> usize {
+    cache.prepare(keys, |key, _| *key)
+}
+
+/// A TUI grows the cache every frame it scrolls. Passing the cap must cost the oldest lines, not
+/// the whole cache: emptying it is what re-shaped a screen on a tab switch.
+#[test]
+fn a_full_cache_loses_its_oldest_lines_instead_of_going_wholesale() {
+    let mut cache: LineCache<u64> = LineCache::default();
+    let first: Vec<u64> = (0..MAX_CACHED_LINES as u64).collect();
+    assert_eq!(shape_into(&mut cache, &first), first.len());
+
+    let next: Vec<u64> = (1_000_000..1_000_100).collect();
+    assert_eq!(shape_into(&mut cache, &next), next.len());
+
+    assert!(cache.get(&(MAX_CACHED_LINES as u64 - 1)).is_some(), "the remains of the previous screen are still shaped");
+    assert!(cache.get(&0).is_none(), "the oldest lines made room for the new ones");
+    assert!(cache.len() <= MAX_CACHED_LINES, "the cache stays under the cap");
+}
+
+#[test]
+fn a_repeated_key_is_shaped_once() {
+    let mut cache: LineCache<u64> = LineCache::default();
+    assert_eq!(shape_into(&mut cache, &[7, 7, 7]), 1, "a key repeating in a frame is one line");
+    assert_eq!(shape_into(&mut cache, &[7, 7, 7]), 0, "a cached line is not shaped again");
+    assert_eq!(cache.len(), 1);
+}
+
+#[test]
+fn the_frame_being_drawn_is_never_evicted() {
+    let mut cache: LineCache<u64> = LineCache::default();
+    let frame: Vec<u64> = (0..MAX_CACHED_LINES as u64 * 2).collect();
+    assert_eq!(shape_into(&mut cache, &frame), frame.len());
+    assert!(frame.iter().all(|key| cache.get(key).is_some()), "a frame larger than the cap keeps every line of itself");
+    assert_eq!(cache.len(), frame.len(), "and holds nothing else");
+}
+
+#[test]
+fn the_cache_stays_under_the_cap_across_screens() {
+    let mut cache: LineCache<u64> = LineCache::default();
+    for screen in 0..200u64 {
+        let keys: Vec<u64> = (0..50).map(|key| screen * 50 + key).collect();
+        shape_into(&mut cache, &keys);
+    }
+    assert!(cache.len() <= MAX_CACHED_LINES, "200 screens do not outgrow the cap: {}", cache.len());
+}
+
+#[test]
+fn eviction_leaves_the_screen_it_just_drew() {
+    let mut cache: LineCache<u64> = LineCache::default();
+    let screen: Vec<u64> = (0..MAX_CACHED_LINES as u64 + 200).collect();
+    assert_eq!(shape_into(&mut cache, &screen), screen.len());
+    assert_eq!(shape_into(&mut cache, &screen), 0, "the screen that triggered an eviction is shaped nothing");
 }
