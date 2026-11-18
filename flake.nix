@@ -48,7 +48,7 @@
           version = releaseVersion;
           src = pkgs.fetchurl {
             url = "https://github.com/mafuzyk/koral/releases/download/v${releaseVersion}/koral-x86_64-linux.tar.gz";
-            hash = "sha256-hO+RBul69zb3pLjjLs/6pLWEJ8qPyyw9ZoG4wAmpq9M=";
+            hash = "sha256-76hjmEbbj7t/suESixIXs5jsBIzZubhEnwFinqCQDYU=";
           };
 
           nativeBuildInputs = with pkgs; [ autoPatchelfHook makeWrapper ];
