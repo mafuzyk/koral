@@ -440,21 +440,13 @@ pub fn draw_link_bar(frame: &mut Frame, uri: &str, layout: Layout, theme: &Theme
     frame.lines.push(TextLine { x: x + inset, y, small: false, spans: vec![Span::plain(shown, theme.foreground)] });
 }
 
-/// Keeps the image's shape inside the cells it was given.
-// shortcut: c and r that ask for a stretch are ignored, honour them if a program needs it.
-pub fn fit_picture(image: (u32, u32), area: (f32, f32)) -> (f32, f32) {
-    let (width, height) = (image.0 as f32, image.1 as f32);
-    let scale = (area.0 / width).min(area.1 / height);
-    (width * scale, height * scale)
-}
-
 /// The size a placement draws at, and the part of the image it shows as offset and scale.
+/// The cells the client asked for are the size: `fitted_columns`/`fitted_rows` already gave the
+/// rectangle the image's aspect when only one of them was named, so filling it loses nothing.
 pub fn picture_box(image: (u32, u32), crop: [u32; 4], area: (f32, f32)) -> ((f32, f32), [f32; 4]) {
     let [x, y, width, height] = crop;
     let (whole_width, whole_height) = (image.0 as f32, image.1 as f32);
-    // A tile of a larger picture: keeping its shape would open seams between the cells.
-    let size = if (width, height) == image { fit_picture(image, area) } else { area };
-    (size, [x as f32 / whole_width, y as f32 / whole_height, width as f32 / whole_width, height as f32 / whole_height])
+    (area, [x as f32 / whole_width, y as f32 / whole_height, width as f32 / whole_width, height as f32 / whole_height])
 }
 
 pub fn draw_pictures<L: EventListener>(

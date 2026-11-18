@@ -25,15 +25,9 @@ fn a_surface_without_bgra_uses_rgba() {
 }
 
 #[test]
-fn a_picture_keeps_its_shape_inside_its_cells() {
-    assert_eq!(koral::frame::fit_picture((100, 50), (100.0, 60.0)), (100.0, 50.0));
-    assert_eq!(koral::frame::fit_picture((16, 16), (8.0, 24.0)), (8.0, 8.0));
-}
-
-#[test]
-fn a_whole_image_keeps_its_shape_and_shows_everything() {
+fn a_whole_image_fills_the_rect_it_was_given() {
     let (size, crop) = koral::frame::picture_box((100, 50), [0, 0, 100, 50], (100.0, 60.0));
-    assert_eq!(size, (100.0, 50.0));
+    assert_eq!(size, (100.0, 60.0));
     assert_eq!(crop, [0.0, 0.0, 1.0, 1.0]);
 }
 
@@ -47,6 +41,71 @@ fn a_cropped_tile_fills_its_cells_so_no_seam_shows() {
 fn layout() -> koral::frame::Layout {
     let cell = koral::render::Cell { width: 10.0, height: 20.0 };
     koral::frame::Layout { width: 800.0, height: 600.0, scale: 1.0, padding: 0.0, cell }
+}
+
+/// The cells a screenshot is drawn in, at the size the placement math assumes. The window height
+/// matches the forty rows the fixtures use, so the first row is the top of the view.
+fn picture_layout() -> koral::frame::Layout {
+    let cell = koral::render::Cell { width: 9.0, height: 22.0 };
+    koral::frame::Layout { width: 1200.0, height: 918.0, scale: 1.0, padding: 0.0, cell }
+}
+
+fn deflated(width: u32, height: u32) -> String {
+    use std::io::Write;
+
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(&vec![180; (width * height * 4) as usize]).unwrap();
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(encoder.finish().unwrap())
+}
+
+/// Transmits a solid picture and places it, then draws the frame, so the rect can be read back.
+fn picture_frame(width: u32, height: u32, place: &str, layout: koral::frame::Layout) -> Frame {
+    let term = Term::new(Config::default(), &TermSize::new(140, 40), VoidListener);
+    let mut session = Session::new(term);
+    session.graphics.set_cell(layout.cell.width as u32, layout.cell.height as u32);
+    let payload = deflated(width, height);
+    let transmit = format!("\x1b_Ga=t,f=32,s={width},v={height},o=z,i=1,q=2;{payload}\x1b\\");
+    let place = format!("\x1b_Ga=p,i=1,{place}\x1b\\");
+    session.feed(transmit.as_bytes(), Instant::now());
+    session.feed(place.as_bytes(), Instant::now());
+    let rows = rows(&session.term, &session.blocks);
+    let mut frame = Frame::default();
+    koral::frame::draw_pictures(&mut frame, &session.term, &session.graphics, &rows, 0, layout);
+    frame
+}
+
+#[test]
+fn a_large_picture_fills_the_cells_it_was_placed_in() {
+    let layout = picture_layout();
+    let frame = picture_frame(1920, 1080, "c=100,r=40,C=1,q=2", layout);
+    let picture = &frame.pictures.list[0];
+    assert_eq!((picture.width, picture.height), (900.0, 880.0));
+    assert_eq!((picture.x, picture.y), (layout.grid_x(), layout.grid_y()));
+}
+
+#[test]
+fn a_picture_smaller_than_its_cells_is_scaled_up() {
+    let frame = picture_frame(100, 50, "c=100,r=40,C=1,q=2", picture_layout());
+    assert_eq!((frame.pictures.list[0].width, frame.pictures.list[0].height), (900.0, 880.0));
+}
+
+#[test]
+fn a_picture_past_the_last_column_is_cut_by_the_view_not_sized_by_it() {
+    let layout = picture_layout();
+    let frame = picture_frame(1920, 1080, "c=200,r=40,C=1,q=2", layout);
+    let picture = &frame.pictures.list[0];
+    assert_eq!(picture.width, 1800.0);
+    let [_, _, area_width, _] = frame.pictures.area;
+    assert!(picture.x + picture.width > layout.grid_x() + area_width, "the viewport is the clip");
+}
+
+#[test]
+fn only_columns_gives_the_rows_the_image_aspect_needs() {
+    let layout = picture_layout();
+    let frame = picture_frame(1920, 1080, "c=50,C=1,q=2", layout);
+    let picture = &frame.pictures.list[0];
+    assert_eq!((picture.width, picture.height), (450.0, 264.0));
 }
 
 #[test]
