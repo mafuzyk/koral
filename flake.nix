@@ -1,6 +1,7 @@
 # koral-bin is the default package and points at the current release tarball.
-# For a new release, bump Cargo.toml, `version`, `releaseVersion` and the hash together,
-# tag, and let CI publish the tarball.
+# For a new release, bump Cargo.toml, `version`, `releaseVersion` and the tarball
+# hash together, refresh `cargoHash` (the lock changes with the bump), tag, and
+# let CI publish the tarball.
 {
   description = "A Rust terminal with native sharky shell support";
 
@@ -21,7 +22,7 @@
           inherit version;
           src = self;
 
-          cargoHash = "sha256-Dwf0FVf98yrctbz0Vezj3pWN4T8FP2bgUaI6kRNpCVI=";
+          cargoHash = "sha256-wG2/H3S2mjn5mjMwOyxd/8+/ykwy5od2Es2o3EP/Aho=";
 
           nativeBuildInputs = with pkgs; [ pkg-config makeWrapper ];
           buildInputs = with pkgs; [ libxkbcommon wayland fontconfig vulkan-loader libGL ];
