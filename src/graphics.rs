@@ -27,12 +27,34 @@ pub struct Request {
     pub keep_cursor: bool,
     /// The part of the image to show: x, y, width and height in pixels.
     pub crop: [u32; 4],
+    /// The stacking order: below zero is under the text.
+    pub z: i32,
+}
+
+/// Where a delete command points, in screen cells counting from the top left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Area {
+    /// The cell the cursor is on.
+    Cursor,
+    /// One cell, and the z-index it must have when the client named one.
+    Cell { column: u32, row: u32, z: Option<i32> },
+    Column(u32),
+    Row(u32),
+    Z(i32),
+}
+
+/// A delete command the grid has to resolve: the cells live in the terminal, not here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Delete {
+    pub area: Area,
+    pub free: bool,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Outcome {
     pub reply: Option<String>,
     pub place: Option<Request>,
+    pub delete: Option<Delete>,
 }
 
 pub struct Image {
@@ -49,6 +71,7 @@ pub struct Placement {
     pub columns: u32,
     pub rows: u32,
     pub crop: [u32; 4],
+    pub z: i32,
 }
 
 #[derive(Clone, Copy)]
@@ -68,6 +91,7 @@ struct Keys {
     crop: [u32; 4],
     delete: u8,
     more: bool,
+    z: i32,
 }
 
 impl Default for Keys {
@@ -88,6 +112,7 @@ impl Default for Keys {
             crop: [0; 4],
             delete: b'a',
             more: false,
+            z: 0,
         }
     }
 }
@@ -168,24 +193,24 @@ impl Graphics {
         // Reading paths or shared memory would let any printed file read this machine, so a medium
         // that carries data must be answered with an error instead of being dropped.
         if matches!(keys.action, b't' | b'T' | b'q') && keys.medium != b'd' {
-            return Outcome { reply: reply(keys, Err("ENOTSUPPORTED:only direct transmission")), place: None };
+            return Outcome { reply: reply(keys, Err("ENOTSUPPORTED:only direct transmission")), place: None, delete: None };
         }
         match keys.action {
             b'd' => self.delete(keys),
             b'p' => match self.request(keys, keys.image) {
-                Some(request) => Outcome { reply: reply(keys, Ok(())), place: Some(request) },
-                None => Outcome { reply: reply(keys, Err("ENOENT:no such image")), place: None },
+                Some(request) => Outcome { reply: reply(keys, Ok(())), place: Some(request), delete: None },
+                None => Outcome { reply: reply(keys, Err("ENOENT:no such image")), place: None, delete: None },
             },
-            b'q' => Outcome { reply: reply(keys, decode(transfer).map(|_| ())), place: None },
+            b'q' => Outcome { reply: reply(keys, decode(transfer).map(|_| ())), place: None, delete: None },
             b't' | b'T' => match decode(transfer) {
                 Ok(decoded) => {
                     let id = self.store(keys.image, decoded);
                     let place = if keys.action == b'T' { self.request(keys, id) } else { None };
-                    Outcome { reply: reply(keys, Ok(())), place }
+                    Outcome { reply: reply(keys, Ok(())), place, delete: None }
                 }
-                Err(error) => Outcome { reply: reply(keys, Err(error)), place: None },
+                Err(error) => Outcome { reply: reply(keys, Err(error)), place: None, delete: None },
             },
-            _ => Outcome { reply: reply(keys, Err("EINVAL:unknown action")), place: None },
+            _ => Outcome { reply: reply(keys, Err("EINVAL:unknown action")), place: None, delete: None },
         }
     }
 
@@ -258,6 +283,7 @@ impl Graphics {
             rows: clamp(fitted_rows),
             keep_cursor: keys.keep_cursor,
             crop,
+            z: keys.z,
         })
     }
 
@@ -265,12 +291,12 @@ impl Graphics {
     /// cell: a video repainting one spot must not pile anchors onto it. A rectangle with
     /// no cells is refused: it would hold a cell and draw nothing.
     pub fn place(&mut self, request: Request, here: &[u32]) -> Option<u32> {
-        let Request { image, number, columns, rows, crop, .. } = request;
+        let Request { image, number, columns, rows, crop, z, .. } = request;
         if columns == 0 || rows == 0 {
             return None;
         }
         let same = |placement: &Placement| placement.image == image && placement.number == number;
-        let placement = Placement { image, number, columns, rows, crop };
+        let placement = Placement { image, number, columns, rows, crop, z };
 
         // mpv sends each frame with no id, so nothing else ties a frame to the one before it.
         let frame = |id: u32| id >= FIRST_AUTOMATIC_ID;
@@ -317,12 +343,15 @@ impl Graphics {
         self.placements.values().map(|placement| placement.rows as usize).max().unwrap_or(0)
     }
 
-    /// `d` names what to delete. Answering the modes this terminal cannot resolve is the point:
-    /// a client that deletes by position must not leave its image on screen, and must not guess.
+    /// `d` names what to delete. The modes that name cells go back to the grid; the rest are
+    /// settled here. Answering instead of staying silent is what lets a client fall back.
     fn delete(&mut self, keys: Keys) -> Outcome {
         let free = keys.delete.is_ascii_uppercase();
         let chosen = |placement: &Placement| keys.number == 0 || placement.number == keys.number;
-        match keys.delete.to_ascii_lowercase() {
+        // The client counts cells from one.
+        let cell = |number: u32| number.saturating_sub(1);
+        let (x, y) = (keys.crop[0], keys.crop[1]);
+        let area = match keys.delete.to_ascii_lowercase() {
             b'a' => {
                 self.placements.clear();
                 if free {
@@ -330,22 +359,72 @@ impl Graphics {
                     self.order.clear();
                     self.used = 0;
                 }
+                return Outcome::default();
             }
             b'i' => {
                 self.placements.retain(|_, placement| placement.image != keys.image || !chosen(placement));
-                if free && !self.placements.values().any(|other| other.image == keys.image) {
-                    self.forget(keys.image);
-                }
+                self.release(keys.image, free);
+                return Outcome::default();
             }
-            _ => return Outcome { reply: reply(keys, Err("ENOTSUPPORTED:delete mode")), place: None },
+            b'r' => {
+                self.placements.retain(|_, placement| !(x..=y).contains(&placement.image));
+                for id in x..=y {
+                    self.release(id, free);
+                }
+                return Outcome::default();
+            }
+            b'c' => Area::Cursor,
+            b'p' => Area::Cell { column: cell(x), row: cell(y), z: None },
+            b'q' => Area::Cell { column: cell(x), row: cell(y), z: Some(keys.z) },
+            b'x' => Area::Column(cell(x)),
+            b'y' => Area::Row(cell(y)),
+            b'z' => Area::Z(keys.z),
+            _ => return Outcome { reply: reply(keys, Err("ENOTSUPPORTED:delete mode")), place: None, delete: None },
+        };
+        Outcome { reply: None, place: None, delete: Some(Delete { area, free }) }
+    }
+
+    /// Frees an image once nothing shows it, which is what the capital delete modes do.
+    fn release(&mut self, id: u32, free: bool) {
+        if free && !self.placements.values().any(|placement| placement.image == id) {
+            self.forget(id);
         }
-        Outcome::default()
+    }
+
+    /// Drops the placements at these anchors, and their image data when `free` is set.
+    pub fn drop(&mut self, anchors: &[u32], free: bool) {
+        let mut shown = Vec::new();
+        for anchor in anchors {
+            if let Some(placement) = self.placements.remove(anchor) {
+                shown.push(placement.image);
+            }
+        }
+        for id in shown {
+            self.release(id, free);
+        }
+    }
+
+    /// One line in the geometry log, so a capture shows the rect instead of a screenshot.
+    pub fn note_placement(&self, request: &Request, column: usize, line: i32) {
+        note(&format!(
+            "placed id={} at col={column} row={line} cells={}x{} px={}x{}",
+            request.image,
+            request.columns,
+            request.rows,
+            request.columns * self.cell.0,
+            request.rows * self.cell.1
+        ));
     }
 }
 
 /// `KORAL_GRAPHICS_LOG=<path>` appends every command as the client sent it, keys and payload
 /// length, which is the only way to see what a program actually asks this terminal for.
 fn trace(control: &[u8], length: usize) {
+    note(&format!("{} payload={length}", String::from_utf8_lossy(control)));
+}
+
+/// One line in the same log, for the geometry the protocol commands work out to.
+fn note(line: &str) {
     static LOG: OnceLock<Option<std::fs::File>> = OnceLock::new();
     let Some(file) = LOG.get_or_init(|| {
         let path = std::env::var_os("KORAL_GRAPHICS_LOG")?;
@@ -354,7 +433,7 @@ fn trace(control: &[u8], length: usize) {
         return;
     };
     let mut out = file;
-    let _ = writeln!(out, "{} payload={length}", String::from_utf8_lossy(control));
+    let _ = writeln!(out, "{line}");
 }
 
 fn parse(body: &[u8]) -> Option<(Keys, &[u8])> {
@@ -366,6 +445,7 @@ fn parse(body: &[u8]) -> Option<(Keys, &[u8])> {
     for pair in std::str::from_utf8(control).ok()?.split(',') {
         let (key, value) = pair.split_once('=')?;
         let number = value.parse().unwrap_or(0);
+        let signed = value.parse::<i32>().unwrap_or(0);
         let letter = value.bytes().next().unwrap_or(0);
         match key {
             "a" => keys.action = letter,
@@ -386,6 +466,7 @@ fn parse(body: &[u8]) -> Option<(Keys, &[u8])> {
             "h" => keys.crop[3] = number,
             "d" => keys.delete = letter,
             "m" => keys.more = number == 1,
+            "z" => keys.z = signed,
             _ => {}
         }
     }

@@ -531,6 +531,56 @@ fn deleting_placements_removes_the_image_from_view() {
     assert!(f.pictures().is_empty());
 }
 
+/// The chat clears a preview that scrolled out of its box: the cursor names the cell.
+#[test]
+fn a_delete_at_the_cursor_leaves_the_images_elsewhere() {
+    let mut f = Fixture::new(20, 10);
+    f.feed("\x1b_Ga=t,f=24,s=1,v=1,i=1,q=2;AAAA\x1b\\");
+    f.feed("\x1b_Ga=t,f=24,s=1,v=1,i=2,q=2;AAAA\x1b\\");
+    f.feed("\x1b[H\x1b_Ga=p,i=1,c=2,r=2,C=1,q=2\x1b\\");
+    f.feed("\x1b[5;1H\x1b_Ga=p,i=2,c=2,r=2,C=1,q=2\x1b\\");
+    assert_eq!(f.pictures().len(), 2);
+    f.feed("\x1b[5;1H\x1b_Ga=d,d=c\x1b\\");
+    let pictures = f.pictures();
+    assert_eq!(pictures.len(), 1, "only the one the cursor is on goes");
+    assert_eq!(pictures[0].row, 0);
+}
+
+#[test]
+fn a_delete_at_a_cell_clears_that_cell_and_leaves_the_others() {
+    let mut f = Fixture::new(20, 10);
+    f.feed("\x1b_Ga=t,f=24,s=1,v=1,i=1,q=2;AAAA\x1b\\");
+    f.feed("\x1b_Ga=t,f=24,s=1,v=1,i=2,q=2;AAAA\x1b\\");
+    f.feed("\x1b[H\x1b_Ga=p,i=1,c=2,r=2,C=1,q=2\x1b\\");
+    f.feed("\x1b[8;1H\x1b_Ga=p,i=2,c=2,r=2,C=1,q=2\x1b\\");
+    // The client counts cells from one, and the placement covers its own two cells.
+    f.feed("\x1b_Ga=d,d=p,x=2,y=8\x1b\\");
+    let pictures = f.pictures();
+    assert_eq!(pictures.len(), 1);
+    assert_eq!(pictures[0].row, 0);
+}
+
+#[test]
+fn a_delete_by_row_and_by_column_follow_the_same_cells() {
+    let mut f = Fixture::new(20, 10);
+    f.feed("\x1b_Ga=t,f=24,s=1,v=1,i=1,q=2;AAAA\x1b\\");
+    f.feed("\x1b[H\x1b_Ga=p,i=1,c=2,r=2,C=1,q=2\x1b\\");
+    f.feed("\x1b_Ga=d,d=x,x=1\x1b\\");
+    assert!(f.pictures().is_empty(), "the column holds the placement");
+
+    let mut f = Fixture::new(20, 10);
+    f.feed("\x1b_Ga=t,f=24,s=1,v=1,i=1,q=2;AAAA\x1b\\");
+    f.feed("\x1b[H\x1b_Ga=p,i=1,c=2,r=2,C=1,q=2\x1b\\");
+    f.feed("\x1b_Ga=d,d=y,y=1\x1b\\");
+    assert!(f.pictures().is_empty(), "the row holds the placement");
+
+    let mut f = Fixture::new(20, 10);
+    f.feed("\x1b_Ga=t,f=24,s=1,v=1,i=1,q=2;AAAA\x1b\\");
+    f.feed("\x1b[H\x1b_Ga=p,i=1,c=2,r=2,C=1,q=2\x1b\\");
+    f.feed("\x1b_Ga=d,d=z,z=0\x1b\\");
+    assert!(f.pictures().is_empty(), "the z-index matches");
+}
+
 /// A thumbnail and a viewer show one transmission in two places, so both must survive.
 #[test]
 fn one_transmission_shows_on_two_cells() {
@@ -600,6 +650,21 @@ fn a_one_row_video_keeps_one_anchor() {
     }
     let cell = &f.session.term.grid()[Line(0)][Column(0)];
     assert_eq!(cell.zerowidth().map_or(0, <[char]>::len), 1);
+}
+
+#[test]
+fn a_placement_moves_the_cursor_unless_it_is_asked_not_to() {
+    let mut f = Fixture::new(20, 10);
+    f.feed("\x1b_Ga=t,f=24,s=1,v=1,i=1,q=2;AAAA\x1b\\");
+    f.feed("\x1b_Ga=p,i=1,c=3,r=2,q=2\x1b\\");
+    let moved = f.session.term.grid().cursor.point;
+    assert_eq!((moved.line, moved.column), (Line(1), Column(3)));
+
+    let mut f = Fixture::new(20, 10);
+    f.feed("\x1b_Ga=t,f=24,s=1,v=1,i=1,q=2;AAAA\x1b\\");
+    f.feed("\x1b_Ga=p,i=1,c=3,r=2,C=1,q=2\x1b\\");
+    let kept = f.session.term.grid().cursor.point;
+    assert_eq!((kept.line, kept.column), (Line(0), Column(0)));
 }
 
 #[test]

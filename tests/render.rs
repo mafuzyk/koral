@@ -24,10 +24,11 @@ fn a_surface_without_bgra_uses_rgba() {
     assert_eq!(surface_format(&[Rgba16Float, Rgba8Unorm]), Rgba8Unorm);
 }
 
+/// The cells are the destination: kitty maps the whole source crop into them.
 #[test]
-fn a_whole_image_fills_the_rect_it_was_given() {
+fn a_picture_fills_the_cells_it_was_given() {
     let (size, crop) = koral::frame::picture_box((100, 50), [0, 0, 100, 50], (100.0, 60.0));
-    assert_eq!(size, (100.0, 60.0));
+    assert_eq!(size, (100.0, 60.0), "the cells win over the image's own shape");
     assert_eq!(crop, [0.0, 0.0, 1.0, 1.0]);
 }
 
@@ -76,7 +77,7 @@ fn picture_frame(width: u32, height: u32, place: &str, layout: koral::frame::Lay
 }
 
 #[test]
-fn a_large_picture_fills_the_cells_it_was_placed_in() {
+fn a_large_picture_is_drawn_at_the_cells_it_was_given() {
     let layout = picture_layout();
     let frame = picture_frame(1920, 1080, "c=100,r=40,C=1,q=2", layout);
     let picture = &frame.pictures.list[0];
@@ -87,7 +88,9 @@ fn a_large_picture_fills_the_cells_it_was_placed_in() {
 #[test]
 fn a_picture_smaller_than_its_cells_is_scaled_up() {
     let frame = picture_frame(100, 50, "c=100,r=40,C=1,q=2", picture_layout());
-    assert_eq!((frame.pictures.list[0].width, frame.pictures.list[0].height), (900.0, 880.0));
+    let picture = &frame.pictures.list[0];
+    assert_eq!((picture.width, picture.height), (900.0, 880.0), "a small picture fills its cells");
+    assert_eq!((picture.x, picture.y), (picture_layout().grid_x(), picture_layout().grid_y()));
 }
 
 #[test]
@@ -95,7 +98,7 @@ fn a_picture_past_the_last_column_is_cut_by_the_view_not_sized_by_it() {
     let layout = picture_layout();
     let frame = picture_frame(1920, 1080, "c=200,r=40,C=1,q=2", layout);
     let picture = &frame.pictures.list[0];
-    assert_eq!(picture.width, 1800.0);
+    assert_eq!(picture.width, 1800.0, "the cells decide, not the picture's own width");
     let [_, _, area_width, _] = frame.pictures.area;
     assert!(picture.x + picture.width > layout.grid_x() + area_width, "the viewport is the clip");
 }
@@ -106,6 +109,46 @@ fn only_columns_gives_the_rows_the_image_aspect_needs() {
     let frame = picture_frame(1920, 1080, "c=50,C=1,q=2", layout);
     let picture = &frame.pictures.list[0];
     assert_eq!((picture.width, picture.height), (450.0, 264.0));
+}
+
+fn picture(id: u32, number: u32, z: i32) -> koral::render::Picture {
+    let image = koral::graphics::Image { generation: u64::from(id), width: 1, height: 1, rgba: vec![0; 4] };
+    koral::render::Picture {
+        image: std::sync::Arc::new(image),
+        id,
+        number,
+        z,
+        x: 0.0,
+        y: 0.0,
+        width: 1.0,
+        height: 1.0,
+        crop: [0.0, 0.0, 1.0, 1.0],
+    }
+}
+
+#[test]
+fn a_negative_z_picture_is_under_the_text_and_the_rest_over_it() {
+    let list = [picture(4, 0, 0), picture(2, 0, -5), picture(9, 0, 3)];
+    let (below, under, above) = koral::render::layers(&list);
+    assert!(below.is_empty());
+    assert_eq!(under, vec![1], "under the text layer");
+    assert_eq!(above, vec![0, 2], "over the text layer");
+}
+
+#[test]
+fn a_picture_under_the_background_band_goes_below_the_cells() {
+    let list = [picture(4, 0, -1), picture(5, 0, i32::MIN), picture(6, 0, koral::render::UNDER_BACKGROUND)];
+    let (below, under, above) = koral::render::layers(&list);
+    assert_eq!(below, vec![1], "z below INT32_MIN/2 sinks under the cell backgrounds");
+    assert_eq!(under, vec![2, 0], "the bound itself stays above the cells");
+    assert!(above.is_empty());
+}
+
+#[test]
+fn pictures_at_one_z_stack_by_image_then_placement_id() {
+    let list = [picture(7, 2, -5), picture(3, 9, -9), picture(2, 4, -5), picture(2, 3, -5)];
+    let (_, under, _) = koral::render::layers(&list);
+    assert_eq!(under, vec![1, 3, 2, 0]);
 }
 
 #[test]

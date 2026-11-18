@@ -1,6 +1,6 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use koral::graphics::{Graphics, MAX_IMAGE, Outcome, Request};
+use koral::graphics::{Area, Delete, Graphics, MAX_IMAGE, Outcome, Request};
 
 fn apc(keys: &str, payload: &[u8]) -> Vec<u8> {
     format!("G{keys};{}", STANDARD.encode(payload)).into_bytes()
@@ -201,7 +201,7 @@ fn transmit_a_fifth(graphics: &mut Graphics, id: u32) {
 }
 
 fn shown(image: u32) -> Request {
-    Request { image, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] }
+    Request { image, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1], z: 0 }
 }
 
 #[test]
@@ -250,7 +250,10 @@ fn transmit_and_place_asks_for_a_placement_in_cells() {
     let mut g = graphics();
     let outcome = send(&mut g, "a=T,f=24,s=25,v=30,i=2,q=2", &vec![0; 25 * 30 * 3]);
     let request = outcome.place.unwrap();
-    assert_eq!(request, Request { image: 2, number: 0, columns: 3, rows: 2, keep_cursor: false, crop: [0, 0, 25, 30] });
+    assert_eq!(
+        request,
+        Request { image: 2, number: 0, columns: 3, rows: 2, keep_cursor: false, crop: [0, 0, 25, 30], z: 0 }
+    );
 }
 
 #[test]
@@ -258,7 +261,10 @@ fn explicit_cells_and_the_cursor_key_win() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=2", &[0; 3]);
     let request = send(&mut g, "a=p,i=2,p=9,c=40,r=12,C=1", &[]).place.unwrap();
-    assert_eq!(request, Request { image: 2, number: 9, columns: 40, rows: 12, keep_cursor: true, crop: [0, 0, 1, 1] });
+    assert_eq!(
+        request,
+        Request { image: 2, number: 9, columns: 40, rows: 12, keep_cursor: true, crop: [0, 0, 1, 1], z: 0 }
+    );
 }
 
 #[test]
@@ -304,7 +310,8 @@ fn a_transmission_without_an_id_still_places() {
 fn a_placement_with_a_number_replaces_the_old_one() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
-    let request = Request { image: 1, number: 3, columns: 1, rows: 1, keep_cursor: false, crop: [0, 0, 1, 1] };
+    let request =
+        Request { image: 1, number: 3, columns: 1, rows: 1, keep_cursor: false, crop: [0, 0, 1, 1], z: 0 };
     let first = g.place(request, &[]).expect("a placement");
     let second = g.place(request, &[]).expect("a placement");
     assert_ne!(first, second);
@@ -316,7 +323,8 @@ fn a_placement_with_a_number_replaces_the_old_one() {
 fn placing_again_on_the_same_cell_reuses_its_anchor() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
-    let request = Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] };
+    let request =
+        Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1], z: 0 };
     let first = g.place(request, &[]).expect("a placement");
     assert_eq!(g.place(request, &[first]), Some(first));
 }
@@ -326,7 +334,7 @@ fn deleting_everything_removes_placements_and_keeps_images() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
     let anchor = g
-        .place(Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] }, &[])
+        .place(Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1], z: 0 }, &[])
         .expect("a placement");
     send(&mut g, "a=d,d=a", &[]);
     assert!(g.placement(anchor).is_none());
@@ -346,9 +354,9 @@ fn deleting_by_id_leaves_the_others() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
     send(&mut g, "a=t,f=24,s=1,v=1,i=2", &[0; 3]);
-    let one = g.place(Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] }, &[])
+    let one = g.place(Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1], z: 0 }, &[])
         .expect("a placement");
-    let two = g.place(Request { image: 2, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] }, &[])
+    let two = g.place(Request { image: 2, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1], z: 0 }, &[])
         .expect("a placement");
     send(&mut g, "a=d,d=I,i=1", &[]);
     assert!(g.placement(one).is_none() && g.image(1).is_none());
@@ -435,6 +443,14 @@ fn repainting_an_id_at_the_same_size_keeps_its_placement() {
 }
 
 #[test]
+fn a_placement_carries_the_z_index_that_stacks_it() {
+    let mut g = graphics();
+    send(&mut g, "a=t,f=24,s=1,v=1,i=2", &[0; 3]);
+    let request = send(&mut g, "a=p,i=2,z=-1073741823,C=1", &[]).place.expect("a placement");
+    assert_eq!(request.z, -1073741823);
+}
+
+#[test]
 fn a_placement_with_no_cells_is_refused() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
@@ -448,9 +464,33 @@ fn a_delete_mode_this_terminal_cannot_resolve_answers() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
     let anchor = g.place(shown(1), &[]).expect("a placement");
-    let reply = send(&mut g, "a=d,d=c,i=1", &[]).reply.expect("an answer");
+    let reply = send(&mut g, "a=d,d=n,i=1", &[]).reply.expect("an answer");
     assert!(reply.contains("ENOTSUPPORTED"), "{reply:?}");
     assert!(g.placement(anchor).is_some());
+}
+
+#[test]
+fn a_delete_by_cell_asks_the_grid_for_that_cell() {
+    let mut g = graphics();
+    let delete = send(&mut g, "a=d,d=p,x=3,y=4", &[]).delete.expect("a delete");
+    assert_eq!(delete, Delete { area: Area::Cell { column: 2, row: 3, z: None }, free: false });
+    let free = send(&mut g, "a=d,d=P,x=1,y=1", &[]).delete.expect("a delete");
+    assert_eq!(free, Delete { area: Area::Cell { column: 0, row: 0, z: None }, free: true });
+}
+
+#[test]
+fn the_positional_delete_modes_stay_in_their_own_space() {
+    let mut g = graphics();
+    let cursor = send(&mut g, "a=d,d=c", &[]).delete.expect("a delete");
+    assert_eq!(cursor.area, Area::Cursor);
+    let column = send(&mut g, "a=d,d=x,x=7", &[]).delete.expect("a delete");
+    assert_eq!(column.area, Area::Column(6));
+    let row = send(&mut g, "a=d,d=Y,y=2", &[]).delete.expect("a delete");
+    assert_eq!(row.area, Area::Row(1));
+    let z = send(&mut g, "a=d,d=Z,z=-3", &[]).delete.expect("a delete");
+    assert_eq!(z.area, Area::Z(-3));
+    let cell_z = send(&mut g, "a=d,d=q,x=2,y=5,z=-3", &[]).delete.expect("a delete");
+    assert_eq!(cell_z.area, Area::Cell { column: 1, row: 4, z: Some(-3) });
 }
 
 #[test]

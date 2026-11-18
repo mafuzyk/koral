@@ -8,7 +8,7 @@ use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::Processor;
 
 use crate::blocks::BlockStore;
-use crate::graphics::{Graphics, Request};
+use crate::graphics::{Area, Graphics, Request};
 use crate::marks::{Mark, Piece, Scanner};
 use crate::notify::{BODY_LIMIT, Notice, TITLE_LIMIT, clean};
 use crate::view::{anchor_char, picture_anchor, picture_char, picture_foot};
@@ -67,6 +67,10 @@ impl<L: EventListener> Session<L> {
             Piece::Graphics(body) => {
                 let outcome = graphics.handle(body);
                 replies.extend(outcome.reply);
+                if let Some(delete) = outcome.delete {
+                    let anchors = targets(term, graphics, delete.area);
+                    graphics.drop(&anchors, delete.free);
+                }
                 if let Some(request) = outcome.place {
                     place(term, parser, graphics, request);
                 }
@@ -192,6 +196,48 @@ fn reflow<L: EventListener>(term: &Term<L>, blocks: &mut BlockStore) {
     }
 }
 
+/// The anchors of the placements a positional delete names. The client counts cells from the top
+/// left of the screen; koral counts grid lines from the bottom, so a scrolled primary screen makes
+/// this approximate, while the alternate screen where programs live matches exactly.
+fn targets<L: EventListener>(term: &Term<L>, graphics: &Graphics, area: Area) -> Vec<u32> {
+    let grid = term.grid();
+    let (columns, lines) = (grid.columns() as i32, grid.screen_lines() as i32);
+    let bottom = grid.bottommost_line().0;
+    let top = bottom - (lines - 1);
+    let cursor = grid.cursor.point;
+    let mut anchors = Vec::new();
+    for line in grid.topmost_line().0..=bottom {
+        for column in 0..columns {
+            let Some(extra) = grid[Line(line)][Column(column as usize)].zerowidth() else {
+                continue;
+            };
+            for anchor in extra.iter().filter_map(|ch| picture_anchor(*ch)) {
+                let Some(placement) = graphics.placement(anchor) else {
+                    continue;
+                };
+                let (first_row, last_row) = (line - top, line - top + placement.rows as i32 - 1);
+                let (first_column, last_column) = (column, column + placement.columns as i32 - 1);
+                let holds = |row: i32, column: i32| {
+                    (first_row..=last_row).contains(&row) && (first_column..=last_column).contains(&column)
+                };
+                let named = match area {
+                    Area::Cursor => holds(cursor.line.0, cursor.column.0 as i32),
+                    Area::Cell { column, row, z } => {
+                        holds(row as i32, column as i32) && z.is_none_or(|z| z == placement.z)
+                    }
+                    Area::Column(column) => (first_column..=last_column).contains(&(column as i32)),
+                    Area::Row(row) => (first_row..=last_row).contains(&(row as i32)),
+                    Area::Z(z) => z == placement.z,
+                };
+                if named {
+                    anchors.push(anchor);
+                }
+            }
+        }
+    }
+    anchors
+}
+
 /// An image rides on its top-left cell the way a block rides on its first line.
 fn place<L: EventListener>(term: &mut Term<L>, parser: &mut Processor, graphics: &mut Graphics, request: Request) {
     // The cell the cursor reached: a client that centres an image moves the cursor there itself.
@@ -205,6 +251,7 @@ fn place<L: EventListener>(term: &mut Term<L>, parser: &mut Processor, graphics:
     if !here.contains(&anchor) {
         term.grid_mut()[point.line][point.column].push_zerowidth(picture_char(anchor));
     }
+    graphics.note_placement(&request, point.column.0, point.line.0);
 
     let last = if request.keep_cursor {
         Line((point.line.0 + request.rows as i32 - 1).min(term.screen_lines() as i32 - 1))

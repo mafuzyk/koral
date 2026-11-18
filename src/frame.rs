@@ -440,9 +440,9 @@ pub fn draw_link_bar(frame: &mut Frame, uri: &str, layout: Layout, theme: &Theme
     frame.lines.push(TextLine { x: x + inset, y, small: false, spans: vec![Span::plain(shown, theme.foreground)] });
 }
 
-/// The size a placement draws at, and the part of the image it shows as offset and scale.
-/// The cells the client asked for are the size: `fitted_columns`/`fitted_rows` already gave the
-/// rectangle the image's aspect when only one of them was named, so filling it loses nothing.
+/// The size a placement draws at, and the part of the image it shows. The cells are the size: the
+/// whole source crop is mapped into the cell rectangle, stretched to it as kitty does
+/// (`graphics.c` `grman_put`, which builds the dest rect from the cells alone).
 pub fn picture_box(image: (u32, u32), crop: [u32; 4], area: (f32, f32)) -> ((f32, f32), [f32; 4]) {
     let [x, y, width, height] = crop;
     let (whole_width, whole_height) = (image.0 as f32, image.1 as f32);
@@ -465,7 +465,8 @@ pub fn draw_pictures<L: EventListener>(
         let ((width, height), crop) = picture_box((image.width, image.height), found.crop, area);
         let x = layout.grid_x() + found.column as f32 * cell.width;
         let y = layout.grid_y() + found.row as f32 * cell.height;
-        frame.pictures.list.push(Picture { image: image.clone(), x, y, width, height, crop });
+        let picture = Picture { image: image.clone(), id: found.image, number: found.number, z: found.z, x, y, width, height, crop };
+        frame.pictures.list.push(picture);
     }
     let area = (layout.columns() as f32 * cell.width, layout.lines() as f32 * cell.height);
     frame.pictures.area = [layout.grid_x(), layout.grid_y(), area.0, area.1];
