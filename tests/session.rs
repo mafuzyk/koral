@@ -209,11 +209,54 @@ fn a_wrapped_prompt_is_anchored_on_its_first_row() {
 }
 
 #[test]
+fn a_prompt_after_a_full_output_line_is_its_own_header() {
+    let mut f = Fixture::new(10, 6);
+    f.start("printf");
+    f.feed("0123456789");
+    f.feed("\x1b]133;D;0\x1b\\");
+    f.feed(PROMPT);
+    f.feed("ls\r\n");
+
+    assert_eq!(f.headers(), vec!["$ printf", "$ ls"]);
+}
+
+#[test]
+fn a_reflowed_prompt_stays_out_of_the_command_before() {
+    let mut f = Fixture::new(20, 12);
+    f.command("one", &["a", "b"], 0);
+    f.feed("\x1b]133;A\x1b\\head\r\nxxxxxx\r\n$ \x1b]133;B\x1b\\");
+    f.feed("two\r\n\x1b]133;C\x1b\\");
+    f.feed("c\r\n\x1b]133;D;0\x1b\\");
+    let id = f.rows()[0].block.unwrap();
+    f.session.term.resize(TermSize::new(5, 12));
+    f.feed("\x1b]133;B\x1b\\");
+
+    assert_eq!(output_text(&f.session.term, &f.session.blocks, id).as_deref(), Some("a\nb"));
+}
+
+#[test]
 fn marks_in_the_alternate_screen_are_ignored() {
     let mut f = Fixture::new(20, 5);
     f.feed("\x1b[?1049h");
     f.feed(PROMPT);
     assert!(f.session.blocks.is_empty());
+}
+
+#[test]
+fn a_command_end_on_the_alternate_screen_finishes_the_block() {
+    let mut f = Fixture::new(20, 6);
+    f.start("vim");
+    let id = f.rows()[0].block.unwrap();
+    f.feed("\x1b[?1049h");
+    f.feed("\x1b]133;D;0\x1b\\");
+    f.feed("\x1b[?1049l");
+    f.feed(PROMPT);
+    f.feed("ls\r\n");
+
+    let block = f.session.blocks.get(id).unwrap();
+    assert_eq!(block.status, Some(0));
+    assert!(block.duration.is_some());
+    assert_eq!(f.headers(), vec!["$ vim", "$ ls"]);
 }
 
 #[test]

@@ -17,6 +17,8 @@ pub struct Block {
     pub folded: bool,
     /// Rows the prompt takes above the line the anchor sits on.
     pub prompt_lines: usize,
+    /// Line feeds the prompt printed. A reflow changes the rows, never these.
+    pub prompt_breaks: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,13 +88,19 @@ impl BlockStore {
     }
 
     /// Line feeds count where the grid cannot: at the bottom of a full scrollback
-    /// a prompt moves no cursor line and adds no history.
-    // shortcut: a prompt line that wraps is not counted, read the wraps if one ever does.
+    /// a prompt moves no cursor line and adds no history. The rows they need are
+    /// read off the grid, which is what a reflow rewraps.
     pub fn observe(&mut self, bytes: &[u8]) {
         if self.phase == Phase::Prompt
             && let Some(block) = self.latest_mut()
         {
-            block.prompt_lines += bytes.iter().filter(|byte| **byte == b'\n').count();
+            block.prompt_breaks += bytes.iter().filter(|byte| **byte == b'\n').count();
+        }
+    }
+
+    pub fn set_prompt_lines(&mut self, id: u32, lines: usize) {
+        if let Some(block) = self.blocks.get_mut(&id) {
+            block.prompt_lines = lines;
         }
     }
 
