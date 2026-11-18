@@ -11,7 +11,7 @@
       lib = nixpkgs.lib;
       systems = [ "x86_64-linux" ];
       forAllSystems = f: lib.genAttrs systems (system: f (import nixpkgs { inherit system; }));
-      version = "1.0.3";
+      version = "1.1.0";
       releaseVersion = "1.0.3";
     in
     {

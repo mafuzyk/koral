@@ -1,6 +1,6 @@
 pkgbase = koral-bin
 	pkgdesc = A Rust terminal with native sharky shell support
-	pkgver = 1.0.3
+	pkgver = 1.1.0
 	pkgrel = 1
 	url = https://github.com/mafuzyk/koral
 	arch = x86_64
