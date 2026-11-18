@@ -9,6 +9,8 @@ use base64::engine::general_purpose::STANDARD_NO_PAD;
 // The stream is untrusted: limits hold for the image, the store and the transfer.
 pub const MAX_IMAGE: usize = 64 * 1024 * 1024;
 const MAX_STORE: usize = 320 * 1024 * 1024;
+// A decode holds the output buffer and the RGBA copy at once, and neither may outgrow the store.
+const _: () = assert!(2 * MAX_IMAGE <= MAX_STORE);
 const MAX_TRANSFER: usize = 128 * 1024 * 1024;
 const MAX_CELLS: u32 = 1024;
 const ANCHOR_RANGE: u32 = 0x7FFE;
@@ -406,7 +408,13 @@ fn decode_png(raw: &[u8]) -> Result<Decoded, &'static str> {
     let mut decoder = png::Decoder::new_with_limits(Cursor::new(raw), limits);
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info().map_err(|_| "EINVAL:bad png")?;
-    let mut buffer = vec![0; reader.output_buffer_size().ok_or("EFBIG:image too large")?];
+    // The header declares this size: `Limits.bytes` only reserves one row, so refuse before allocating.
+    let (width, height) = reader.info().size();
+    let size = reader.output_buffer_size().ok_or("EFBIG:image too large")?;
+    if u64::from(width) * u64::from(height) * 4 > MAX_IMAGE as u64 || size > MAX_IMAGE {
+        return Err("EFBIG:image too large");
+    }
+    let mut buffer = vec![0; size];
     let info = reader.next_frame(&mut buffer).map_err(|_| "EINVAL:bad png")?;
     let (width, height) = (info.width, info.height);
     if u64::from(width) * u64::from(height) * 4 > MAX_IMAGE as u64 {

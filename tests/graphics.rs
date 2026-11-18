@@ -27,6 +27,17 @@ fn png_bytes(width: u32, height: u32) -> Vec<u8> {
     bytes
 }
 
+/// A real 1x1 PNG whose IHDR lies about its size, like a crafted file piped into the terminal.
+fn png_declaring(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = png_bytes(1, 1);
+    bytes[16..20].copy_from_slice(&width.to_be_bytes());
+    bytes[20..24].copy_from_slice(&height.to_be_bytes());
+    let mut crc = flate2::Crc::new();
+    crc.update(&bytes[12..29]); // the IHDR type and data
+    bytes[29..33].copy_from_slice(&crc.sum().to_be_bytes());
+    bytes
+}
+
 fn deflate(bytes: &[u8]) -> Vec<u8> {
     use std::io::Write;
     let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -57,6 +68,15 @@ fn png_is_decoded_without_being_told_its_size() {
     let image = g.image(1).unwrap();
     assert_eq!((image.width, image.height), (3, 2));
     assert_eq!(&image.rgba[..4], &[200, 200, 200, 255]);
+}
+
+#[test]
+fn a_png_header_declaring_a_huge_image_is_refused_before_its_buffer_is_allocated() {
+    // 20000x20000 is 1.2 GB of RGB, far past MAX_IMAGE, and the header alone says so.
+    let mut g = graphics();
+    let reply = send(&mut g, "a=t,f=100,i=1", &png_declaring(20_000, 20_000)).reply.unwrap();
+    assert!(reply.contains("EFBIG"), "{reply:?}");
+    assert!(g.image(1).is_none());
 }
 
 #[test]
