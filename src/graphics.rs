@@ -160,6 +160,11 @@ impl Graphics {
 
     fn finish(&mut self, transfer: &Transfer) -> Outcome {
         let keys = transfer.keys;
+        // Reading paths or shared memory would let any printed file read this machine, so a medium
+        // that carries data must be answered with an error instead of being dropped.
+        if matches!(keys.action, b't' | b'T' | b'q') && keys.medium != b'd' {
+            return Outcome { reply: reply(keys, Err("ENOTSUPPORTED:only direct transmission")), place: None };
+        }
         match keys.action {
             b'd' => {
                 self.delete(keys);
@@ -178,7 +183,7 @@ impl Graphics {
                 }
                 Err(error) => Outcome { reply: reply(keys, Err(error)), place: None },
             },
-            _ => Outcome::default(),
+            _ => Outcome { reply: reply(keys, Err("EINVAL:unknown action")), place: None },
         }
     }
 
@@ -354,10 +359,6 @@ fn reply(keys: Keys, result: Result<(), &str>) -> Option<String> {
 
 fn decode(transfer: &Transfer) -> Result<Decoded, &'static str> {
     let keys = transfer.keys;
-    // Reading paths or shared memory would let any printed file read this machine.
-    if keys.medium != b'd' {
-        return Err("ENOTSUPPORTED:only direct transmission");
-    }
     if transfer.too_big {
         return Err("EFBIG:image too large");
     }

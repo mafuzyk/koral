@@ -184,6 +184,7 @@ fn reflow<L: EventListener>(term: &Term<L>, blocks: &mut BlockStore) {
 
 /// An image rides on its top-left cell the way a block rides on its first line.
 fn place<L: EventListener>(term: &mut Term<L>, parser: &mut Processor, graphics: &mut Graphics, request: Request) {
+    // The cell the cursor reached: a client that centres an image moves the cursor there itself.
     let point = term.grid().cursor.point;
     let here: Vec<u32> = term.grid()[point.line][point.column]
         .zerowidth()

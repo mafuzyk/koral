@@ -135,6 +135,43 @@ fn file_transmission_is_refused_so_a_program_cannot_read_local_files() {
     }
 }
 
+/// The command icat sends for `--transfer-mode=memory`: the payload is a shared memory name.
+#[test]
+fn a_shared_memory_transmission_is_refused_with_its_error() {
+    let mut g = graphics();
+    let name = STANDARD.encode(b"/icat-BWVCZONVJ6XL2");
+    let reply = send(&mut g, "a=T,f=100,t=s,s=240,v=120,S=401,i=7", name.as_bytes()).reply.unwrap();
+    assert!(reply.contains("ENOTSUPPORTED"), "{reply:?}");
+    assert!(g.image(7).is_none());
+}
+
+/// A client probes the mediums with a query before it picks one; every unsupported probe must
+/// come back so it can fall back to direct transmission.
+#[test]
+fn a_query_over_an_unsupported_medium_reports_it() {
+    for medium in ["f", "t", "s"] {
+        let mut g = graphics();
+        let keys = format!("a=q,f=24,s=1,v=1,t={medium},i=3");
+        let reply = send(&mut g, &keys, b"/dev/shm/kitty-tty-graphics-protocol-1").reply.unwrap();
+        assert!(reply.contains("ENOTSUPPORTED"), "{reply:?}");
+    }
+}
+
+#[test]
+fn an_action_the_terminal_does_not_implement_is_answered() {
+    let mut g = graphics();
+    let reply = send(&mut g, "a=f,f=24,s=1,v=1,i=9", &[0; 3]).reply.unwrap();
+    assert!(reply.contains("EINVAL"), "{reply:?}");
+}
+
+#[test]
+fn an_error_without_an_id_stays_silent() {
+    // A reply is routed by image id, and icat also asks for silence with q=2: a client that sends
+    // neither has nothing to read, so the refusal can only reach it when it sends an id.
+    let mut g = graphics();
+    assert_eq!(send(&mut g, "a=T,f=100,t=s,s=1,v=1", b"/dev/shm/x").reply, None);
+}
+
 #[test]
 fn a_size_past_the_limit_is_refused() {
     let side = (MAX_IMAGE as f64).sqrt() as u32;
