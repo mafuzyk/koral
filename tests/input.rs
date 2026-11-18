@@ -2,7 +2,7 @@ use alacritty_terminal::term::TermMode;
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::selection::SelectionType;
-use koral::input::{Clicks, Mouse, encode, mouse_report, paste, selection_kind, zoomed};
+use koral::input::{Clicks, Mouse, encode, motion_button, mouse_report, paste, selection_kind, zoomed};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 const NONE: ModifiersState = ModifiersState::empty();
@@ -131,7 +131,7 @@ fn plain_paste_drops_the_control_introducers() {
 }
 
 fn press(button: u8, column: usize, line: usize) -> Mouse {
-    Mouse { button, column, line, pressed: true, mods: NONE }
+    Mouse { button, column, line, pressed: true, mods: NONE, motion: false }
 }
 
 #[test]
@@ -152,6 +152,56 @@ fn sgr_mouse_adds_modifier_bits() {
     let mode = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
     let mouse = Mouse { mods: CTRL | ALT, ..press(64, 0, 0) };
     assert_eq!(mouse_report(mouse, mode).unwrap(), b"\x1b[<88;1;1M");
+}
+
+/// A grabbed program that never hears motion cannot run its own selection, so a
+/// drag has to report the held button with xterm's bit 32 set.
+#[test]
+fn a_drag_reports_the_held_button_with_the_motion_bit() {
+    let mode = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
+    let mouse = Mouse { motion: true, ..press(0, 4, 2) };
+    assert_eq!(mouse_report(mouse, mode).unwrap(), b"\x1b[<32;5;3M");
+}
+
+#[test]
+fn bare_motion_reports_button_three_with_the_motion_bit() {
+    let mode = TermMode::MOUSE_MOTION | TermMode::SGR_MOUSE;
+    let mouse = Mouse { motion: true, ..press(3, 4, 2) };
+    assert_eq!(mouse_report(mouse, mode).unwrap(), b"\x1b[<35;5;3M");
+}
+
+#[test]
+fn legacy_motion_keeps_the_same_button_bits() {
+    let mouse = Mouse { motion: true, ..press(0, 1, 2) };
+    assert_eq!(mouse_report(mouse, TermMode::MOUSE_DRAG).unwrap(), vec![0x1b, b'[', b'M', 32 + 32, 34, 35]);
+}
+
+#[test]
+fn a_drag_forwards_the_held_button() {
+    let mode = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
+    let button = motion_button(mode, Some(0)).unwrap();
+    let mouse = Mouse { button, motion: true, ..press(button, 4, 2) };
+    assert_eq!(mouse_report(mouse, mode).unwrap(), b"\x1b[<32;5;3M");
+}
+
+#[test]
+fn motion_with_no_button_held_reports_the_no_button_code() {
+    let mode = TermMode::MOUSE_MOTION | TermMode::SGR_MOUSE;
+    let button = motion_button(mode, None).unwrap();
+    let mouse = Mouse { button, motion: true, ..press(button, 4, 2) };
+    assert_eq!(mouse_report(mouse, mode).unwrap(), b"\x1b[<35;5;3M");
+}
+
+#[test]
+fn mode_1003_alone_still_forwards_a_held_button() {
+    assert_eq!(motion_button(TermMode::MOUSE_MOTION, Some(1)), Some(1));
+}
+
+#[test]
+fn motion_is_dropped_when_the_app_asked_for_no_motion() {
+    assert_eq!(motion_button(TermMode::MOUSE_REPORT_CLICK, Some(0)), None);
+    assert_eq!(motion_button(TermMode::MOUSE_REPORT_CLICK, None), None);
+    assert_eq!(motion_button(TermMode::empty(), Some(0)), None);
 }
 
 #[test]

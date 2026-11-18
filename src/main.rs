@@ -695,11 +695,27 @@ impl App {
     }
 
     fn report_mouse(&mut self, button: u8, pressed: bool) -> bool {
+        self.send_mouse(button, pressed, false)
+    }
+
+    /// A grabbed program that never sees motion cannot run its own selection, so a
+    /// drag follows the pointer unless koral is the one selecting.
+    fn report_motion(&mut self) {
+        if self.drag == Drag::Selecting {
+            return;
+        }
+        let mode = self.mode();
+        if let Some(button) = input::motion_button(mode, self.pressed) {
+            self.send_mouse(button, true, true);
+        }
+    }
+
+    fn send_mouse(&mut self, button: u8, pressed: bool, motion: bool) -> bool {
         let Some(layout) = self.layout() else {
             return false;
         };
         let (line, column) = layout.cell_at(self.cursor.0, self.cursor.1);
-        let mouse = Mouse { button, column, line, pressed, mods: self.mods };
+        let mouse = Mouse { button, column, line, pressed, mods: self.mods, motion };
         match input::mouse_report(mouse, self.mode()) {
             Some(bytes) => {
                 if let Some(tab) = self.active() {
@@ -823,6 +839,7 @@ impl App {
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.cursor = (position.x as f32, position.y as f32);
+        self.report_motion();
         match self.drag {
             Drag::Selecting => {
                 if let Some((point, _)) = self.point_under_cursor()

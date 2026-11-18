@@ -143,6 +143,19 @@ pub struct Mouse {
     pub line: usize,
     pub pressed: bool,
     pub mods: ModifiersState,
+    /// A drag or motion event, which xterm encodes with bit 32 set.
+    pub motion: bool,
+}
+
+/// The button a motion event reports, or `None` when the mode asks for no motion.
+/// A grabbed program that never sees motion cannot run its own selection.
+pub fn motion_button(mode: TermMode, held: Option<u8>) -> Option<u8> {
+    if mode.contains(TermMode::MOUSE_DRAG)
+        && let Some(button) = held
+    {
+        return Some(button);
+    }
+    mode.contains(TermMode::MOUSE_MOTION).then(|| held.unwrap_or(3))
 }
 
 pub fn mouse_report(mouse: Mouse, mode: TermMode) -> Option<Vec<u8>> {
@@ -153,7 +166,7 @@ pub fn mouse_report(mouse: Mouse, mode: TermMode) -> Option<Vec<u8>> {
     let bits = 4 * u8::from(mouse.mods.shift_key())
         + 8 * u8::from(mouse.mods.alt_key())
         + 16 * u8::from(mouse.mods.control_key());
-    let code = mouse.button + bits;
+    let code = mouse.button + bits + if mouse.motion { 32 } else { 0 };
 
     if mode.contains(TermMode::SGR_MOUSE) {
         let end = if mouse.pressed { 'M' } else { 'm' };
