@@ -16,6 +16,7 @@ use koral::links::{self, Link};
 use koral::matugen;
 use koral::input::{self, Action, Clicks, Mouse, binding};
 use koral::keyboard::{self, KeyPress, Stage};
+use koral::lag;
 use koral::notify::{self, Limiter};
 use koral::pty::{Geometry, Terminal, UserEvent};
 use koral::render::{Renderer, rgba};
@@ -882,6 +883,8 @@ impl App {
     }
 
     fn draw(&mut self) {
+        let started = Instant::now();
+        let mut cost = lag::Cost::default();
         let (Some(layout), Some(bar)) = (self.layout(), self.bar()) else {
             return;
         };
@@ -897,7 +900,9 @@ impl App {
         let views: Vec<TabView> = tabs
             .iter()
             .map(|tab| {
+                let wait_from = Instant::now();
                 let session = tab.session.lock();
+                cost.wait += lag::millis(wait_from);
                 TabView {
                     title: tabs::title(&session.blocks, tab.title.as_deref(), self.home.as_deref()),
                     activity: session.blocks.activity(),
@@ -910,7 +915,9 @@ impl App {
         let mut frame = Frame::default();
         let mut cursor = None;
         if let Some(tab) = tabs.active() {
+            let wait_from = Instant::now();
             let session = tab.session.lock();
+            cost.wait += lag::millis(wait_from);
             let rows = view::rows(&session.term, &session.blocks);
             frame::draw_terminal(
                 &mut frame,
@@ -982,9 +989,12 @@ impl App {
             window.set_ime_cursor_area(PhysicalPosition::new(x, y), size);
             self.ime_cursor = cursor;
         }
+        cost.grid = lag::millis(started);
         if let Some(renderer) = &mut self.renderer {
-            renderer.draw(&frame.quads, &frame.pictures, &frame.lines, frame.clip, rgba(self.theme.background, self.config.opacity));
+            renderer.draw(&frame.quads, &frame.pictures, &frame.lines, frame.clip, rgba(self.theme.background, self.config.opacity), &mut cost);
         }
+        cost.total = lag::millis(started);
+        lag::note(&cost);
     }
 }
 

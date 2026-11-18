@@ -2,6 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::Instant;
 
 use alacritty_terminal::vte::ansi::Rgb;
 use glyphon::{
@@ -12,6 +13,7 @@ use winit::window::Window;
 
 use crate::fonts;
 use crate::graphics::Image;
+use crate::lag;
 
 const LINE_HEIGHT: f32 = 1.2;
 const SMALL: f32 = 0.82;
@@ -472,7 +474,10 @@ impl Renderer {
         self.textures.insert(image.generation, bind_group);
     }
 
-    pub fn draw(&mut self, quads: &[Quad], pictures: &Pictures, lines: &[TextLine], clip: Clip, clear: [f32; 4]) {
+    /// Fills `cost` with the phases of the frame, for `lag::note`.
+    pub fn draw(&mut self, quads: &[Quad], pictures: &Pictures, lines: &[TextLine], clip: Clip, clear: [f32; 4], cost: &mut lag::Cost) {
+        let text_from = Instant::now();
+        cost.lines = lines.len();
         let keys: Vec<u64> = lines.iter().map(line_key).collect();
         // A screen of symbols repeats its pieces: counting them all would empty the cache each frame.
         let new: HashSet<&u64> = keys.iter().filter(|key| !self.lines.contains_key(*key)).collect();
@@ -483,6 +488,7 @@ impl Renderer {
             if !self.lines.contains_key(key) {
                 let buffer = shape(&mut self.font_system, line, &self.face, self.points, self.scale);
                 self.lines.insert(*key, buffer);
+                cost.shaped += 1;
             }
         }
 
@@ -515,11 +521,14 @@ impl Renderer {
             )
             .is_err()
         {
+            cost.text = lag::millis(text_from);
             self.atlas.trim();
             self.window.request_redraw();
             return;
         }
+        cost.text = lag::millis(text_from);
 
+        let acquire_from = Instant::now();
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
@@ -539,6 +548,7 @@ impl Renderer {
             }
             wgpu::CurrentSurfaceTexture::Validation => panic!("surface validation error"),
         };
+        cost.acquire = lag::millis(acquire_from);
 
         let globals: Vec<u8> = [width as f32, height as f32, 0.0, 0.0]
             .iter()
@@ -546,6 +556,7 @@ impl Renderer {
             .collect();
         self.queue.write_buffer(&self.globals, 0, &globals);
 
+        let pictures_from = Instant::now();
         // shortcut: an image over the texture limit is not drawn, scale it down if one shows up.
         let limit = self.device.limits().max_texture_dimension_2d;
         let drawn: Vec<Picture> = pictures
@@ -559,10 +570,14 @@ impl Renderer {
         for picture in &drawn {
             if !self.textures.contains_key(&picture.image.generation) {
                 self.upload(&picture.image);
+                cost.uploads += 1;
             }
         }
 
         let (below, under, above) = layers(&drawn);
+        cost.pictures = lag::millis(pictures_from);
+
+        let present_from = Instant::now();
         let boxes = drawn.iter().map(|p| Quad::new(p.x, p.y, p.width, p.height, p.crop));
         let instances: Vec<u8> = quads
             .iter()
@@ -636,6 +651,7 @@ impl Renderer {
         self.queue.submit(Some(encoder.finish()));
         self.window.pre_present_notify();
         self.queue.present(frame);
+        cost.present = lag::millis(present_from);
         self.atlas.trim();
     }
 }

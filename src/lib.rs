@@ -1,5 +1,6 @@
 pub mod blink;
 pub mod blocks;
+pub mod lag;
 pub mod boxes;
 pub mod marks;
 pub mod matugen;
