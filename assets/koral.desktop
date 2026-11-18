@@ -6,4 +6,6 @@ Exec=koral
 Icon=koral
 Terminal=false
 Categories=System;TerminalEmulator;
+Keywords=Terminal;Shell;Wayland;
+StartupNotify=true
 StartupWMClass=koral
