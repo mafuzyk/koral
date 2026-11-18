@@ -1,6 +1,6 @@
-# Release order: koral-bin currently points at the v1.0.3 tarball so the flake stays buildable.
-# Bump Cargo.toml and the source `version` to the release version, tag, and let CI publish the tarball.
-# Then bump `releaseVersion` and its hash together and point `default` at `koral-bin`.
+# koral-bin is the default package and points at the current release tarball.
+# For a new release, bump Cargo.toml, `version`, `releaseVersion` and the hash together,
+# tag, and let CI publish the tarball.
 {
   description = "A Rust terminal with native sharky shell support";
 
@@ -12,7 +12,7 @@
       systems = [ "x86_64-linux" ];
       forAllSystems = f: lib.genAttrs systems (system: f (import nixpkgs { inherit system; }));
       version = "1.1.0";
-      releaseVersion = "1.0.3";
+      releaseVersion = "1.1.0";
     in
     {
       packages = forAllSystems (pkgs: rec {
@@ -47,7 +47,7 @@
           version = releaseVersion;
           src = pkgs.fetchurl {
             url = "https://github.com/mafuzyk/koral/releases/download/v${releaseVersion}/koral-x86_64-linux.tar.gz";
-            hash = "sha256-TFxxBthHhWZrQViDuPEJkz1s1dbyvgnxDWrysa6gA5Q=";
+            hash = "sha256-hO+RBul69zb3pLjjLs/6pLWEJ8qPyyw9ZoG4wAmpq9M=";
           };
 
           nativeBuildInputs = with pkgs; [ autoPatchelfHook makeWrapper ];
@@ -75,8 +75,7 @@
             sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
           };
         };
-        # Flip default to koral-bin once the next tag's hash is pinned.
-        default = koral;
+        default = koral-bin;
       });
 
       devShells = forAllSystems (pkgs: {
