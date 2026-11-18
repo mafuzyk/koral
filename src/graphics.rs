@@ -419,6 +419,11 @@ impl Graphics {
 
 /// `KORAL_GRAPHICS_LOG=<path>` appends every command as the client sent it, keys and payload
 /// length, which is the only way to see what a program actually asks this terminal for.
+///
+/// `KORAL_FRAME_LOG=<path>` appends one line per frame slower than 8 ms: grid, lock wait, text
+/// shaping, glyphon prepare, pictures, acquire, present, line and glyph counts, and the slowest
+/// shaped line with its codepoints and face; plus one `warm ...` line when the startup font warm-up
+/// runs. Unset, it costs nothing. A diagnostic aid for reporting stutter, not a user setting.
 fn trace(control: &[u8], length: usize) {
     note(&format!("{} payload={length}", String::from_utf8_lossy(control)));
 }
