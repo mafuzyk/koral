@@ -29,11 +29,18 @@ pub struct LineCache<V> {
     entries: HashMap<u64, V>,
     /// Insertion order, the oldest first: what to evict when the cap is reached.
     order: VecDeque<u64>,
+    /// Every key shaped in this run, while the frame log is on: it separates new content from
+    /// content shaped again after an eviction.
+    // shortcut: it grows with the whole run and exists for the log only, so it is off unless asked.
+    seen: Option<HashSet<u64>>,
+    fresh: usize,
+    again: usize,
+    evicted: usize,
 }
 
 impl<V> Default for LineCache<V> {
     fn default() -> Self {
-        Self { entries: HashMap::new(), order: VecDeque::new() }
+        Self { entries: HashMap::new(), order: VecDeque::new(), seen: None, fresh: 0, again: 0, evicted: 0 }
     }
 }
 
@@ -46,10 +53,27 @@ impl<V> LineCache<V> {
         self.entries.get(key)
     }
 
+    /// Of this frame's shaping, the lines no earlier frame had shaped.
+    pub fn fresh(&self) -> usize {
+        self.fresh
+    }
+
+    /// Of this frame's shaping, the lines shaped again after an eviction.
+    pub fn again(&self) -> usize {
+        self.again
+    }
+
+    /// Lines this frame's eviction dropped.
+    pub fn evicted(&self) -> usize {
+        self.evicted
+    }
+
     /// The entry for every key, shaping the ones it lacks with `shape`. Returns how many it shaped:
     /// a key is shaped once however often it repeats in the frame.
     pub fn prepare(&mut self, keys: &[u64], mut shape: impl FnMut(&u64, usize) -> V) -> usize {
         debug_assert_eq!(self.order.len(), self.entries.len(), "the order holds every key once");
+        (self.fresh, self.again, self.evicted) = (0, 0, 0);
+        let logged = lag::enabled();
         let mut shaped = 0;
         for (index, key) in keys.iter().enumerate() {
             if self.entries.contains_key(key) {
@@ -59,6 +83,13 @@ impl<V> LineCache<V> {
             self.entries.insert(*key, entry);
             self.order.push_back(*key);
             shaped += 1;
+            if logged {
+                if self.seen.get_or_insert_with(HashSet::new).insert(*key) {
+                    self.fresh += 1;
+                } else {
+                    self.again += 1;
+                }
+            }
         }
         self.evict(keys);
         shaped
@@ -83,6 +114,7 @@ impl<V> LineCache<V> {
                 continue;
             }
             self.entries.remove(&key);
+            self.evicted += 1;
         }
     }
 }
@@ -549,7 +581,26 @@ impl Renderer {
         let keys: Vec<u64> = lines.iter().map(line_key).collect();
         let font_system = &mut self.font_system;
         let (face, points, scale) = (&self.face, self.points, self.scale);
-        cost.shaped += self.lines.prepare(&keys, |_, index| shape(font_system, &lines[index], face, points, scale));
+        let timed = lag::enabled();
+        let mut worst = lag::LineCost::default();
+        let shape_from = Instant::now();
+        cost.shaped += self.lines.prepare(&keys, |_, index| {
+            let line = &lines[index];
+            let start = timed.then(Instant::now);
+            let buffer = shape(font_system, line, face, points, scale);
+            if let Some(start) = start {
+                let micros = start.elapsed().as_micros() as u64;
+                if micros > worst.micros {
+                    worst = describe(line, micros);
+                }
+            }
+            buffer
+        });
+        if timed {
+            cost.shape = lag::millis(shape_from);
+            cost.worst = worst;
+            (cost.fresh, cost.again, cost.evicted) = (self.lines.fresh(), self.lines.again(), self.lines.evicted());
+        }
 
         let (width, height) = (self.config.width, self.config.height);
         self.viewport.update(&self.queue, Resolution { width, height });
@@ -567,25 +618,23 @@ impl Renderer {
                 custom_glyphs: &[],
             }
         });
-        if self
-            .text
-            .prepare(
-                &self.device,
-                &self.queue,
-                &mut self.font_system,
-                &mut self.atlas,
-                &self.viewport,
-                areas,
-                &mut self.swash,
-            )
-            .is_err()
-        {
-            cost.text = lag::millis(text_from);
+        let prepare_from = Instant::now();
+        let prepared = self.text.prepare(
+            &self.device,
+            &self.queue,
+            &mut self.font_system,
+            &mut self.atlas,
+            &self.viewport,
+            areas,
+            &mut self.swash,
+        );
+        cost.prepare = lag::millis(prepare_from);
+        cost.text = lag::millis(text_from);
+        if prepared.is_err() {
             self.atlas.trim();
             self.window.request_redraw();
             return;
         }
-        cost.text = lag::millis(text_from);
 
         let acquire_from = Instant::now();
         let frame = match self.surface.get_current_texture() {
@@ -818,4 +867,18 @@ fn line_key(line: &TextLine) -> u64 {
     line.small.hash(&mut hasher);
     line.spans.hash(&mut hasher);
     hasher.finish()
+}
+
+/// What the frame log needs of the slowest line: its cost and what it is made of.
+fn describe(line: &TextLine, micros: u64) -> lag::LineCost {
+    let mut colors: Vec<(u8, u8, u8)> = line.spans.iter().map(|span| span.color).collect();
+    colors.sort_unstable();
+    colors.dedup();
+    lag::LineCost {
+        micros,
+        chars: line.spans.iter().map(|span| span.text.chars().count()).sum(),
+        spans: line.spans.len(),
+        colors: colors.len(),
+        non_ascii: line.spans.iter().any(|span| !span.text.is_ascii()),
+    }
 }
