@@ -442,6 +442,29 @@ fn an_image_in_a_synchronized_update_lands_on_the_cell_the_batch_names() {
     }
 }
 
+/// A client that paints on the alternate screen leaves it and places on the primary one in the
+/// same read. The exit has to be reconciled before the placement, and the end-of-feed cleanup
+/// must not then drop the image that just landed on the primary screen.
+#[test]
+fn an_image_placed_after_leaving_the_alternate_screen_stays() {
+    for batch in [
+        "\x1b[?2026h\x1b[5;4H\x1b_Ga=p,i=1,c=2,r=2,C=1,q=2\x1b\\\x1b[1;9H\x1b[?2026l",
+        "\x1b[5;4H\x1b_Ga=p,i=1,c=2,r=2,C=1,q=2\x1b\\\x1b[1;9H",
+    ] {
+        let mut f = Fixture::new(20, 10);
+        f.feed("\x1b[?1049h");
+        f.feed("\x1b_Ga=t,f=24,s=1,v=1,i=1,q=2;AAAA\x1b\\");
+        f.feed("$ prompt");
+        f.feed(&format!("\x1b[?1049l{batch}"));
+
+        let pictures = f.pictures();
+        assert_eq!(pictures.len(), 1, "the image on the primary screen outlived the exit");
+        assert_eq!((pictures[0].row, pictures[0].column), (4, 3), "it sits on the cell the batch named");
+        let cursor = f.session.term.grid().cursor.point;
+        assert_eq!((cursor.line, cursor.column), (Line(0), Column(8)), "the cursor stays on the primary screen");
+    }
+}
+
 /// The reopened update must still end at the client's ESU: whatever follows the batch applies
 /// at once instead of waiting for a timeout.
 #[test]

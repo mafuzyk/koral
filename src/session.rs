@@ -78,6 +78,9 @@ impl<L: EventListener> Session<L> {
                 if flushed {
                     parser.stop_sync(term);
                 }
+                // The replay can leave the alternate screen: its images go before this one lands,
+                // or the end-of-feed cleanup would take the image that just arrived.
+                settle_alt(term, graphics, alt_screen);
                 if let Some(delete) = outcome.delete {
                     let anchors = targets(term, graphics, delete.area);
                     graphics.drop(&anchors, delete.free);
@@ -113,13 +116,17 @@ impl<L: EventListener> Session<L> {
                 }
             }
         });
-        let alt = term.mode().contains(TermMode::ALT_SCREEN);
-        // Leaving the alternate screen leaves its images behind: an app that dies must not ghost.
-        if *alt_screen && !alt {
-            graphics.clear_placements();
-        }
-        *alt_screen = alt;
+        settle_alt(term, graphics, alt_screen);
     }
+}
+
+/// Leaving the alternate screen leaves its images behind: an app that dies must not ghost.
+fn settle_alt<L: EventListener>(term: &Term<L>, graphics: &mut Graphics, alt_screen: &mut bool) {
+    let alt = term.mode().contains(TermMode::ALT_SCREEN);
+    if *alt_screen && !alt {
+        graphics.clear_placements();
+    }
+    *alt_screen = alt;
 }
 
 /// DECRQSS. neovim sets undercurl and reads it back to learn that it works.
