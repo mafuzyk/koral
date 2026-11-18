@@ -202,11 +202,14 @@ impl Graphics {
         let Decoded { width, height, rgba } = decoded;
         self.images.insert(id, Arc::new(Image { generation, width, height, rgba }));
 
-        while self.used > MAX_STORE
-            && let Some(oldest) = self.order.front().copied()
-        {
-            self.forget(oldest);
-            self.placements.retain(|_, placement| placement.image != oldest);
+        while self.used > MAX_STORE {
+            // A preview nothing shows goes before an image a placement still keeps on screen; only
+            // when every image has one does the oldest transmission go.
+            let placed = |id: &u32| self.placements.values().any(|placement| placement.image == *id);
+            let victim = self.order.iter().find(|id| !placed(id)).copied().or_else(|| self.order.front().copied());
+            let Some(victim) = victim else { break };
+            self.forget(victim);
+            self.placements.retain(|_, placement| placement.image != victim);
         }
         id
     }
@@ -284,6 +287,11 @@ impl Graphics {
 
     pub fn image(&self, id: u32) -> Option<&Arc<Image>> {
         self.images.get(&id)
+    }
+
+    /// Bytes the stored images hold.
+    pub fn used(&self) -> usize {
+        self.used
     }
 
     /// Rows above the viewport that can still reach into it.

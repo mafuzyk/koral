@@ -195,6 +195,56 @@ fn old_images_leave_when_the_store_is_full() {
     assert!(g.image(6).is_some());
 }
 
+/// 4000x4000 RGBA is 64 MB, a fifth of the store: six of them do not fit.
+fn transmit_a_fifth(graphics: &mut Graphics, id: u32) {
+    send(graphics, &format!("a=t,f=32,s=4000,v=4000,i={id},q=2"), &vec![0; 4000 * 4000 * 4]);
+}
+
+fn shown(image: u32) -> Request {
+    Request { image, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] }
+}
+
+#[test]
+fn an_image_on_screen_survives_a_burst_of_previews() {
+    let mut g = graphics();
+    transmit_a_fifth(&mut g, 1);
+    let anchor = g.place(shown(1), &[]);
+    for id in 2..=6 {
+        transmit_a_fifth(&mut g, id);
+    }
+    assert!(g.image(1).is_some(), "the image a placement shows was evicted");
+    assert!(g.placement(anchor).is_some());
+    assert!(g.image(2).is_none(), "the oldest preview stayed");
+    assert!(g.image(6).is_some());
+}
+
+#[test]
+fn a_soft_deleted_image_leaves_before_one_on_screen() {
+    let mut g = graphics();
+    transmit_a_fifth(&mut g, 1);
+    let anchor = g.place(shown(1), &[]);
+    transmit_a_fifth(&mut g, 2);
+    g.place(shown(2), &[]);
+    send(&mut g, "a=d,d=i,i=2", &[]);
+    for id in 3..=6 {
+        transmit_a_fifth(&mut g, id);
+    }
+    assert!(g.image(1).is_some());
+    assert!(g.placement(anchor).is_some());
+    assert!(g.image(2).is_none(), "the deleted image kept its quota");
+}
+
+#[test]
+fn used_matches_the_images_that_remain() {
+    let mut g = graphics();
+    for id in 1..=6 {
+        transmit_a_fifth(&mut g, id);
+    }
+    let total: usize = (1..=6).filter_map(|id| g.image(id)).map(|image| image.rgba.len()).sum();
+    assert_eq!(g.used(), total);
+    assert!(total <= 5 * MAX_IMAGE, "{total} bytes kept");
+}
+
 #[test]
 fn transmit_and_place_asks_for_a_placement_in_cells() {
     let mut g = graphics();
