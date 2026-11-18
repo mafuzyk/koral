@@ -13,22 +13,33 @@ pub fn encode(key: &Key, text: Option<&str>, mods: ModifiersState, mode: TermMod
 }
 
 fn encode_text(text: &str, mods: ModifiersState) -> Option<Vec<u8>> {
-    let bytes = if mods.control_key() {
+    if mods.control_key() {
         let mut chars = text.chars();
-        let (ch, None) = (chars.next()?, chars.next()) else {
-            return None;
-        };
-        vec![control_code(ch)?]
-    } else {
-        text.as_bytes().to_vec()
-    };
-    Some(with_alt(bytes, mods))
+        if let (Some(ch), None) = (chars.next(), chars.next())
+            && let Some(code) = control_code(ch)
+        {
+            return Some(with_alt(vec![code], mods));
+        }
+        // AltGr arrives as Ctrl+Alt on Linux and composes a character instead of
+        // pressing a control key: no escape prefix, or the app sees Alt+char.
+        return (!text.is_ascii()).then(|| text.as_bytes().to_vec());
+    }
+    Some(with_alt(text.as_bytes().to_vec(), mods))
 }
 
 fn control_code(ch: char) -> Option<u8> {
     match ch.to_ascii_uppercase() {
         ch @ '@'..='_' => Some(ch as u8 - b'@'),
         '?' => Some(0x7f),
+        '2' => Some(0x00),
+        '3' => Some(0x1b),
+        '4' => Some(0x1c),
+        '5' => Some(0x1d),
+        '6' => Some(0x1e),
+        '7' => Some(0x1f),
+        '8' => Some(0x7f),
+        '/' => Some(0x1f),
+        '`' | '~' => Some(0x00),
         _ => None,
     }
 }
@@ -118,11 +129,11 @@ fn modifier_code(mods: ModifiersState) -> u8 {
 /// Clipboard text is untrusted: without this filter it could close the bracket
 /// and run as typed input.
 pub fn paste(text: &str, mode: TermMode) -> Vec<u8> {
+    let clean: String = text.chars().filter(|ch| !matches!(ch, '\x1b' | '\u{9b}')).collect();
     if mode.contains(TermMode::BRACKETED_PASTE) {
-        let clean: String = text.chars().filter(|ch| !matches!(ch, '\x1b' | '\u{9b}')).collect();
         return format!("\x1b[200~{clean}\x1b[201~").into_bytes();
     }
-    text.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
+    clean.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
 }
 
 #[derive(Debug, Clone, Copy)]
