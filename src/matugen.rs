@@ -34,8 +34,23 @@ pub fn add_template(source: &str, template: &Path, output: &Path) -> Option<Stri
     Some(updated)
 }
 
+/// Whether a usable `matugen` is installed: the toggle has nothing to run without it.
+pub fn on_path(path: Option<&std::ffi::OsStr>) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Some(path) = path else {
+        return false;
+    };
+    std::env::split_paths(path).any(|dir| {
+        std::fs::metadata(dir.join("matugen")).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    })
+}
+
 /// Makes the next matugen run write Koral's colours.
 pub fn install() -> Result<(), String> {
+    if !on_path(std::env::var_os("PATH").as_deref()) {
+        return Err("matugen is not installed".to_string());
+    }
     let home = config::home().ok_or("Not saved: no config folder")?;
     // Dotfile managers link this file: writing through the link keeps it theirs.
     let matugen = std::fs::canonicalize(home.join("matugen/config.toml")).map_err(|_| "No matugen config found")?;

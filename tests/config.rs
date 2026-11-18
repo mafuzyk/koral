@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use koral::config::{Config, migrate, parse, path, set};
+use koral::config::{Config, append, log_path, migrate, parse, path, set};
 
 fn config(source: &str) -> Config {
     parse(source).0
@@ -135,6 +135,25 @@ fn folder(name: &str) -> PathBuf {
 #[test]
 fn the_config_file_is_config_sharky() {
     assert!(path().unwrap().ends_with("koral/config.sharky"));
+}
+
+#[test]
+fn the_log_is_koral_log_next_to_the_config() {
+    assert!(log_path().unwrap().ends_with("koral/koral.log"));
+}
+
+#[test]
+fn the_log_keeps_one_timestamped_line_per_event() {
+    let dir = folder("log");
+    let path = dir.join("koral.log");
+    append(&path, "config.sharky line 2: bad").unwrap();
+    append(&path, "cannot start nope").unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert!(lines[0].starts_with('['), "{:?}", lines[0]);
+    assert!(lines[0].ends_with("config.sharky line 2: bad"), "{:?}", lines[0]);
+    assert!(lines[1].ends_with("cannot start nope"), "{:?}", lines[1]);
 }
 
 #[test]

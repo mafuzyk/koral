@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::PathBuf;
 
 use sharky_config::tokenize;
@@ -57,6 +58,29 @@ pub fn home() -> Option<PathBuf> {
 
 pub fn path() -> Option<PathBuf> {
     Some(home()?.join("koral/config.sharky"))
+}
+
+pub fn log_path() -> Option<PathBuf> {
+    Some(home()?.join("koral/koral.log"))
+}
+
+/// Best effort: the same line also reaches the log, which survives a launch from the desktop.
+pub fn log(message: &str) {
+    if let Some(path) = log_path() {
+        let _ = append(&path, message);
+    }
+}
+
+/// One timestamped line per event, appended.
+pub fn append(path: &std::path::Path, message: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(file, "[{seconds}] {message}")
 }
 
 /// Moves a config from before the rename; an existing `config.sharky` always wins.

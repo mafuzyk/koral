@@ -84,6 +84,15 @@ fn next_and_previous_wrap_around() {
 }
 
 #[test]
+fn cycling_tabs_with_none_open_does_nothing() {
+    let mut tabs = tabs(1);
+    tabs.close(0);
+    tabs.next();
+    tabs.previous();
+    assert!(tabs.is_empty());
+}
+
+#[test]
 fn moving_the_active_tab_keeps_it_active() {
     let mut tabs = tabs(4);
     tabs.select(0);
@@ -160,6 +169,14 @@ fn clicks_on_the_right_end_of_a_tab_close_it() {
     let bar = layout(2, 1000.0, 36.0);
     let first = bar.tabs[0];
     assert_eq!(hit(&bar, first.x + first.width - 14.0, 18.0), Hit::Close(0));
+}
+
+#[test]
+fn a_narrow_tab_keeps_its_middle_for_selecting() {
+    let bar = layout(10, 600.0, 36.0);
+    let fifth = bar.tabs[5];
+    assert_eq!(hit(&bar, fifth.x + fifth.width / 2.0, 18.0), Hit::Tab(5));
+    assert_eq!(hit(&bar, fifth.x + fifth.width - 1.0, 18.0), Hit::Close(5));
 }
 
 #[test]

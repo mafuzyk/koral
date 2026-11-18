@@ -1,4 +1,4 @@
-use koral::matugen::{TEMPLATE, add_template};
+use koral::matugen::{TEMPLATE, add_template, on_path};
 use koral::theme::{Theme, hex};
 
 const NEW: &str = "[templates.koral]\ninput_path = \"/c/koral/matugen.template\"\noutput_path = \"/c/koral/matugen.colors\"\n";
@@ -29,6 +29,26 @@ fn a_second_toggle_adds_nothing() {
 fn quotes_in_a_path_stay_inside_the_toml_string() {
     let updated = add_template("", "/a\"b/t".as_ref(), "/c/o".as_ref()).unwrap();
     assert!(updated.contains(r#"input_path = "/a\"b/t""#));
+}
+
+#[test]
+fn only_an_executable_matugen_on_the_path_counts() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join(format!("koral-matugen-path-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = Some(dir.as_os_str());
+    assert!(!on_path(path));
+
+    let program = dir.join("matugen");
+    std::fs::write(&program, "").unwrap();
+    std::fs::set_permissions(&program, PermissionsExt::from_mode(0o644)).unwrap();
+    assert!(!on_path(path));
+
+    std::fs::set_permissions(&program, PermissionsExt::from_mode(0o755)).unwrap();
+    assert!(on_path(path));
+    assert!(!on_path(None));
 }
 
 #[test]
