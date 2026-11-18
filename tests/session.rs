@@ -419,6 +419,62 @@ fn an_image_lands_on_the_column_the_client_moved_the_cursor_to() {
     assert_eq!((picture.row, picture.column), (0, 28));
 }
 
+/// OpenTUI wraps a repaint in a synchronized update: it moves the cursor to the image cell, sends
+/// the placement, puts the cursor back and ends the update. vte replays those moves only at the
+/// ESU, so the image must not land where the cursor sat when the batch began.
+#[test]
+fn an_image_in_a_synchronized_update_lands_on_the_cell_the_batch_names() {
+    let batch = "\x1b[?2026h\x1b[5;4H\x1b_Ga=p,i=1,c=2,r=2,C=1,q=2\x1b\\\x1b[1;9H\x1b[?2026l";
+    // Whole in one read, and split inside the image command as a chunked client sends it.
+    for split in [batch.len(), 30] {
+        let mut f = Fixture::new(20, 10);
+        f.feed("\x1b[?1049h");
+        f.feed("\x1b_Ga=t,f=24,s=1,v=1,i=1,q=2;AAAA\x1b\\");
+        f.feed("$ prompt");
+        let (head, tail) = batch.split_at(split);
+        f.session.feed(head.as_bytes(), f.now);
+        f.session.feed(tail.as_bytes(), f.now);
+
+        let cursor = f.session.term.grid().cursor.point;
+        assert_eq!((cursor.line, cursor.column), (Line(0), Column(8)), "the cursor goes back to the prompt");
+        let picture = f.pictures()[0];
+        assert_eq!((picture.row, picture.column), (4, 3), "the image sits on the cell the batch named");
+    }
+}
+
+/// The reopened update must still end at the client's ESU: whatever follows the batch applies
+/// at once instead of waiting for a timeout.
+#[test]
+fn output_after_the_end_of_a_synchronized_update_applies_at_once() {
+    let mut f = Fixture::new(20, 10);
+    f.feed("\x1b[?1049h");
+    f.feed("\x1b_Ga=t,f=24,s=1,v=1,i=1,q=2;AAAA\x1b\\");
+    f.feed("$ ");
+    f.feed("\x1b[?2026h\x1b[5;4H\x1b_Ga=p,i=1,c=2,r=2,C=1,q=2\x1b\\\x1b[1;3H\x1b[?2026l");
+    f.feed("x");
+
+    assert_eq!(f.text(Line(0)), "$ x");
+    let cursor = f.session.term.grid().cursor.point;
+    assert_eq!((cursor.line, cursor.column), (Line(0), Column(3)), "the update ended with its ESU");
+}
+
+/// A client that clears a preview inside a synchronized update names the cell with a move, and
+/// that move is only in the parser until the update ends, so the delete has to wait for it too.
+#[test]
+fn a_delete_in_a_synchronized_update_follows_the_cell_the_batch_names() {
+    let mut f = Fixture::new(20, 10);
+    f.feed("\x1b_Ga=t,f=24,s=1,v=1,i=1,q=2;AAAA\x1b\\");
+    f.feed("\x1b_Ga=t,f=24,s=1,v=1,i=2,q=2;AAAA\x1b\\");
+    f.feed("\x1b[H\x1b_Ga=p,i=1,c=2,r=2,C=1,q=2\x1b\\");
+    f.feed("\x1b[5;1H\x1b_Ga=p,i=2,c=2,r=2,C=1,q=2\x1b\\");
+    f.feed("\x1b[1;1H");
+    f.feed("\x1b[?2026h\x1b[5;1H\x1b_Ga=d,d=c\x1b\\\x1b[1;1H\x1b[?2026l");
+
+    let pictures = f.pictures();
+    assert_eq!(pictures.len(), 1);
+    assert_eq!(pictures[0].row, 0, "the image the batch pointed at went");
+}
+
 #[test]
 fn an_image_is_not_centred_when_the_cursor_sits_at_the_left_edge() {
     let mut f = Fixture::new(80, 10);

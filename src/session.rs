@@ -5,7 +5,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Term, TermMode};
-use alacritty_terminal::vte::ansi::Processor;
+use alacritty_terminal::vte::ansi::{Processor, Timeout};
 
 use crate::blocks::BlockStore;
 use crate::graphics::{Area, Graphics, Request};
@@ -67,12 +67,26 @@ impl<L: EventListener> Session<L> {
             Piece::Graphics(body) => {
                 let outcome = graphics.handle(body);
                 replies.extend(outcome.reply);
+                // Only a placement or a positional delete reads the grid; transfers, chunked
+                // payloads, queries and id deletes settle without it and may span many reads.
+                let needs_grid = outcome.place.is_some() || outcome.delete.is_some();
+                // A synchronized update holds its cursor moves inside the parser, and the client
+                // moved the cursor here before sending the command, so replay them first.
+                // shortcut: the replay publishes what the batch drew so far, so a frame whose
+                // writes span several redraws can show part of itself; only an atomic replay hides it.
+                let flushed = needs_grid && parser.sync_timeout().pending_timeout();
+                if flushed {
+                    parser.stop_sync(term);
+                }
                 if let Some(delete) = outcome.delete {
                     let anchors = targets(term, graphics, delete.area);
                     graphics.drop(&anchors, delete.free);
                 }
                 if let Some(request) = outcome.place {
                     place(term, parser, graphics, request);
+                }
+                if flushed {
+                    parser.advance(term, b"\x1b[?2026h");
                 }
             }
             Piece::Status(query) => replies.push(status_reply(query, term.grid().cursor.template.flags)),
