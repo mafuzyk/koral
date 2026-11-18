@@ -49,9 +49,15 @@ impl<T> Tabs<T> {
         }
     }
     pub fn next(&mut self) {
+        if self.items.is_empty() {
+            return;
+        }
         self.active = (self.active + 1) % self.items.len();
     }
     pub fn previous(&mut self) {
+        if self.items.is_empty() {
+            return;
+        }
         self.active = (self.active + self.items.len() - 1) % self.items.len();
     }
     pub fn move_tab(&mut self, from: usize, to: usize) {
@@ -160,8 +166,11 @@ pub fn hit(bar: &Bar, x: f32, y: f32) -> Hit {
         return Hit::Settings;
     }
     match bar.tabs.iter().position(|tab| tab.contains(x, y)) {
-        Some(index) if x >= bar.tabs[index].x + bar.tabs[index].width - CLOSE_ZONE => Hit::Close(index),
-        Some(index) => Hit::Tab(index),
+        Some(index) => {
+            let tab = bar.tabs[index];
+            // A narrow tab keeps its middle clickable: the zone never takes more than a third.
+            if x >= tab.x + tab.width - CLOSE_ZONE.min(tab.width / 3.0) { Hit::Close(index) } else { Hit::Tab(index) }
+        }
         None => Hit::Empty,
     }
 }

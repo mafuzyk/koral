@@ -34,6 +34,25 @@ fn control_letters_become_c0_codes() {
 }
 
 #[test]
+fn legacy_ctrl_aliases_match_their_c0_codes() {
+    let cases = [
+        ('2', 0x00),
+        ('3', 0x1b),
+        ('4', 0x1c),
+        ('5', 0x1d),
+        ('6', 0x1e),
+        ('7', 0x1f),
+        ('8', 0x7f),
+        ('/', 0x1f),
+        ('`', 0x00),
+        ('~', 0x00),
+    ];
+    for (typed, code) in cases {
+        assert_eq!(character(&typed.to_string(), CTRL), Some(vec![code]), "ctrl+{typed}");
+    }
+}
+
+#[test]
 fn control_space_is_nul() {
     assert_eq!(named(NamedKey::Space, CTRL, TermMode::empty()).unwrap(), vec![0]);
 }
@@ -106,6 +125,11 @@ fn bracketed_paste_drops_the_c1_control_introducer() {
     assert_eq!(out, b"\x1b[200~x201~y\x1b[201~");
 }
 
+#[test]
+fn plain_paste_drops_the_control_introducers() {
+    assert_eq!(paste("a\x1b[31mb\u{9b}2Jc\nd", TermMode::empty()), b"a[31mb2Jc\rd");
+}
+
 fn press(button: u8, column: usize, line: usize) -> Mouse {
     Mouse { button, column, line, pressed: true, mods: NONE }
 }
@@ -143,10 +167,18 @@ fn legacy_mouse_cannot_report_past_its_range() {
     assert_eq!(mouse_report(press(0, 300, 0), TermMode::MOUSE_REPORT_CLICK), None);
 }
 
+/// On Linux AltGr arrives as Ctrl+Alt and main.rs drops the text for it, so the
+/// composed character has to survive the encoder with no kitty protocol around.
 #[test]
-fn ctrl_cedilla_stays_silent_in_legacy_mode() {
-    let cedilla = Key::Character("ç".into());
-    assert_eq!(encode(&cedilla, None, ModifiersState::CONTROL, TermMode::empty()), None);
+fn altgr_composed_letters_reach_the_terminal() {
+    for typed in ["ç", "é", "ã", "ô"] {
+        let key = Key::Character(typed.into());
+        assert_eq!(
+            encode(&key, None, CTRL | ALT, TermMode::empty()),
+            Some(typed.as_bytes().to_vec()),
+            "altgr {typed}"
+        );
+    }
 }
 
 #[test]

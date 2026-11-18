@@ -27,6 +27,17 @@ fn png_bytes(width: u32, height: u32) -> Vec<u8> {
     bytes
 }
 
+/// A real 1x1 PNG whose IHDR lies about its size, like a crafted file piped into the terminal.
+fn png_declaring(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = png_bytes(1, 1);
+    bytes[16..20].copy_from_slice(&width.to_be_bytes());
+    bytes[20..24].copy_from_slice(&height.to_be_bytes());
+    let mut crc = flate2::Crc::new();
+    crc.update(&bytes[12..29]); // the IHDR type and data
+    bytes[29..33].copy_from_slice(&crc.sum().to_be_bytes());
+    bytes
+}
+
 fn deflate(bytes: &[u8]) -> Vec<u8> {
     use std::io::Write;
     let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -57,6 +68,15 @@ fn png_is_decoded_without_being_told_its_size() {
     let image = g.image(1).unwrap();
     assert_eq!((image.width, image.height), (3, 2));
     assert_eq!(&image.rgba[..4], &[200, 200, 200, 255]);
+}
+
+#[test]
+fn a_png_header_declaring_a_huge_image_is_refused_before_its_buffer_is_allocated() {
+    // 20000x20000 is 1.2 GB of RGB, far past MAX_IMAGE, and the header alone says so.
+    let mut g = graphics();
+    let reply = send(&mut g, "a=t,f=100,i=1", &png_declaring(20_000, 20_000)).reply.unwrap();
+    assert!(reply.contains("EFBIG"), "{reply:?}");
+    assert!(g.image(1).is_none());
 }
 
 #[test]
@@ -115,6 +135,43 @@ fn file_transmission_is_refused_so_a_program_cannot_read_local_files() {
     }
 }
 
+/// The command icat sends for `--transfer-mode=memory`: the payload is a shared memory name.
+#[test]
+fn a_shared_memory_transmission_is_refused_with_its_error() {
+    let mut g = graphics();
+    let name = STANDARD.encode(b"/icat-BWVCZONVJ6XL2");
+    let reply = send(&mut g, "a=T,f=100,t=s,s=240,v=120,S=401,i=7", name.as_bytes()).reply.unwrap();
+    assert!(reply.contains("ENOTSUPPORTED"), "{reply:?}");
+    assert!(g.image(7).is_none());
+}
+
+/// A client probes the mediums with a query before it picks one; every unsupported probe must
+/// come back so it can fall back to direct transmission.
+#[test]
+fn a_query_over_an_unsupported_medium_reports_it() {
+    for medium in ["f", "t", "s"] {
+        let mut g = graphics();
+        let keys = format!("a=q,f=24,s=1,v=1,t={medium},i=3");
+        let reply = send(&mut g, &keys, b"/dev/shm/kitty-tty-graphics-protocol-1").reply.unwrap();
+        assert!(reply.contains("ENOTSUPPORTED"), "{reply:?}");
+    }
+}
+
+#[test]
+fn an_action_the_terminal_does_not_implement_is_answered() {
+    let mut g = graphics();
+    let reply = send(&mut g, "a=f,f=24,s=1,v=1,i=9", &[0; 3]).reply.unwrap();
+    assert!(reply.contains("EINVAL"), "{reply:?}");
+}
+
+#[test]
+fn an_error_without_an_id_stays_silent() {
+    // A reply is routed by image id, and icat also asks for silence with q=2: a client that sends
+    // neither has nothing to read, so the refusal can only reach it when it sends an id.
+    let mut g = graphics();
+    assert_eq!(send(&mut g, "a=T,f=100,t=s,s=1,v=1", b"/dev/shm/x").reply, None);
+}
+
 #[test]
 fn a_size_past_the_limit_is_refused() {
     let side = (MAX_IMAGE as f64).sqrt() as u32;
@@ -136,6 +193,56 @@ fn old_images_leave_when_the_store_is_full() {
     }
     assert!(g.image(1).is_none());
     assert!(g.image(6).is_some());
+}
+
+/// 4000x4000 RGBA is 64 MB, a fifth of the store: six of them do not fit.
+fn transmit_a_fifth(graphics: &mut Graphics, id: u32) {
+    send(graphics, &format!("a=t,f=32,s=4000,v=4000,i={id},q=2"), &vec![0; 4000 * 4000 * 4]);
+}
+
+fn shown(image: u32) -> Request {
+    Request { image, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1] }
+}
+
+#[test]
+fn an_image_on_screen_survives_a_burst_of_previews() {
+    let mut g = graphics();
+    transmit_a_fifth(&mut g, 1);
+    let anchor = g.place(shown(1), &[]);
+    for id in 2..=6 {
+        transmit_a_fifth(&mut g, id);
+    }
+    assert!(g.image(1).is_some(), "the image a placement shows was evicted");
+    assert!(g.placement(anchor).is_some());
+    assert!(g.image(2).is_none(), "the oldest preview stayed");
+    assert!(g.image(6).is_some());
+}
+
+#[test]
+fn a_soft_deleted_image_leaves_before_one_on_screen() {
+    let mut g = graphics();
+    transmit_a_fifth(&mut g, 1);
+    let anchor = g.place(shown(1), &[]);
+    transmit_a_fifth(&mut g, 2);
+    g.place(shown(2), &[]);
+    send(&mut g, "a=d,d=i,i=2", &[]);
+    for id in 3..=6 {
+        transmit_a_fifth(&mut g, id);
+    }
+    assert!(g.image(1).is_some());
+    assert!(g.placement(anchor).is_some());
+    assert!(g.image(2).is_none(), "the deleted image kept its quota");
+}
+
+#[test]
+fn used_matches_the_images_that_remain() {
+    let mut g = graphics();
+    for id in 1..=6 {
+        transmit_a_fifth(&mut g, id);
+    }
+    let total: usize = (1..=6).filter_map(|id| g.image(id)).map(|image| image.rgba.len()).sum();
+    assert_eq!(g.used(), total);
+    assert!(total <= 5 * MAX_IMAGE, "{total} bytes kept");
 }
 
 #[test]

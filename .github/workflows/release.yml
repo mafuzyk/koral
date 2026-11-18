@@ -21,10 +21,16 @@ jobs:
       TAG: ${{ inputs.tag || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Validate tag
+        run: |
+          if [[ "$TAG" != v* ]]; then
+            echo "::error::Tag must start with 'v' (got: $TAG)"
+            exit 1
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.tag || github.ref }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       - name: Test
         run: cargo test --release --locked
       - name: Build
@@ -37,4 +43,4 @@ jobs:
       - name: Publish
         run: |
           gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --generate-notes --title "koral ${TAG#v}"
-          gh release upload "$TAG" koral-x86_64-linux.tar.gz --clobber
+          gh release upload "$TAG" koral-x86_64-linux.tar.gz

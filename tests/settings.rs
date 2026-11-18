@@ -12,6 +12,18 @@ fn on(key: &str) -> Settings {
     Settings { selected: index(key), ..Settings::default() }
 }
 
+fn drawn(settings: &Settings, config: &Config, error: Option<&str>) -> koral::frame::Frame {
+    let cell = koral::render::Cell { width: 8.0, height: 20.0 };
+    let layout = koral::frame::Layout { width: 800.0, height: 600.0, scale: 1.0, padding: 0.0, cell };
+    let mut frame = koral::frame::Frame::default();
+    koral::frame::draw_settings(&mut frame, settings, config, error, layout, &koral::theme::Theme::default());
+    frame
+}
+
+fn text(frame: &koral::frame::Frame) -> Vec<String> {
+    frame.lines.iter().flat_map(|line| &line.spans).map(|span| span.text.clone()).collect()
+}
+
 fn fonts() -> Vec<String> {
     ["Fira Code", "Fira Mono", "IosevkaTerm Nerd Font Mono", "Monocraft"].map(String::from).to_vec()
 }
@@ -152,15 +164,16 @@ fn update_ignores_errors_that_were_already_in_the_file() {
 const PANEL: Panel = Panel { x: 100.0, y: 50.0, width: 400.0, row_height: 30.0 };
 
 #[test]
-fn clicks_find_their_row() {
-    assert_eq!(zone(PANEL, 150.0, 55.0), Zone::Row(0));
-    assert_eq!(zone(PANEL, 150.0, 85.0), Zone::Row(1));
+fn clicks_find_their_row_below_the_title() {
+    assert_eq!(zone(PANEL, 150.0, 55.0), Zone::Inside);
+    assert_eq!(zone(PANEL, 150.0, 85.0), Zone::Row(0));
+    assert_eq!(zone(PANEL, 150.0, 115.0), Zone::Row(1));
 }
 
 #[test]
 fn clicks_on_the_arrows_of_a_number_row_step_it() {
     let row = index("font_size");
-    let y = PANEL.y + row as f32 * PANEL.row_height + 5.0;
+    let y = PANEL.y + (row + 1) as f32 * PANEL.row_height + 5.0;
     assert_eq!(zone(PANEL, 480.0, y), Zone::More(row));
     assert_eq!(zone(PANEL, 380.0, y), Zone::Less(row));
 }
@@ -168,19 +181,40 @@ fn clicks_on_the_arrows_of_a_number_row_step_it() {
 #[test]
 fn text_rows_have_no_arrows() {
     let row = index("font");
-    let y = PANEL.y + row as f32 * PANEL.row_height + 5.0;
+    let y = PANEL.y + (row + 1) as f32 * PANEL.row_height + 5.0;
     assert_eq!(zone(PANEL, 480.0, y), Zone::Row(row));
 }
 
 #[test]
 fn clicks_below_the_rows_stay_inside_the_panel() {
-    let y = PANEL.y + FIELDS.len() as f32 * PANEL.row_height + 5.0;
+    let y = PANEL.y + (FIELDS.len() + 1) as f32 * PANEL.row_height + 5.0;
     assert_eq!(zone(PANEL, 150.0, y), Zone::Inside);
 }
 
 #[test]
 fn clicks_away_from_the_panel_are_outside() {
     assert_eq!(zone(PANEL, 50.0, 55.0), Zone::Outside);
+}
+
+#[test]
+fn the_panel_has_a_title() {
+    let frame = drawn(&Settings::default(), &Config::default(), None);
+    assert!(text(&frame).iter().any(|line| line == "Settings"));
+}
+
+#[test]
+fn the_toggle_reads_its_state() {
+    assert!(text(&drawn(&on("matugen"), &Config::default(), None)).iter().any(|line| line == "off"));
+    let config = Config { matugen: true, ..Config::default() };
+    assert!(text(&drawn(&on("matugen"), &config, None)).iter().any(|line| line == "on"));
+}
+
+#[test]
+fn a_substitution_notice_fits_on_the_hint_line() {
+    let frame = drawn(&Settings::default(), &Config::default(), Some("Can't use Missing. Showing Iosevka."));
+    let lines = text(&frame);
+    assert!(lines.iter().any(|line| line == "Can't use Missing."));
+    assert!(!lines.iter().any(|line| line.contains("Showing")));
 }
 
 #[test]

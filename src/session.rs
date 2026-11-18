@@ -24,11 +24,17 @@ pub struct Session<L> {
     pub notices: Vec<Notice>,
     parser: Processor,
     scanner: Scanner,
+    /// The row the shell opened the prompt on, so the anchor cannot climb into
+    /// the output written before it.
+    prompt_start: Option<Line>,
+    /// Columns at the last read: a change means every prompt was rewrapped.
+    columns: usize,
 }
 
 impl<L: EventListener> Session<L> {
     pub fn new(term: Term<L>) -> Self {
         Self {
+            columns: term.grid().columns(),
             term,
             blocks: BlockStore::default(),
             graphics: Graphics::default(),
@@ -36,11 +42,19 @@ impl<L: EventListener> Session<L> {
             notices: Vec::new(),
             parser: Processor::new(),
             scanner: Scanner::default(),
+            prompt_start: None,
         }
     }
 
     pub fn feed(&mut self, bytes: &[u8], now: Instant) {
-        let Self { term, blocks, graphics, replies, notices, parser, scanner } = self;
+        let Self { term, blocks, graphics, replies, notices, parser, scanner, prompt_start, columns } = self;
+        let width = term.grid().columns();
+        // shortcut: the row counts are read again on the next read, so a frame drawn
+        // straight after a resize can still use the wrapping the prompt had before it.
+        if width != *columns {
+            *columns = width;
+            reflow(term, blocks);
+        }
         scanner.feed(bytes, &mut |piece| match piece {
             Piece::Bytes(bytes) => {
                 parser.advance(term, bytes);
@@ -58,11 +72,22 @@ impl<L: EventListener> Session<L> {
                 notices.push(Notice { title: clean(&title, TITLE_LIMIT), body: clean(&body, BODY_LIMIT) });
             }
             Piece::Mark(mark) => {
-                if term.mode().contains(TermMode::ALT_SCREEN) {
+                // A program on the alternate screen must not open a block, but the
+                // shell's command end arrives there too when a program dies badly.
+                if term.mode().contains(TermMode::ALT_SCREEN)
+                    && !matches!(mark, Mark::CommandEnd(_) | Mark::Cwd(_))
+                {
                     return;
                 }
+                if mark == Mark::PromptStart {
+                    let cursor = &term.grid().cursor;
+                    // A prompt printed at the last column wraps before its first character.
+                    *prompt_start = Some(Line(cursor.point.line.0 + i32::from(cursor.input_needs_wrap)));
+                }
                 if let Some(id) = blocks.apply(mark, now) {
-                    anchor(term, id);
+                    let line = anchor(term, id, *prompt_start);
+                    let feeds = blocks.get(id).map_or(0, |block| block.prompt_breaks);
+                    blocks.set_prompt_lines(id, prompt_rows(term, line, feeds));
                 }
             }
         });
@@ -96,12 +121,17 @@ fn status_reply(query: &[u8], flags: Flags) -> String {
 /// Lines have no stable identity: a character on the first cell travels with
 /// it through scrollback and reflow. Writing to the cell drops the anchor, so it
 /// goes in after the prompt text, and sharky's prompt redraw places it again.
-fn anchor<L>(term: &mut Term<L>, id: u32) {
+/// Returns the row it landed on.
+fn anchor<L>(term: &mut Term<L>, id: u32, start: Option<Line>) -> Line {
     let grid = term.grid_mut();
     let last = Column(grid.columns() - 1);
     let top = grid.topmost_line();
+    // The prompt begins at `start`: a wrap above it came from the output before.
+    // shortcut: a prompt that wraps while the screen scrolls keeps the row of the
+    // start it recorded, so its anchor can land inside its own wraps, never above them.
+    let floor = start.map_or(top, |start| start.max(top));
     let mut line = grid.cursor.point.line;
-    while line > top && grid[Line(line.0 - 1)][last].flags.contains(Flags::WRAPLINE) {
+    while line > floor && grid[Line(line.0 - 1)][last].flags.contains(Flags::WRAPLINE) {
         line = Line(line.0 - 1);
     }
 
@@ -110,10 +140,51 @@ fn anchor<L>(term: &mut Term<L>, id: u32) {
     if !cell.zerowidth().is_some_and(|extra| extra.contains(&ch)) {
         cell.push_zerowidth(ch);
     }
+    line
+}
+
+/// Rows the prompt takes above `line`. A reflow changes the rows but not the line
+/// feeds the prompt printed, so the walk counts those feeds back from the anchor.
+fn prompt_rows<L: EventListener>(term: &Term<L>, line: Line, feeds: usize) -> usize {
+    let grid = term.grid();
+    let last = Column(grid.columns() - 1);
+    let top = grid.topmost_line();
+    let wrapped = |at: Line| at > top && grid[Line(at.0 - 1)][last].flags.contains(Flags::WRAPLINE);
+    let mut at = line;
+    while wrapped(at) {
+        at = Line(at.0 - 1);
+    }
+    for _ in 0..feeds {
+        if at <= top {
+            break;
+        }
+        at = Line(at.0 - 1);
+        while wrapped(at) {
+            at = Line(at.0 - 1);
+        }
+    }
+    (line.0 - at.0) as usize
+}
+
+/// A resize rewraps every prompt, so their row counts are read off the grid again.
+fn reflow<L: EventListener>(term: &Term<L>, blocks: &mut BlockStore) {
+    let grid = term.grid();
+    let base = anchor_char(0) as u32;
+    for number in grid.topmost_line().0..=grid.bottommost_line().0 {
+        let line = Line(number);
+        let anchored = grid[line][Column(0)].zerowidth().and_then(|extra| {
+            extra.iter().filter_map(|ch| (*ch as u32).checked_sub(base)).find(|id| blocks.get(*id).is_some())
+        });
+        let Some((id, feeds)) = anchored.and_then(|id| Some((id, blocks.get(id)?.prompt_breaks))) else {
+            continue;
+        };
+        blocks.set_prompt_lines(id, prompt_rows(term, line, feeds));
+    }
 }
 
 /// An image rides on its top-left cell the way a block rides on its first line.
 fn place<L: EventListener>(term: &mut Term<L>, parser: &mut Processor, graphics: &mut Graphics, request: Request) {
+    // The cell the cursor reached: a client that centres an image moves the cursor there itself.
     let point = term.grid().cursor.point;
     let here: Vec<u32> = term.grid()[point.line][point.column]
         .zerowidth()

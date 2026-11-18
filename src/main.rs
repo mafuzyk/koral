@@ -35,15 +35,48 @@ use winit::window::{CursorIcon, UserAttentionType, Window, WindowId};
 
 const CONFIRM_WINDOW: Duration = Duration::from_secs(3);
 
+const USAGE: &str = "\
+Usage: koral [--version | --help]
+
+  -h, --help  print this help
+  --version   print the version
+";
+
+/// stderr for a launch from a terminal, the log for a launch from the desktop icon.
+fn report(message: &str) {
+    eprintln!("koral: {message}");
+    config::log(message);
+}
+
 fn main() {
-    if std::env::args().nth(1).as_deref() == Some("--version") {
-        println!("koral {}", env!("CARGO_PKG_VERSION"));
-        return;
+    match std::env::args().nth(1).as_deref() {
+        Some("--version") => {
+            println!("koral {}", env!("CARGO_PKG_VERSION"));
+            return;
+        }
+        Some("-h" | "--help") => {
+            print!("{USAGE}");
+            return;
+        }
+        Some(other) => {
+            eprintln!("koral: unknown argument '{other}'\n\n{USAGE}");
+            std::process::exit(2);
+        }
+        None => {}
     }
-    let event_loop =EventLoop::<UserEvent>::with_user_event().build().expect("create event loop");
+    let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
+        Ok(event_loop) => event_loop,
+        Err(error) => {
+            report(&format!("cannot start: {error}"));
+            std::process::exit(1);
+        }
+    };
     let proxy = event_loop.create_proxy();
     let mut app = App::new(proxy);
-    event_loop.run_app(&mut app).expect("run event loop");
+    if let Err(error) = event_loop.run_app(&mut app) {
+        report(&format!("cannot run: {error}"));
+        std::process::exit(1);
+    }
 }
 
 fn default_shell() -> String {
@@ -104,12 +137,12 @@ struct App {
 impl App {
     fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
         if let Some(Err(error)) = config::home().map(|home| config::migrate(&home.join("koral"))) {
-            eprintln!("koral: cannot rename config.koral: {error}");
+            report(&format!("cannot rename config.koral: {error}"));
         }
         let source = config::path().and_then(|path| std::fs::read_to_string(path).ok()).unwrap_or_default();
         let (config, errors) = config::parse(&source);
         for error in errors {
-            eprintln!("koral: config.sharky {error}");
+            report(&format!("config.sharky {error}"));
         }
         matugen::watch(proxy.clone());
         Self {
@@ -186,7 +219,7 @@ impl App {
         self.tabs.as_mut()?.active_mut()
     }
 
-    fn open_tab(&mut self, event_loop: &ActiveEventLoop) {
+    fn open_tab(&mut self) {
         let Some(geometry) = self.geometry() else {
             return;
         };
@@ -197,20 +230,29 @@ impl App {
         let id = self.next_id;
         self.next_id += 1;
 
-        let shell = std::env::var("KORAL_SHELL")
+        let fallback = default_shell();
+        let preferred = std::env::var("KORAL_SHELL")
             .ok()
             .or_else(|| self.config.shell.clone())
-            .unwrap_or_else(default_shell);
-        match Terminal::spawn(id, self.proxy.clone(), &shell, geometry, cwd) {
-            Ok(terminal) => match &mut self.tabs {
+            .unwrap_or_else(|| fallback.clone());
+        let mut shells = vec![preferred];
+        if shells[0] != fallback {
+            shells.push(fallback);
+        }
+        // A bad `polyp shell` must not cost the user the window: the default gets a turn.
+        let terminal = shells.iter().find_map(|shell| {
+            match Terminal::spawn(id, self.proxy.clone(), shell, geometry, cwd.clone()) {
+                Ok(terminal) => Some(terminal),
+                Err(error) => {
+                    report(&format!("cannot start {shell}: {error}"));
+                    None
+                }
+            }
+        });
+        if let Some(terminal) = terminal {
+            match &mut self.tabs {
                 Some(tabs) => tabs.push(terminal),
                 None => self.tabs = Some(Tabs::new(terminal)),
-            },
-            Err(error) => {
-                eprintln!("koral: cannot start {shell}: {error}");
-                if self.tabs.is_none() {
-                    event_loop.exit();
-                }
             }
         }
         self.redraw();
@@ -285,7 +327,7 @@ impl App {
 
     fn run(&mut self, action: Action, event_loop: &ActiveEventLoop) {
         match action {
-            Action::NewTab => self.open_tab(event_loop),
+            Action::NewTab => self.open_tab(),
             Action::CloseTab => {
                 if let Some(index) = self.tabs.as_ref().map(Tabs::active_index) {
                     self.request_close(index, event_loop);
@@ -354,7 +396,11 @@ impl App {
             self.settings_error = Some(message);
             return;
         }
-        let (source, config) = match config::update(&self.source, key, value) {
+        // An editor may have touched the file while koral runs: start from what is on disk now.
+        let current = config::path()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .unwrap_or_else(|| self.source.clone());
+        let (source, config) = match config::update(&current, key, value) {
             Ok(updated) => updated,
             Err(message) => {
                 self.settings_error = Some(message);
@@ -681,7 +727,7 @@ impl App {
             return;
         };
         match (hit_at(&bar, self.cursor), button) {
-            (Hit::New, MouseButton::Left) => self.open_tab(event_loop),
+            (Hit::New, MouseButton::Left) => self.open_tab(),
             (Hit::Settings, MouseButton::Left) => self.toggle_settings(),
             (Hit::Close(index), MouseButton::Left) => self.request_close(index, event_loop),
             (Hit::Tab(index) | Hit::Close(index), MouseButton::Middle) => self.request_close(index, event_loop),
@@ -940,7 +986,14 @@ impl ApplicationHandler<UserEvent> for App {
             .with_inner_size(LogicalSize::new(960.0, 600.0))
             .with_transparent(true)
             .with_decorations(false);
-        let window = Arc::new(event_loop.create_window(attributes).expect("create window"));
+        let window = match event_loop.create_window(attributes) {
+            Ok(window) => Arc::new(window),
+            Err(error) => {
+                report(&format!("cannot open a window: {error}"));
+                event_loop.exit();
+                return;
+            }
+        };
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(Box::new(
             event_loop.owned_display_handle(),
         )));
@@ -963,7 +1016,7 @@ impl ApplicationHandler<UserEvent> for App {
         self.renderer = Some(pollster::block_on(Renderer::new(window.clone(), instance, &face, points, fonts)));
         window.set_ime_allowed(true);
         self.window = Some(window);
-        self.open_tab(event_loop);
+        self.open_tab();
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
@@ -990,8 +1043,13 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Bell(id) => self.bell(id),
             UserEvent::Notify(id, notice) => {
                 let in_view = self.focused && self.active().is_some_and(|tab| tab.id == id);
-                if !in_view && self.notices.allow(Instant::now()) {
+                if in_view {
+                    return;
+                }
+                if self.notices.allow(Instant::now()) {
                     notify::show(&notice);
+                } else {
+                    self.notices.hold(notice);
                 }
             }
             UserEvent::Blink => {
@@ -1127,6 +1185,9 @@ impl ApplicationHandler<UserEvent> for App {
             self.redraw();
         }
         let now = Instant::now();
+        if let Some(notice) = self.notices.release(now) {
+            notify::show(&notice);
+        }
         let mut blink = None;
         if self.blinking() {
             blink = self.blink.next(now);
@@ -1135,7 +1196,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
         }
         let confirm = self.confirming.map(|(_, at)| at + CONFIRM_WINDOW);
-        event_loop.set_control_flow(match blink.into_iter().chain(confirm).min() {
+        event_loop.set_control_flow(match blink.into_iter().chain(confirm).chain(self.notices.due()).min() {
             Some(deadline) => ControlFlow::WaitUntil(deadline),
             None => ControlFlow::Wait,
         });

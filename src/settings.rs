@@ -207,9 +207,9 @@ pub struct Panel {
 }
 
 impl Panel {
-    /// One extra row holds the hint line.
+    /// The title, the fields and one extra row for the hint line.
     pub fn height(&self) -> f32 {
-        (FIELDS.len() + 1) as f32 * self.row_height
+        (FIELDS.len() + 2) as f32 * self.row_height
     }
 
     pub fn arrow_width(&self) -> f32 {
@@ -236,7 +236,10 @@ pub fn zone(panel: Panel, x: f32, y: f32) -> Zone {
     if !inside {
         return Zone::Outside;
     }
-    let row = ((y - panel.y) / panel.row_height) as usize;
+    // The first row holds the title.
+    let Some(row) = (((y - panel.y) / panel.row_height) as usize).checked_sub(1) else {
+        return Zone::Inside;
+    };
     if row >= FIELDS.len() {
         return Zone::Inside;
     }

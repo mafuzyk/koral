@@ -20,6 +20,24 @@ fn minutes_and_hours_show_two_units() {
 }
 
 #[test]
+fn a_tenth_that_rounds_up_crosses_to_whole_seconds() {
+    assert_eq!(duration(Duration::from_millis(9_940)), "9.9s");
+    assert_eq!(duration(Duration::from_millis(9_950)), "10s");
+}
+
+#[test]
+fn a_second_that_rounds_up_crosses_to_a_minute() {
+    assert_eq!(duration(Duration::from_millis(59_950)), "1m 0s");
+}
+
+#[test]
+fn minutes_round_up_and_hours_keep_their_seconds_rounded() {
+    assert_eq!(duration(Duration::from_secs(3_599)), "59m 59s");
+    assert_eq!(duration(Duration::from_millis(3_599_600)), "1h 0m");
+    assert_eq!(duration(Duration::from_secs(3_645)), "1h 1m");
+}
+
+#[test]
 fn a_single_line_is_singular() {
     assert_eq!(lines(1), "1 line");
 }

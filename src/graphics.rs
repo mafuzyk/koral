@@ -9,6 +9,8 @@ use base64::engine::general_purpose::STANDARD_NO_PAD;
 // The stream is untrusted: limits hold for the image, the store and the transfer.
 pub const MAX_IMAGE: usize = 64 * 1024 * 1024;
 const MAX_STORE: usize = 320 * 1024 * 1024;
+// A decode holds the output buffer and the RGBA copy at once, and neither may outgrow the store.
+const _: () = assert!(2 * MAX_IMAGE <= MAX_STORE);
 const MAX_TRANSFER: usize = 128 * 1024 * 1024;
 const MAX_CELLS: u32 = 1024;
 const ANCHOR_RANGE: u32 = 0x7FFE;
@@ -158,6 +160,11 @@ impl Graphics {
 
     fn finish(&mut self, transfer: &Transfer) -> Outcome {
         let keys = transfer.keys;
+        // Reading paths or shared memory would let any printed file read this machine, so a medium
+        // that carries data must be answered with an error instead of being dropped.
+        if matches!(keys.action, b't' | b'T' | b'q') && keys.medium != b'd' {
+            return Outcome { reply: reply(keys, Err("ENOTSUPPORTED:only direct transmission")), place: None };
+        }
         match keys.action {
             b'd' => {
                 self.delete(keys);
@@ -176,7 +183,7 @@ impl Graphics {
                 }
                 Err(error) => Outcome { reply: reply(keys, Err(error)), place: None },
             },
-            _ => Outcome::default(),
+            _ => Outcome { reply: reply(keys, Err("EINVAL:unknown action")), place: None },
         }
     }
 
@@ -195,11 +202,14 @@ impl Graphics {
         let Decoded { width, height, rgba } = decoded;
         self.images.insert(id, Arc::new(Image { generation, width, height, rgba }));
 
-        while self.used > MAX_STORE
-            && let Some(oldest) = self.order.front().copied()
-        {
-            self.forget(oldest);
-            self.placements.retain(|_, placement| placement.image != oldest);
+        while self.used > MAX_STORE {
+            // A preview nothing shows goes before an image a placement still keeps on screen; only
+            // when every image has one does the oldest transmission go.
+            let placed = |id: &u32| self.placements.values().any(|placement| placement.image == *id);
+            let victim = self.order.iter().find(|id| !placed(id)).copied().or_else(|| self.order.front().copied());
+            let Some(victim) = victim else { break };
+            self.forget(victim);
+            self.placements.retain(|_, placement| placement.image != victim);
         }
         id
     }
@@ -279,6 +289,11 @@ impl Graphics {
         self.images.get(&id)
     }
 
+    /// Bytes the stored images hold.
+    pub fn used(&self) -> usize {
+        self.used
+    }
+
     /// Rows above the viewport that can still reach into it.
     pub fn tallest(&self) -> usize {
         self.placements.values().map(|placement| placement.rows as usize).max().unwrap_or(0)
@@ -352,10 +367,6 @@ fn reply(keys: Keys, result: Result<(), &str>) -> Option<String> {
 
 fn decode(transfer: &Transfer) -> Result<Decoded, &'static str> {
     let keys = transfer.keys;
-    // Reading paths or shared memory would let any printed file read this machine.
-    if keys.medium != b'd' {
-        return Err("ENOTSUPPORTED:only direct transmission");
-    }
     if transfer.too_big {
         return Err("EFBIG:image too large");
     }
@@ -406,7 +417,13 @@ fn decode_png(raw: &[u8]) -> Result<Decoded, &'static str> {
     let mut decoder = png::Decoder::new_with_limits(Cursor::new(raw), limits);
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info().map_err(|_| "EINVAL:bad png")?;
-    let mut buffer = vec![0; reader.output_buffer_size().ok_or("EFBIG:image too large")?];
+    // The header declares this size: `Limits.bytes` only reserves one row, so refuse before allocating.
+    let (width, height) = reader.info().size();
+    let size = reader.output_buffer_size().ok_or("EFBIG:image too large")?;
+    if u64::from(width) * u64::from(height) * 4 > MAX_IMAGE as u64 || size > MAX_IMAGE {
+        return Err("EFBIG:image too large");
+    }
+    let mut buffer = vec![0; size];
     let info = reader.next_frame(&mut buffer).map_err(|_| "EINVAL:bad png")?;
     let (width, height) = (info.width, info.height);
     if u64::from(width) * u64::from(height) * 4 > MAX_IMAGE as u64 {

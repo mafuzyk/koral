@@ -15,6 +15,7 @@ pub struct Notice {
 #[derive(Default)]
 pub struct Limiter {
     last: Option<Instant>,
+    held: Option<Notice>,
 }
 
 impl Limiter {
@@ -24,6 +25,26 @@ impl Limiter {
             self.last = Some(now);
         }
         allowed
+    }
+
+    /// A suppressed notice waits for the window instead of being lost; the newest wins.
+    pub fn hold(&mut self, notice: Notice) {
+        self.held = Some(notice);
+    }
+
+    /// The held notice once the spacing has passed.
+    pub fn release(&mut self, now: Instant) -> Option<Notice> {
+        if now.duration_since(self.last?) < SPACING {
+            return None;
+        }
+        self.last = Some(now);
+        self.held.take()
+    }
+
+    /// When a held notice may be shown.
+    pub fn due(&self) -> Option<Instant> {
+        self.held.as_ref()?;
+        self.last.map(|last| last + SPACING)
     }
 }
 

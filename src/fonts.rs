@@ -68,6 +68,17 @@ fn fixed_width(db: &fontdb::Database, id: fontdb::ID) -> bool {
     same.flatten().unwrap_or(false)
 }
 
+/// The families that patch a terminal font with icons at the private-use addresses.
+fn icon_like(family: &str) -> bool {
+    ["Nerd", "Symbols", "Awesome", "Powerline", "Emoji"].iter().any(|mark| family.contains(mark))
+}
+
+/// The icon font to draw with, the `Mono` patch first: it shapes every icon to one cell.
+fn icon_name(names: &[String]) -> Option<&String> {
+    let mono = |name: &&String| icon_like(name.as_str()) && name.contains("Nerd Font Mono");
+    names.iter().find(mono).or_else(|| names.iter().find(|name| icon_like(name.as_str())))
+}
+
 /// The families Koral can draw, by the names `Family::Name` finds.
 pub fn monospaced(db: &fontdb::Database) -> Vec<String> {
     let mut names: Vec<String> = db
@@ -88,7 +99,10 @@ pub fn usable(face: &Face, db: &fontdb::Database) -> Face {
     }
     let names = monospaced(db);
     let system = db.family_name(&fontdb::Family::Monospace);
-    match names.iter().find(|name| *name == system).or(names.first()) {
+    // A terminal needs the private-use icons a Nerd Font draws; plain monospace has none.
+    // Picking per codepoint is out of scope: the substitute font draws the icons instead.
+    let icons = icon_name(&names);
+    match icons.or_else(|| names.iter().find(|name| *name == system)).or(names.first()) {
         Some(family) => nearest_weights(&Face { family: family.clone(), ..face.clone() }, db),
         None => face.clone(),
     }

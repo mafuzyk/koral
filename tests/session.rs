@@ -209,11 +209,54 @@ fn a_wrapped_prompt_is_anchored_on_its_first_row() {
 }
 
 #[test]
+fn a_prompt_after_a_full_output_line_is_its_own_header() {
+    let mut f = Fixture::new(10, 6);
+    f.start("printf");
+    f.feed("0123456789");
+    f.feed("\x1b]133;D;0\x1b\\");
+    f.feed(PROMPT);
+    f.feed("ls\r\n");
+
+    assert_eq!(f.headers(), vec!["$ printf", "$ ls"]);
+}
+
+#[test]
+fn a_reflowed_prompt_stays_out_of_the_command_before() {
+    let mut f = Fixture::new(20, 12);
+    f.command("one", &["a", "b"], 0);
+    f.feed("\x1b]133;A\x1b\\head\r\nxxxxxx\r\n$ \x1b]133;B\x1b\\");
+    f.feed("two\r\n\x1b]133;C\x1b\\");
+    f.feed("c\r\n\x1b]133;D;0\x1b\\");
+    let id = f.rows()[0].block.unwrap();
+    f.session.term.resize(TermSize::new(5, 12));
+    f.feed("\x1b]133;B\x1b\\");
+
+    assert_eq!(output_text(&f.session.term, &f.session.blocks, id).as_deref(), Some("a\nb"));
+}
+
+#[test]
 fn marks_in_the_alternate_screen_are_ignored() {
     let mut f = Fixture::new(20, 5);
     f.feed("\x1b[?1049h");
     f.feed(PROMPT);
     assert!(f.session.blocks.is_empty());
+}
+
+#[test]
+fn a_command_end_on_the_alternate_screen_finishes_the_block() {
+    let mut f = Fixture::new(20, 6);
+    f.start("vim");
+    let id = f.rows()[0].block.unwrap();
+    f.feed("\x1b[?1049h");
+    f.feed("\x1b]133;D;0\x1b\\");
+    f.feed("\x1b[?1049l");
+    f.feed(PROMPT);
+    f.feed("ls\r\n");
+
+    let block = f.session.blocks.get(id).unwrap();
+    assert_eq!(block.status, Some(0));
+    assert!(block.duration.is_some());
+    assert_eq!(f.headers(), vec!["$ vim", "$ ls"]);
 }
 
 #[test]
@@ -363,6 +406,40 @@ fn an_image_sits_on_the_cursor_cell() {
     f.show("i=1,c=3,r=2");
     let picture = f.pictures()[0];
     assert_eq!((picture.row, picture.column, picture.columns, picture.rows), (1, 2, 3, 2));
+}
+
+/// icat centres an image by moving the cursor forward before the command, so the placement must
+/// land on the column the client chose instead of a centred one of the terminal's own making.
+#[test]
+fn an_image_lands_on_the_column_the_client_moved_the_cursor_to() {
+    let mut f = Fixture::new(80, 10);
+    f.feed("\x1b[28C");
+    f.show("i=1,c=24,r=6");
+    let picture = f.pictures()[0];
+    assert_eq!((picture.row, picture.column), (0, 28));
+}
+
+#[test]
+fn an_image_is_not_centred_when_the_cursor_sits_at_the_left_edge() {
+    let mut f = Fixture::new(80, 10);
+    f.show("i=1,c=2,r=2");
+    assert_eq!(f.pictures()[0].column, 0);
+}
+
+#[test]
+fn an_image_after_a_wide_character_takes_the_column_the_cursor_reached() {
+    let mut f = Fixture::new(20, 10);
+    f.feed("日");
+    f.show("i=1,c=2,r=2");
+    assert_eq!(f.pictures()[0].column, 2);
+}
+
+#[test]
+fn an_unsupported_transfer_mode_is_answered_instead_of_dropped() {
+    let mut f = Fixture::new(20, 5);
+    f.feed("\x1b_Ga=T,f=100,t=s,s=1,v=1,S=19,i=4;L2ljYXQtSlRWTU5HNU9ORklJQw\x1b\\");
+    assert!(f.session.replies.iter().any(|reply| reply.contains("ENOTSUPPORTED")), "{:?}", f.session.replies);
+    assert!(f.pictures().is_empty());
 }
 
 #[test]
