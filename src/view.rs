@@ -33,6 +33,10 @@ pub struct Placed {
     pub columns: u32,
     pub rows: u32,
     pub crop: [u32; 4],
+    /// The client named both `c` and `r`: the picture keeps its shape inside them.
+    pub letterbox: bool,
+    /// Below zero draws under the text.
+    pub z: i32,
 }
 
 pub fn picture_char(anchor: u32) -> char {
@@ -66,8 +70,8 @@ pub fn placed<L: EventListener>(
             for placement in anchors.iter().filter_map(|ch| graphics.placement(picture_anchor(*ch)?)) {
                 let row = index as isize - top as isize;
                 if row + placement.rows as isize > 0 {
-                    let Placement { image, columns, rows, crop, .. } = *placement;
-                    found.push(Placed { image, row, column, columns, rows, crop });
+                    let Placement { image, columns, rows, crop, letterbox, z, .. } = *placement;
+                    found.push(Placed { image, row, column, columns, rows, crop, letterbox, z });
                 }
             }
         }

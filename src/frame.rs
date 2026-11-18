@@ -440,13 +440,27 @@ pub fn draw_link_bar(frame: &mut Frame, uri: &str, layout: Layout, theme: &Theme
     frame.lines.push(TextLine { x: x + inset, y, small: false, spans: vec![Span::plain(shown, theme.foreground)] });
 }
 
-/// The size a placement draws at, and the part of the image it shows as offset and scale.
-/// The cells the client asked for are the size: `fitted_columns`/`fitted_rows` already gave the
-/// rectangle the image's aspect when only one of them was named, so filling it loses nothing.
-pub fn picture_box(image: (u32, u32), crop: [u32; 4], area: (f32, f32)) -> ((f32, f32), [f32; 4]) {
+/// The size a placement draws at, where inside its cells it starts, and the part of the image it
+/// shows. A picture the client sized with both `c` and `r` keeps its shape inside them, letterboxed
+/// and centred as the protocol asks; one the terminal sized from the image fills the rectangle it
+/// computed. A tile of a larger picture fills its cells, or seams would show between the cells.
+pub fn picture_box(
+    image: (u32, u32),
+    crop: [u32; 4],
+    area: (f32, f32),
+    letterbox: bool,
+) -> ((f32, f32), (f32, f32), [f32; 4]) {
     let [x, y, width, height] = crop;
     let (whole_width, whole_height) = (image.0 as f32, image.1 as f32);
-    (area, [x as f32 / whole_width, y as f32 / whole_height, width as f32 / whole_width, height as f32 / whole_height])
+    let size = if letterbox && (width, height) == image {
+        let scale = (area.0 / whole_width).min(area.1 / whole_height);
+        (whole_width * scale, whole_height * scale)
+    } else {
+        area
+    };
+    let offset = ((area.0 - size.0) / 2.0, (area.1 - size.1) / 2.0);
+    let crop = [x as f32 / whole_width, y as f32 / whole_height, width as f32 / whole_width, height as f32 / whole_height];
+    (size, offset, crop)
 }
 
 pub fn draw_pictures<L: EventListener>(
@@ -462,10 +476,11 @@ pub fn draw_pictures<L: EventListener>(
     for found in placed(term, graphics, rows, top, layout.lines()) {
         let Some(image) = graphics.image(found.image) else { continue };
         let area = (found.columns as f32 * cell.width, found.rows as f32 * cell.height);
-        let ((width, height), crop) = picture_box((image.width, image.height), found.crop, area);
-        let x = layout.grid_x() + found.column as f32 * cell.width;
-        let y = layout.grid_y() + found.row as f32 * cell.height;
-        frame.pictures.list.push(Picture { image: image.clone(), x, y, width, height, crop });
+        let ((width, height), (dx, dy), crop) =
+            picture_box((image.width, image.height), found.crop, area, found.letterbox);
+        let x = layout.grid_x() + found.column as f32 * cell.width + dx;
+        let y = layout.grid_y() + found.row as f32 * cell.height + dy;
+        frame.pictures.list.push(Picture { image: image.clone(), id: found.image, z: found.z, x, y, width, height, crop });
     }
     let area = (layout.columns() as f32 * cell.width, layout.lines() as f32 * cell.height);
     frame.pictures.area = [layout.grid_x(), layout.grid_y(), area.0, area.1];

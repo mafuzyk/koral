@@ -187,11 +187,25 @@ pub struct Clip {
 #[derive(Clone)]
 pub struct Picture {
     pub image: Arc<Image>,
+    /// The image id, which breaks ties between pictures at the same z-index.
+    pub id: u32,
+    pub z: i32,
     pub x: f32,
     pub y: f32,
     pub width: f32,
     pub height: f32,
     pub crop: [f32; 4],
+}
+
+/// Pictures in the order they are drawn: below the text layer first, then the ones over it, each
+/// by z-index and then by image id, as the protocol orders them.
+pub fn layers(list: &[Picture]) -> (Vec<usize>, Vec<usize>) {
+    let mut under: Vec<usize> = (0..list.len()).filter(|index| list[*index].z < 0).collect();
+    let mut over: Vec<usize> = (0..list.len()).filter(|index| list[*index].z >= 0).collect();
+    let order = |list: &[Picture], index: &usize| (list[*index].z, list[*index].id);
+    under.sort_by_key(|index| order(list, index));
+    over.sort_by_key(|index| order(list, index));
+    (under, over)
 }
 
 /// Images go over the first `over` quads and under everything else.
@@ -519,8 +533,12 @@ impl Renderer {
 
         // shortcut: an image over the texture limit is not drawn, scale it down if one shows up.
         let limit = self.device.limits().max_texture_dimension_2d;
-        let drawn: Vec<&Picture> =
-            pictures.list.iter().filter(|picture| picture.image.width.max(picture.image.height) <= limit).collect();
+        let drawn: Vec<Picture> = pictures
+            .list
+            .iter()
+            .filter(|picture| picture.image.width.max(picture.image.height) <= limit)
+            .cloned()
+            .collect();
         let used: HashSet<u64> = drawn.iter().map(|picture| picture.image.generation).collect();
         self.textures.retain(|generation, _| used.contains(generation));
         for picture in &drawn {
@@ -529,6 +547,7 @@ impl Renderer {
             }
         }
 
+        let (under, above) = layers(&drawn);
         let boxes = drawn.iter().map(|p| Quad::new(p.x, p.y, p.width, p.height, p.crop));
         let instances: Vec<u8> = quads
             .iter()
@@ -567,23 +586,32 @@ impl Renderer {
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_vertex_buffer(0, self.quads.slice(..));
             let (count, over) = (quads.len() as u32, pictures.over as u32);
-            pass.draw(0..4, 0..over);
-            if !drawn.is_empty() {
+            // One z layer of pictures, clipped to the grid so a picture wider than the view is cut
+            // by the view and not sized by it.
+            let mut layer = |target: &mut _, order: &[usize]| {
+                if order.is_empty() {
+                    return;
+                }
                 let [x, y, area_width, area_height] = pictures.area;
                 let (left, top) = ((x as u32).min(width), (y as u32).min(height));
                 let right = ((x + area_width) as u32).min(width);
                 let bottom = ((y + area_height) as u32).min(height);
-                pass.set_scissor_rect(left, top, right - left, bottom - top);
-                pass.set_pipeline(&self.picture_pipeline);
-                for (index, picture) in drawn.iter().enumerate() {
-                    pass.set_bind_group(1, &self.textures[&picture.image.generation], &[]);
-                    pass.draw(0..4, count + index as u32..count + index as u32 + 1);
+                target.set_scissor_rect(left, top, right.saturating_sub(left), bottom.saturating_sub(top));
+                target.set_pipeline(&self.picture_pipeline);
+                for index in order {
+                    let picture = &drawn[*index];
+                    target.set_bind_group(1, &self.textures[&picture.image.generation], &[]);
+                    let at = count + *index as u32;
+                    target.draw(0..4, at..at + 1);
                 }
-                pass.set_scissor_rect(0, 0, width, height);
-                pass.set_pipeline(&self.pipeline);
-            }
+                target.set_scissor_rect(0, 0, width, height);
+                target.set_pipeline(&self.pipeline);
+            };
+            pass.draw(0..4, 0..over);
+            layer(&mut pass, &under);
             pass.draw(0..4, over..count);
             self.text.render(&self.atlas, &self.viewport, &mut pass).expect("render text");
+            layer(&mut pass, &above);
         }
         self.queue.submit(Some(encoder.finish()));
         self.window.pre_present_notify();

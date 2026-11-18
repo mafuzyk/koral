@@ -27,6 +27,10 @@ pub struct Request {
     pub keep_cursor: bool,
     /// The part of the image to show: x, y, width and height in pixels.
     pub crop: [u32; 4],
+    /// The client named both `c` and `r`, so the picture keeps its shape inside them.
+    pub letterbox: bool,
+    /// The stacking order: below zero is under the text.
+    pub z: i32,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -49,6 +53,8 @@ pub struct Placement {
     pub columns: u32,
     pub rows: u32,
     pub crop: [u32; 4],
+    pub letterbox: bool,
+    pub z: i32,
 }
 
 #[derive(Clone, Copy)]
@@ -68,6 +74,7 @@ struct Keys {
     crop: [u32; 4],
     delete: u8,
     more: bool,
+    z: i32,
 }
 
 impl Default for Keys {
@@ -88,6 +95,7 @@ impl Default for Keys {
             crop: [0; 4],
             delete: b'a',
             more: false,
+            z: 0,
         }
     }
 }
@@ -258,6 +266,8 @@ impl Graphics {
             rows: clamp(fitted_rows),
             keep_cursor: keys.keep_cursor,
             crop,
+            letterbox: keys.columns > 0 && keys.rows > 0,
+            z: keys.z,
         })
     }
 
@@ -265,12 +275,12 @@ impl Graphics {
     /// cell: a video repainting one spot must not pile anchors onto it. A rectangle with
     /// no cells is refused: it would hold a cell and draw nothing.
     pub fn place(&mut self, request: Request, here: &[u32]) -> Option<u32> {
-        let Request { image, number, columns, rows, crop, .. } = request;
+        let Request { image, number, columns, rows, crop, letterbox, z, .. } = request;
         if columns == 0 || rows == 0 {
             return None;
         }
         let same = |placement: &Placement| placement.image == image && placement.number == number;
-        let placement = Placement { image, number, columns, rows, crop };
+        let placement = Placement { image, number, columns, rows, crop, letterbox, z };
 
         // mpv sends each frame with no id, so nothing else ties a frame to the one before it.
         let frame = |id: u32| id >= FIRST_AUTOMATIC_ID;
@@ -366,6 +376,7 @@ fn parse(body: &[u8]) -> Option<(Keys, &[u8])> {
     for pair in std::str::from_utf8(control).ok()?.split(',') {
         let (key, value) = pair.split_once('=')?;
         let number = value.parse().unwrap_or(0);
+        let signed = value.parse::<i32>().unwrap_or(0);
         let letter = value.bytes().next().unwrap_or(0);
         match key {
             "a" => keys.action = letter,
@@ -386,6 +397,7 @@ fn parse(body: &[u8]) -> Option<(Keys, &[u8])> {
             "h" => keys.crop[3] = number,
             "d" => keys.delete = letter,
             "m" => keys.more = number == 1,
+            "z" => keys.z = signed,
             _ => {}
         }
     }
