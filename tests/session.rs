@@ -594,12 +594,109 @@ fn a_folded_command_hides_its_image() {
     assert!(f.pictures().is_empty());
 }
 
+/// A modal draws a hole for a picture that sits under the text: the spaces it paints with the
+/// default background are not an erase, so they must leave the image on its cell.
+#[test]
+fn text_painted_over_an_image_leaves_it_on_screen() {
+    for paint in ["  ", "ab", "\x1b[48;2;12;12;18m  \x1b[49m"] {
+        let mut f = Fixture::new(20, 10);
+        f.feed("\x1b[2;3H");
+        f.show("i=1,p=1,c=2,r=2,C=1,z=-1073741822");
+        f.feed("\x1b[2;3H");
+        f.feed(paint);
+        let pictures = f.pictures();
+        assert_eq!(pictures.len(), 1, "the image outlives the paint over its cell");
+        assert_eq!((pictures[0].row, pictures[0].column), (1, 2), "it stays on the cell it was placed on");
+    }
+}
+
+/// Output scrolled the image away from the cell it was placed on; the anchor travelled with the
+/// text, and paint over the new cell must leave it there instead of on the old one.
+#[test]
+fn text_painted_over_a_scrolled_image_keeps_its_new_cell() {
+    let mut f = Fixture::new(20, 5);
+    f.feed("\x1b[3;1H");
+    f.show("i=1,p=1,c=2,r=2,C=1");
+    f.feed("\x1b[5;1H\n");
+    assert_eq!(f.pictures()[0].row, 1, "the image moved up with the text");
+    f.feed("\x1b[2;1H  ");
+    let pictures = f.pictures();
+    assert_eq!(pictures.len(), 1, "one anchor, put back once");
+    assert_eq!((pictures[0].row, pictures[0].column), (1, 0), "it keeps the cell the scroll gave it");
+}
+
+/// ED 3 clears the scrollback, not the screen: the visible image and its anchor stay.
+#[test]
+fn clearing_the_scrollback_keeps_the_image_on_screen() {
+    let mut f = Fixture::new(20, 5);
+    f.feed(&"\r\n".repeat(120));
+    f.feed("\x1b[5;1H");
+    f.show("i=1,c=2,r=2,C=1");
+    f.feed("\x1b[3J");
+    f.feed("\x1b[5;1H  ");
+    let pictures = f.pictures();
+    assert_eq!(pictures.len(), 1, "ED 3 left the visible cell alone");
+    assert_eq!((pictures[0].row, pictures[0].column), (4, 0));
+}
+
+/// The alternate screen scrolls inside a region; the anchor rides the cells and must not be
+/// duplicated when text is painted over its new cell.
+#[test]
+fn a_scroll_in_a_region_keeps_one_anchor() {
+    let mut f = Fixture::new(20, 10);
+    f.feed("\x1b[?1049h\x1b[1;5r\x1b[3;1H");
+    f.show("i=1,p=1,c=2,r=2,C=1");
+    f.feed("\x1b[5;1H\n");
+    assert_eq!(f.pictures()[0].row, 1, "the image moved up inside the region");
+    f.feed("\x1b[2;1H  ");
+    let pictures = f.pictures();
+    assert_eq!(pictures.len(), 1, "one anchor after the region scrolled");
+    assert_eq!((pictures[0].row, pictures[0].column), (1, 0));
+}
+
+/// At a full scrollback the grid recycles lines, but the anchor still moves with the cell it is on.
+#[test]
+fn a_scroll_at_the_full_history_keeps_one_anchor() {
+    let mut f = Fixture::new(20, 5);
+    f.feed(&"\r\n".repeat(120));
+    f.feed("\x1b[5;1H");
+    f.show("i=1,p=1,c=2,r=2,C=1");
+    f.feed("\n");
+    assert_eq!(f.pictures()[0].row, 3, "the image moved up at full history");
+    f.feed("\x1b[4;1H  ");
+    let pictures = f.pictures();
+    assert_eq!(pictures.len(), 1, "one anchor at full history");
+    assert_eq!((pictures[0].row, pictures[0].column), (3, 0));
+}
+
+/// A wide glyph written over the anchor cell keeps the picture underneath it.
+#[test]
+fn a_wide_character_over_an_image_keeps_it() {
+    let mut f = Fixture::new(20, 10);
+    f.show("i=1,p=1,c=2,r=2,C=1");
+    f.feed("日");
+    let pictures = f.pictures();
+    assert_eq!(pictures.len(), 1, "the wide glyph replaced the text, not the picture");
+    assert_eq!((pictures[0].row, pictures[0].column), (0, 0));
+}
+
 #[test]
 fn clearing_the_screen_removes_the_image() {
     let mut f = Fixture::new(20, 5);
     f.show("i=1,c=2,r=2");
     f.feed("\x1b[H\x1b[2J");
     assert!(f.pictures().is_empty());
+}
+
+/// ED 2 is an erase, unlike text over the picture: it takes the image with the cells.
+#[test]
+fn clearing_the_screen_removes_an_image_text_was_painted_over() {
+    let mut f = Fixture::new(20, 5);
+    f.show("i=1,c=2,r=2,C=1");
+    f.feed("\x1b[H  ");
+    assert_eq!(f.pictures().len(), 1, "the picture survived the text");
+    f.feed("\x1b[H\x1b[2J");
+    assert!(f.pictures().is_empty(), "the clear took it");
 }
 
 #[test]

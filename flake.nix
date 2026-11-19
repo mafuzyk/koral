@@ -22,7 +22,7 @@
           inherit version;
           src = self;
 
-          cargoHash = "sha256-ZdnTebPTOkmFXj5s2sLCCKiaNobc2qRaCIyx8+1n7SM=";
+          cargoHash = "sha256-7leZ1EhPTScZGZpI3f1KNOaFFcioqepreGWubE8lqEY=";
 
           nativeBuildInputs = with pkgs; [ pkg-config makeWrapper ];
           buildInputs = with pkgs; [ libxkbcommon wayland fontconfig vulkan-loader libGL ];

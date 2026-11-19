@@ -1,0 +1,41 @@
+--- a/src/term/mod.rs
++++ b/src/term/mod.rs
+@@ -1010,11 +1010,24 @@
+             cursor_cell = self.grid.cursor_cell();
+         }
+ 
++        // KORAL PATCH: replace the glyph and its attributes, but keep the picture this cell carries.
++        // Nothing is allocated for a cell without one: the empty Vec never owns a buffer.
++        let pictures: Vec<char> = match cursor_cell.zerowidth() {
++            Some(extra) if extra.iter().any(|ch| koral_picture(*ch)) => {
++                extra.iter().copied().filter(|ch| koral_picture(*ch)).collect()
++            },
++            _ => Vec::new(),
++        };
++
+         cursor_cell.c = c;
+         cursor_cell.fg = fg;
+         cursor_cell.bg = bg;
+         cursor_cell.flags = flags;
+         cursor_cell.extra = extra;
++
++        for ch in pictures {
++            cursor_cell.push_zerowidth(ch);
++        }
+     }
+ 
+     #[inline]
+@@ -1056,6 +1069,13 @@
+     }
+ }
+ 
++// KORAL PATCH: koral keeps a picture's anchor and foot as zerowidth marks on the cell it rides on.
++// Those characters occupy the top half of plane 16; `src/view.rs` in the koral tree pins the
++// picture base at U+108000 and the foot at U+10FFFF. No combining mark or other metadata uses it.
++fn koral_picture(ch: char) -> bool {
++    (0x10_8000..=0x10_FFFF).contains(&u32::from(ch))
++}
++
+ impl<T: EventListener> Handler for Term<T> {
+     /// A character to be displayed.
+     #[inline(never)]

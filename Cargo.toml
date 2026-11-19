@@ -12,7 +12,7 @@ rust-version = "1.85"
 publish = false
 
 [dependencies]
-alacritty_terminal = "0.26.0"
+alacritty_terminal = { version = "0.26.0", path = "vendor/alacritty_terminal" }
 arboard = { version = "3.7.0", default-features = false, features = ["wayland-data-control"] }
 base64 = "0.22"
 flate2 = "1.1.10"
