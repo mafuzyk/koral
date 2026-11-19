@@ -594,6 +594,37 @@ fn a_folded_command_hides_its_image() {
     assert!(f.pictures().is_empty());
 }
 
+/// A modal draws a hole for a picture that sits under the text: the spaces it paints with the
+/// default background are not an erase, so they must leave the image on its cell.
+#[test]
+fn text_painted_over_an_image_leaves_it_on_screen() {
+    for paint in ["  ", "ab", "\x1b[48;2;12;12;18m  \x1b[49m"] {
+        let mut f = Fixture::new(20, 10);
+        f.feed("\x1b[2;3H");
+        f.show("i=1,p=1,c=2,r=2,C=1,z=-1073741822");
+        f.feed("\x1b[2;3H");
+        f.feed(paint);
+        let pictures = f.pictures();
+        assert_eq!(pictures.len(), 1, "the image outlives the paint over its cell");
+        assert_eq!((pictures[0].row, pictures[0].column), (1, 2), "it stays on the cell it was placed on");
+    }
+}
+
+/// Output scrolled the image away from the cell it was placed on; the anchor travelled with the
+/// text, and paint over the new cell must leave it there instead of on the old one.
+#[test]
+fn text_painted_over_a_scrolled_image_keeps_its_new_cell() {
+    let mut f = Fixture::new(20, 5);
+    f.feed("\x1b[3;1H");
+    f.show("i=1,p=1,c=2,r=2,C=1");
+    f.feed("\x1b[5;1H\n");
+    assert_eq!(f.pictures()[0].row, 1, "the image moved up with the text");
+    f.feed("\x1b[2;1H  ");
+    let pictures = f.pictures();
+    assert_eq!(pictures.len(), 1, "one anchor, put back once");
+    assert_eq!((pictures[0].row, pictures[0].column), (1, 0), "it keeps the cell the scroll gave it");
+}
+
 #[test]
 fn clearing_the_screen_removes_the_image() {
     let mut f = Fixture::new(20, 5);

@@ -5,6 +5,7 @@ enum Out {
     Bytes(Vec<u8>),
     Mark(Mark),
     Status(Vec<u8>),
+    Clear,
 }
 
 fn scan(chunks: &[&[u8]]) -> Vec<Out> {
@@ -19,6 +20,7 @@ fn scan(chunks: &[&[u8]]) -> Vec<Out> {
             Piece::Mark(mark) => out.push(Out::Mark(mark)),
             Piece::Graphics(_) => {}
             Piece::Status(query) => out.push(Out::Status(query.to_vec())),
+            Piece::Clear => out.push(Out::Clear),
         });
     }
     out
@@ -111,6 +113,17 @@ fn other_escape_sequences_are_left_for_the_terminal() {
 }
 
 #[test]
+fn a_clear_screen_is_reported_beside_its_bytes() {
+    assert_eq!(scan(&[b"a\x1b[2Jb"]), vec![bytes(b"a"), Out::Clear, bytes(b"\x1b[2Jb")]);
+    assert_eq!(scan(&[b"a\x1b[3J"]), vec![bytes(b"a"), Out::Clear, bytes(b"\x1b[3J")]);
+    // Split in the middle, and an erase that only clears text stays a plain byte sequence.
+    assert_eq!(scan(&[b"\x1b[2", b"J"]), vec![Out::Clear, bytes(b"\x1b[2J")]);
+    assert_eq!(scan(&[b"\x1b[J\x1b[1J\x1b[K"]), vec![bytes(b"\x1b[J\x1b[1J\x1b[K")]);
+    // A full reset also drops the grid the images rode on.
+    assert_eq!(scan(&[b"x\x1bc"]), vec![bytes(b"x"), Out::Clear, bytes(b"\x1bc")]);
+}
+
+#[test]
 fn unknown_133_kinds_are_left_for_the_terminal() {
     let unknown = b"\x1b]133;Z\x1b\\";
     assert_eq!(scan(&[unknown]), vec![bytes(unknown)]);
@@ -152,7 +165,7 @@ fn a_graphics_command_leaves_the_stream_whole() {
     scanner.feed(b"a\x1b_Ga=t;QUJD\x1b\\b", &mut |piece| match piece {
         Piece::Bytes(bytes) => seen.push(format!("bytes {}", String::from_utf8_lossy(bytes))),
         Piece::Graphics(body) => seen.push(format!("graphics {}", String::from_utf8_lossy(body))),
-        Piece::Mark(_) | Piece::Status(_) => {}
+        Piece::Mark(_) | Piece::Status(_) | Piece::Clear => {}
     });
     assert_eq!(seen, ["bytes a", "graphics Ga=t;QUJD", "bytes b"]);
 }
@@ -219,7 +232,7 @@ fn an_unknown_777_stays_in_the_stream() {
     let text = b"\x1b]777;foo;a\x07";
     assert_eq!(scan(&[text]).into_iter().flat_map(|out| match out {
         Out::Bytes(part) => part,
-        Out::Mark(_) | Out::Status(_) => panic!("not a mark"),
+        Out::Mark(_) | Out::Status(_) | Out::Clear => panic!("not a mark"),
     }).collect::<Vec<u8>>(), text);
 }
 

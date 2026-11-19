@@ -70,7 +70,7 @@ pub fn placed<L: EventListener>(
             for placement in anchors.iter().filter_map(|ch| graphics.placement(picture_anchor(*ch)?)) {
                 let row = index as isize - top as isize;
                 if row + placement.rows as isize > 0 {
-                    let Placement { image, number, columns, rows, crop, z } = *placement;
+                    let Placement { image, number, columns, rows, crop, z, .. } = *placement;
                     found.push(Placed { image, number, row, column, columns, rows, crop, z });
                 }
             }

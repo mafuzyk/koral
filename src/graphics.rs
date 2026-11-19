@@ -72,6 +72,10 @@ pub struct Placement {
     pub rows: u32,
     pub crop: [u32; 4],
     pub z: i32,
+    /// The cell the anchor last rode on, so paint over it can put the anchor back.
+    pub at: Option<(i32, usize)>,
+    /// The screen it belongs to: the anchors of the other one are not on the active grid.
+    pub alt: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -296,7 +300,7 @@ impl Graphics {
             return None;
         }
         let same = |placement: &Placement| placement.image == image && placement.number == number;
-        let placement = Placement { image, number, columns, rows, crop, z };
+        let placement = Placement { image, number, columns, rows, crop, z, at: None, alt: false };
 
         // mpv sends each frame with no id, so nothing else ties a frame to the one before it.
         let frame = |id: u32| id >= FIRST_AUTOMATIC_ID;
@@ -404,8 +408,13 @@ impl Graphics {
         }
     }
 
-    /// One line in the geometry log, so a capture shows the rect instead of a screenshot.
-    pub fn note_placement(&self, request: &Request, column: usize, line: i32) {
+    /// Records the cell an anchor rides on, and one line in the geometry log, so a capture shows
+    /// the rect instead of a screenshot.
+    pub fn note_placement(&mut self, anchor: u32, request: &Request, column: usize, line: i32, alt: bool) {
+        if let Some(placement) = self.placements.get_mut(&anchor) {
+            placement.at = Some((line, column));
+            placement.alt = alt;
+        }
         note(&format!(
             "placed id={} at col={column} row={line} cells={}x{} px={}x{}",
             request.image,
@@ -414,6 +423,32 @@ impl Graphics {
             request.columns * self.cell.0,
             request.rows * self.cell.1
         ));
+    }
+
+    /// Every placement and the anchor it rides on.
+    pub fn placements(&self) -> impl Iterator<Item = (u32, &Placement)> + '_ {
+        self.placements.iter().map(|(anchor, placement)| (*anchor, placement))
+    }
+
+    /// Follows an anchor the grid moved to another cell.
+    pub fn locate(&mut self, anchor: u32, line: i32, column: usize) {
+        if let Some(placement) = self.placements.get_mut(&anchor) {
+            placement.at = Some((line, column));
+        }
+    }
+
+    /// Output scrolling up moves every anchor of that screen by the same lines.
+    pub fn scrolled(&mut self, lines: usize, alt: bool) {
+        if lines == 0 {
+            return;
+        }
+        for placement in self.placements.values_mut() {
+            if placement.alt == alt
+                && let Some((line, column)) = placement.at
+            {
+                placement.at = Some((line - lines as i32, column));
+            }
+        }
     }
 }
 

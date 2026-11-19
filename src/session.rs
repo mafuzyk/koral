@@ -29,6 +29,8 @@ pub struct Session<L> {
     prompt_start: Option<Line>,
     /// Columns at the last read: a change means every prompt was rewrapped.
     columns: usize,
+    /// Rows at the last read: a change moves the anchor cells with the grid.
+    lines: usize,
     /// Whether the program is on the alternate screen, which takes its images with it.
     alt_screen: bool,
 }
@@ -38,6 +40,7 @@ impl<L: EventListener> Session<L> {
         Self {
             alt_screen: term.mode().contains(TermMode::ALT_SCREEN),
             columns: term.grid().columns(),
+            lines: term.screen_lines(),
             term,
             blocks: BlockStore::default(),
             graphics: Graphics::default(),
@@ -50,20 +53,36 @@ impl<L: EventListener> Session<L> {
     }
 
     pub fn feed(&mut self, bytes: &[u8], now: Instant) {
-        let Self { term, blocks, graphics, replies, notices, parser, scanner, prompt_start, columns, alt_screen } =
-            self;
-        let width = term.grid().columns();
+        let Self {
+            term,
+            blocks,
+            graphics,
+            replies,
+            notices,
+            parser,
+            scanner,
+            prompt_start,
+            columns,
+            lines,
+            alt_screen,
+        } = self;
+        let (width, height) = (term.grid().columns(), term.screen_lines());
         // shortcut: the row counts are read again on the next read, so a frame drawn
         // straight after a resize can still use the wrapping the prompt had before it.
-        if width != *columns {
-            *columns = width;
-            reflow(term, blocks);
+        if width != *columns || height != *lines {
+            if width != *columns {
+                *columns = width;
+                reflow(term, blocks);
+            }
+            *lines = height;
+            resync(term, graphics);
         }
         scanner.feed(bytes, &mut |piece| match piece {
             Piece::Bytes(bytes) => {
-                parser.advance(term, bytes);
+                advance(term, parser, graphics, bytes);
                 blocks.observe(bytes);
             }
+            Piece::Clear => graphics.clear_placements(),
             Piece::Graphics(body) => {
                 let outcome = graphics.handle(body);
                 replies.extend(outcome.reply);
@@ -76,7 +95,11 @@ impl<L: EventListener> Session<L> {
                 // writes span several redraws can show part of itself; only an atomic replay hides it.
                 let flushed = needs_grid && parser.sync_timeout().pending_timeout();
                 if flushed {
+                    let (alt, history) =
+                        (term.mode().contains(TermMode::ALT_SCREEN), term.grid().history_size());
                     parser.stop_sync(term);
+                    follow_scroll(term, graphics, alt, history);
+                    follow(term, graphics);
                 }
                 // The replay can leave the alternate screen: its images go before this one lands,
                 // or the end-of-feed cleanup would take the image that just arrived.
@@ -89,7 +112,7 @@ impl<L: EventListener> Session<L> {
                     place(term, parser, graphics, request);
                 }
                 if flushed {
-                    parser.advance(term, b"\x1b[?2026h");
+                    advance(term, parser, graphics, b"\x1b[?2026h");
                 }
             }
             Piece::Status(query) => replies.push(status_reply(query, term.grid().cursor.template.flags)),
@@ -127,6 +150,107 @@ fn settle_alt<L: EventListener>(term: &Term<L>, graphics: &mut Graphics, alt_scr
         graphics.clear_placements();
     }
     *alt_screen = alt;
+}
+
+/// Parses text, then puts back the anchors it painted over.
+fn advance<L: EventListener>(term: &mut Term<L>, parser: &mut Processor, graphics: &mut Graphics, bytes: &[u8]) {
+    let (alt, history) = (term.mode().contains(TermMode::ALT_SCREEN), term.grid().history_size());
+    parser.advance(term, bytes);
+    follow_scroll(term, graphics, alt, history);
+    follow(term, graphics);
+}
+
+/// Moving the same screen's top lines into the scrollback moves every anchor up by as much.
+fn follow_scroll<L: EventListener>(term: &Term<L>, graphics: &mut Graphics, alt: bool, history: usize) {
+    if alt == term.mode().contains(TermMode::ALT_SCREEN) {
+        graphics.scrolled(term.grid().history_size().saturating_sub(history), alt);
+    }
+}
+
+/// Text may paint over the cell an image rides on, but it does not erase the image: put the anchor
+/// back. A cell the grid moved the anchor away from (a scroll) is followed to its new line. Only
+/// the anchors of the active screen are touched, and their column alone is walked, not every cell.
+fn follow<L: EventListener>(term: &mut Term<L>, graphics: &mut Graphics) {
+    if graphics.tallest() == 0 {
+        return;
+    }
+    let alt = term.mode().contains(TermMode::ALT_SCREEN);
+    let mut moves = Vec::new();
+    let mut restores = Vec::new();
+    {
+        let grid = term.grid();
+        let (top, bottom, columns) = (grid.topmost_line().0, grid.bottommost_line().0, grid.columns());
+        let screen_top = bottom - (grid.screen_lines() as i32 - 1);
+        // An anchor above this cannot reach the view, and text is never written off the screen.
+        let window_top = (screen_top - graphics.tallest() as i32).max(top);
+        for (anchor, placement) in graphics.placements() {
+            if placement.alt != alt {
+                continue;
+            }
+            let Some((line, column)) = placement.at else {
+                continue;
+            };
+            if column >= columns {
+                continue;
+            }
+            let ch = picture_char(anchor);
+            let holds = |line: i32| {
+                (window_top..=bottom).contains(&line)
+                    && grid[Line(line)][Column(column)].zerowidth().is_some_and(|extra| extra.contains(&ch))
+            };
+            if holds(line) {
+                continue;
+            }
+            match (window_top..=bottom).find(|line| holds(*line)) {
+                Some(found) => moves.push((anchor, found, column)),
+                None if (window_top..=bottom).contains(&line) => restores.push((anchor, line, column)),
+                None => {}
+            }
+        }
+    }
+    for (anchor, line, column) in moves {
+        graphics.locate(anchor, line, column);
+    }
+    // shortcut: an image scrolled out of a full scrollback in the same read that painted over it
+    // is put back on its old cell; a targeted column walk cannot tell the two apart.
+    for (anchor, line, column) in restores {
+        let grid = term.grid_mut();
+        if column >= grid.columns() || !(grid.topmost_line().0..=grid.bottommost_line().0).contains(&line) {
+            continue;
+        }
+        let cell = &mut grid[Line(line)][Column(column)];
+        let ch = picture_char(anchor);
+        if !cell.zerowidth().is_some_and(|extra| extra.contains(&ch)) {
+            cell.push_zerowidth(ch);
+        }
+    }
+}
+
+/// A resize reflows the grid, so every anchor of the active screen is read off it again.
+fn resync<L: EventListener>(term: &Term<L>, graphics: &mut Graphics) {
+    if graphics.tallest() == 0 {
+        return;
+    }
+    let alt = term.mode().contains(TermMode::ALT_SCREEN);
+    let grid = term.grid();
+    let mut found = Vec::new();
+    for line in grid.topmost_line().0..=grid.bottommost_line().0 {
+        for column in 0..grid.columns() {
+            let Some(extra) = grid[Line(line)][Column(column)].zerowidth() else {
+                continue;
+            };
+            for ch in extra {
+                if let Some(anchor) = picture_anchor(*ch)
+                    && graphics.placement(anchor).is_some_and(|placement| placement.alt == alt)
+                {
+                    found.push((anchor, line, column));
+                }
+            }
+        }
+    }
+    for (anchor, line, column) in found {
+        graphics.locate(anchor, line, column);
+    }
 }
 
 /// DECRQSS. neovim sets undercurl and reads it back to learn that it works.
@@ -272,13 +396,14 @@ fn place<L: EventListener>(term: &mut Term<L>, parser: &mut Processor, graphics:
     if !here.contains(&anchor) {
         term.grid_mut()[point.line][point.column].push_zerowidth(picture_char(anchor));
     }
-    graphics.note_placement(&request, point.column.0, point.line.0);
+    let alt = term.mode().contains(TermMode::ALT_SCREEN);
+    graphics.note_placement(anchor, &request, point.column.0, point.line.0, alt);
 
     let last = if request.keep_cursor {
         Line((point.line.0 + request.rows as i32 - 1).min(term.screen_lines() as i32 - 1))
     } else {
         let below = "\n".repeat(request.rows as usize - 1);
-        parser.advance(term, format!("{below}\x1b[{}C", request.columns).as_bytes());
+        advance(term, parser, graphics, format!("{below}\x1b[{}C", request.columns).as_bytes());
         term.grid().cursor.point.line
     };
     if request.rows > 1 {

@@ -25,6 +25,8 @@ pub enum Piece<'a> {
     Mark(Mark),
     Graphics(&'a [u8]),
     Status(&'a [u8]),
+    /// A clear screen, whose bytes follow and which also takes the images with it.
+    Clear,
 }
 
 enum Step {
@@ -33,6 +35,7 @@ enum Step {
     Found(Mark),
     Graphics,
     Status,
+    Clear,
 }
 
 /// Takes OSC 133, OSC 7, notifications, image commands and status queries out of a PTY stream; vte would drop them.
@@ -82,12 +85,32 @@ impl Scanner {
                     sink(Piece::Status(&self.pending[STATUS.len()..end]));
                     self.pending.clear();
                 }
+                Step::Clear => {
+                    sink(Piece::Clear);
+                    sink(Piece::Bytes(&self.pending));
+                    self.pending.clear();
+                }
             }
         }
     }
 
     fn step(&self) -> Step {
         let seen = self.pending.as_slice();
+        // A clear screen takes the images with it, so it is reported beside its bytes.
+        if seen == b"\x1bc" {
+            return Step::Clear;
+        }
+        if seen.starts_with(b"\x1b[") {
+            let final_byte = seen.last().copied().unwrap_or(0);
+            let complete = seen.len() > 2 && (0x40..=0x7e).contains(&final_byte);
+            return if complete && clears(seen) {
+                Step::Clear
+            } else if complete || seen.len() >= MAX_MARK {
+                Step::Release
+            } else {
+                Step::Keep
+            };
+        }
         if !PREFIXES.iter().any(|prefix| seen.starts_with(prefix)) {
             return if PREFIXES.iter().any(|prefix| prefix.starts_with(seen)) {
                 Step::Keep
@@ -122,6 +145,11 @@ impl Scanner {
         };
         parse(body).map_or(Step::Release, Step::Found)
     }
+}
+
+/// ED 2 and 3 are the clear screen commands; the other erases leave images alone.
+fn clears(seen: &[u8]) -> bool {
+    seen.last() == Some(&b'J') && matches!(&seen[2..seen.len() - 1], b"2" | b"3")
 }
 
 fn parse(body: &[u8]) -> Option<Mark> {
