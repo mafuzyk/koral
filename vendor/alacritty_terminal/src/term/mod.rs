@@ -17,7 +17,7 @@ use crate::event::{Event, EventListener};
 use crate::grid::{Dimensions, Grid, GridIterator, Scroll};
 use crate::index::{self, Boundary, Column, Direction, Line, Point, Side};
 use crate::selection::{Selection, SelectionRange, SelectionType};
-use crate::term::cell::{Cell, Flags, LineLength};
+use crate::term::cell::{Cell, Flags, LineLength, koral_picture};
 use crate::term::color::Colors;
 use crate::vi_mode::{ViModeCursor, ViMotion};
 use crate::vte::ansi::{
@@ -1069,13 +1069,6 @@ impl<T> Dimensions for Term<T> {
     }
 }
 
-// KORAL PATCH: koral keeps a picture's anchor and foot as zerowidth marks on the cell it rides on.
-// Those characters occupy the top half of plane 16; `src/view.rs` in the koral tree pins the
-// picture base at U+108000 and the foot at U+10FFFF. No combining mark or other metadata uses it.
-fn koral_picture(ch: char) -> bool {
-    (0x10_8000..=0x10_FFFF).contains(&u32::from(ch))
-}
-
 impl<T: EventListener> Handler for Term<T> {
     /// A character to be displayed.
     #[inline(never)]
@@ -1550,7 +1543,7 @@ impl<T: EventListener> Handler for Term<T> {
         self.damage.damage_line(line.0 as usize, start.0, end.0);
         let row = &mut self.grid[line];
         for cell in &mut row[start..end] {
-            *cell = bg.into();
+            cell.clear_preserving_pictures(bg);
         }
     }
 
@@ -1670,7 +1663,7 @@ impl<T: EventListener> Handler for Term<T> {
 
         let row = &mut self.grid[point.line];
         for cell in &mut row[left..right] {
-            *cell = bg.into();
+            cell.clear_preserving_pictures(bg);
         }
 
         let range = self.grid.cursor.point.line..=self.grid.cursor.point.line;

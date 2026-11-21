@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::Instant;
 
 use alacritty_terminal::event::EventListener;
@@ -63,61 +64,108 @@ impl<L: EventListener> Session<L> {
             Piece::Bytes(bytes) => {
                 parser.advance(term, bytes);
                 blocks.observe(bytes);
+                if graphics.has_placements() && bytes.iter().any(|byte| matches!(*byte, b'J' | b'c')) {
+                    prune_placements(term, graphics);
+                }
             }
             Piece::Graphics(body) => {
+                if graphics.has_placements() {
+                    prune_placements(term, graphics);
+                }
                 let outcome = graphics.handle(body);
                 replies.extend(outcome.reply);
                 // Only a placement or a positional delete reads the grid; transfers, chunked
                 // payloads, queries and id deletes settle without it and may span many reads.
                 let needs_grid = outcome.place.is_some() || outcome.delete.is_some();
-                // A synchronized update holds its cursor moves inside the parser, and the client
-                // moved the cursor here before sending the command, so replay them first.
-                // shortcut: the replay publishes what the batch drew so far, so a frame whose
-                // writes span several redraws can show part of itself; only an atomic replay hides it.
-                let flushed = needs_grid && parser.sync_timeout().pending_timeout();
-                if flushed {
-                    parser.stop_sync(term);
-                }
-                // The replay can leave the alternate screen: its images go before this one lands,
-                // or the end-of-feed cleanup would take the image that just arrived.
-                settle_alt(term, graphics, alt_screen);
-                if let Some(delete) = outcome.delete {
-                    let anchors = targets(term, graphics, delete.area);
-                    graphics.drop(&anchors, delete.free);
-                }
-                if let Some(request) = outcome.place {
-                    place(term, parser, graphics, request);
-                }
-                if flushed {
-                    parser.advance(term, b"\x1b[?2026h");
+                if needs_grid {
+                    with_flushed_sync(parser, term, |parser, term| {
+                        // The replay can leave the alternate screen: its images go before this one lands,
+                        // or the end-of-feed cleanup would take the image that just arrived.
+                        settle_alt(term, graphics, alt_screen);
+                        if let Some(delete) = outcome.delete {
+                            let anchors = targets(term, graphics, delete.area);
+                            graphics.drop(&anchors, delete.free);
+                        }
+                        if let Some(request) = outcome.place {
+                            place(term, parser, graphics, request);
+                        }
+                    });
+                } else {
+                    settle_alt(term, graphics, alt_screen);
                 }
             }
-            Piece::Status(query) => replies.push(status_reply(query, term.grid().cursor.template.flags)),
+            Piece::Status(query) => {
+                let reply = with_flushed_sync(parser, term, |_, term| {
+                    status_reply(query, term.grid().cursor.template.flags)
+                });
+                replies.push(reply);
+            }
             Piece::Mark(Mark::Notify { title, body }) => {
                 notices.push(Notice { title: clean(&title, TITLE_LIMIT), body: clean(&body, BODY_LIMIT) });
             }
             Piece::Mark(mark) => {
-                // A program on the alternate screen must not open a block, but the
-                // shell's command end arrives there too when a program dies badly.
-                if term.mode().contains(TermMode::ALT_SCREEN)
-                    && !matches!(mark, Mark::CommandEnd(_) | Mark::Cwd(_))
-                {
-                    return;
-                }
-                if mark == Mark::PromptStart {
-                    let cursor = &term.grid().cursor;
-                    // A prompt printed at the last column wraps before its first character.
-                    *prompt_start = Some(Line(cursor.point.line.0 + i32::from(cursor.input_needs_wrap)));
-                }
-                if let Some(id) = blocks.apply(mark, now) {
-                    let line = anchor(term, id, *prompt_start);
-                    let feeds = blocks.get(id).map_or(0, |block| block.prompt_breaks);
-                    blocks.set_prompt_lines(id, prompt_rows(term, line, feeds));
-                }
+                with_flushed_sync(parser, term, |_, term| {
+                    // A program on the alternate screen must not open a block, but the
+                    // shell's command end arrives there too when a program dies badly.
+                    if term.mode().contains(TermMode::ALT_SCREEN)
+                        && !matches!(mark, Mark::CommandEnd(_) | Mark::Cwd(_))
+                    {
+                        return;
+                    }
+                    if mark == Mark::PromptStart {
+                        let cursor = &term.grid().cursor;
+                        // A prompt printed at the last column wraps before its first character.
+                        *prompt_start = Some(Line(cursor.point.line.0 + i32::from(cursor.input_needs_wrap)));
+                    }
+                    if let Some(id) = blocks.apply(mark, now) {
+                        let line = anchor(term, id, *prompt_start);
+                        let feeds = blocks.get(id).map_or(0, |block| block.prompt_breaks);
+                        blocks.set_prompt_lines(id, prompt_rows(term, line, feeds));
+                    }
+                });
             }
         });
         settle_alt(term, graphics, alt_screen);
     }
+}
+
+/// A synchronized update holds cursor moves and SGR state inside the parser; replay them
+/// before inspecting the grid, then resume synchronized mode if it was active.
+// shortcut: the replay publishes what the batch drew so far, so a frame whose
+// writes span several redraws can show part of itself; only an atomic replay hides it.
+fn with_flushed_sync<L: EventListener, R>(
+    parser: &mut Processor,
+    term: &mut Term<L>,
+    f: impl FnOnce(&mut Processor, &mut Term<L>) -> R,
+) -> R {
+    let flushed = parser.sync_timeout().pending_timeout();
+    if flushed {
+        parser.stop_sync(term);
+    }
+    let out = f(parser, term);
+    if flushed {
+        parser.advance(term, b"\x1b[?2026h");
+    }
+    out
+}
+
+/// Drops placement records whose cell anchors have left the grid (e.g. `ED 2` or history rotation).
+fn prune_placements<L: EventListener>(term: &Term<L>, graphics: &mut Graphics) {
+    if !graphics.has_placements() {
+        return;
+    }
+    let grid = term.grid();
+    let columns = grid.columns();
+    let mut live = HashSet::new();
+    for line in grid.topmost_line().0..=grid.bottommost_line().0 {
+        let row = &grid[Line(line)];
+        for column in 0..columns {
+            if let Some(extra) = row[Column(column)].zerowidth() {
+                live.extend(extra.iter().filter_map(|ch| picture_anchor(*ch)));
+            }
+        }
+    }
+    graphics.retain_anchors(|anchor| live.contains(&anchor));
 }
 
 /// Leaving the alternate screen leaves its images behind: an app that dies must not ghost.

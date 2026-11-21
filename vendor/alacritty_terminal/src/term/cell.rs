@@ -97,6 +97,11 @@ impl HyperlinkInner {
     }
 }
 
+/// KORAL PATCH: picture anchors and feet live in the top half of plane 16 (`src/view.rs`).
+pub(crate) fn koral_picture(ch: char) -> bool {
+    (0x10_8000..=0x10_FFFF).contains(&u32::from(ch))
+}
+
 /// Trait for determining if a reset should be performed.
 pub trait ResetDiscriminant<T> {
     /// Value based on which equality for the reset will be determined.
@@ -171,9 +176,24 @@ impl Cell {
     pub fn clear_wide(&mut self) {
         self.flags.remove(Flags::WIDE_CHAR);
         if let Some(extra) = self.extra.as_mut() {
-            Arc::make_mut(extra).zerowidth = Vec::new();
+            Arc::make_mut(extra).zerowidth.retain(|ch| koral_picture(*ch));
         }
         self.c = ' ';
+    }
+
+    /// Clear cell contents to background color while preserving Koral picture anchors.
+    #[inline]
+    pub fn clear_preserving_pictures(&mut self, bg: Color) {
+        let pictures: Vec<char> = match self.zerowidth() {
+            Some(extra) if extra.iter().any(|ch| koral_picture(*ch)) => {
+                extra.iter().copied().filter(|ch| koral_picture(*ch)).collect()
+            },
+            _ => Vec::new(),
+        };
+        *self = bg.into();
+        for ch in pictures {
+            self.push_zerowidth(ch);
+        }
     }
 
     /// Set underline color on the cell.

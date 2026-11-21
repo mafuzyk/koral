@@ -126,6 +126,10 @@ impl BlockStore {
         }
     }
 
+    pub fn any_folded(&self) -> bool {
+        self.blocks.values().any(|block| block.folded)
+    }
+
     pub fn activity(&self) -> Activity {
         if self.phase == Phase::Running {
             return Activity::Running;

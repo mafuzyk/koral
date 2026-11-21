@@ -5,6 +5,7 @@ use alacritty_terminal::grid::{Dimensions, Grid};
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::vte::ansi::{Color, Rgb};
 
 use crate::blocks::{Activity, BlockStore};
 use crate::graphics::{Graphics, Placement};
@@ -14,6 +15,7 @@ const ANCHOR_BASE: u32 = 0x10_0000;
 const PICTURE_BASE: u32 = ANCHOR_BASE + 0x8000;
 // A cell the grid must count as used, so a clear takes an image's whole height.
 const PICTURE_FOOT: u32 = 0x7FFF;
+pub const PLACEHOLDER_CHAR: char = '\u{10EEEE}';
 
 /// A visible row. `hidden` counts the folded lines that belong under it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +53,14 @@ pub fn picture_foot() -> char {
     picture_char(PICTURE_FOOT)
 }
 
+fn placeholder_id(color: Color) -> u32 {
+    match color {
+        Color::Spec(Rgb { r, g, b }) => (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b),
+        Color::Indexed(index) => u32::from(index),
+        Color::Named(named) => named as u32,
+    }
+}
+
 pub fn placed<L: EventListener>(
     term: &Term<L>,
     graphics: &Graphics,
@@ -65,13 +75,31 @@ pub fn placed<L: EventListener>(
     let grid = term.grid();
     let mut found = Vec::new();
     for (index, row) in rows.iter().enumerate().take(top + lines).skip(top.saturating_sub(tallest)) {
+        let row_offset = index as isize - top as isize;
         for column in 0..grid.columns() {
-            let anchors = grid[row.line][Column(column)].zerowidth().unwrap_or(&[]);
+            let cell = &grid[row.line][Column(column)];
+            let anchors = cell.zerowidth().unwrap_or(&[]);
             for placement in anchors.iter().filter_map(|ch| graphics.placement(picture_anchor(*ch)?)) {
-                let row = index as isize - top as isize;
-                if row + placement.rows as isize > 0 {
+                if row_offset + placement.rows as isize > 0 {
                     let Placement { image, number, columns, rows, crop, z } = *placement;
-                    found.push(Placed { image, number, row, column, columns, rows, crop, z });
+                    found.push(Placed { image, number, row: row_offset, column, columns, rows, crop, z });
+                }
+            }
+            if cell.c == PLACEHOLDER_CHAR {
+                let same = |other: &Cell| {
+                    other.c == PLACEHOLDER_CHAR && other.fg == cell.fg && other.underline_color() == cell.underline_color()
+                };
+                let left_same = column > 0 && same(&grid[row.line][Column(column - 1)]);
+                let above_same = index > 0 && same(&grid[rows[index - 1].line][Column(column)]);
+                if !left_same && !above_same {
+                    let image_id = placeholder_id(cell.fg);
+                    let number = cell.underline_color().map_or(0, placeholder_id);
+                    if let Some(placement) = graphics.virtual_placement(image_id, number)
+                        && row_offset + placement.rows as isize > 0
+                    {
+                        let Placement { image, number, columns, rows, crop, z } = *placement;
+                        found.push(Placed { image, number, row: row_offset, column, columns, rows, crop, z });
+                    }
                 }
             }
         }
@@ -88,16 +116,33 @@ pub fn without_anchors(text: &str) -> String {
     text.chars().filter(|ch| (*ch as u32) < ANCHOR_BASE).collect()
 }
 
-// shortcut: walks every line on each call, cache per frame if profiling asks.
 pub fn rows<L: EventListener>(term: &Term<L>, blocks: &BlockStore) -> Vec<Row> {
     let grid = term.grid();
-    let mut rows = Vec::new();
+    let (top, bottom) = (grid.topmost_line().0, grid.bottommost_line().0);
+    let capacity = (bottom - top + 1).max(0) as usize;
+    if blocks.is_empty() {
+        let mut rows = Vec::with_capacity(capacity);
+        for number in top..=bottom {
+            rows.push(Row { line: Line(number), block: None, hidden: 0 });
+        }
+        return rows;
+    }
+    if !blocks.any_folded() {
+        let mut rows = Vec::with_capacity(capacity);
+        for number in top..=bottom {
+            let line = Line(number);
+            rows.push(Row { line, block: block_at(grid, line, blocks), hidden: 0 });
+        }
+        return rows;
+    }
+
+    let mut rows = Vec::with_capacity(capacity);
     let mut fold_into = None;
     let mut in_command = false;
     let prompts: HashSet<i32> =
         headers(term, blocks).iter().flat_map(|header| prompt_top(*header, blocks).0..header.0.0).collect();
 
-    for number in grid.topmost_line().0..=grid.bottommost_line().0 {
+    for number in top..=bottom {
         let line = Line(number);
         if let Some(id) = block_at(grid, line, blocks) {
             rows.push(Row { line, block: Some(id), hidden: 0 });

@@ -92,6 +92,7 @@ struct Keys {
     delete: u8,
     more: bool,
     z: i32,
+    virtual_placement: bool,
 }
 
 impl Default for Keys {
@@ -113,6 +114,7 @@ impl Default for Keys {
             delete: b'a',
             more: false,
             z: 0,
+            virtual_placement: false,
         }
     }
 }
@@ -130,12 +132,13 @@ struct Decoded {
 }
 
 /// The kitty graphics protocol for one terminal, without the grid or the GPU.
-// shortcut: no z-index, animation or unicode placeholders, add them when a program needs one.
+// shortcut: no animation support; unicode placeholders and z-index are supported.
 pub struct Graphics {
     images: HashMap<u32, Arc<Image>>,
     order: VecDeque<u32>,
     used: usize,
     placements: HashMap<u32, Placement>,
+    virtuals: HashMap<(u32, u32), Placement>,
     transfer: Option<Transfer>,
     next_anchor: u32,
     next_id: u32,
@@ -149,6 +152,7 @@ impl Default for Graphics {
             order: VecDeque::new(),
             used: 0,
             placements: HashMap::new(),
+            virtuals: HashMap::new(),
             transfer: None,
             next_anchor: 0,
             next_id: FIRST_AUTOMATIC_ID,
@@ -198,6 +202,10 @@ impl Graphics {
         match keys.action {
             b'd' => self.delete(keys),
             b'p' => match self.request(keys, keys.image) {
+                Some(request) if keys.virtual_placement => {
+                    self.place_virtual(request);
+                    Outcome { reply: reply(keys, Ok(())), place: None, delete: None }
+                }
                 Some(request) => Outcome { reply: reply(keys, Ok(())), place: Some(request), delete: None },
                 None => Outcome { reply: reply(keys, Err("ENOENT:no such image")), place: None, delete: None },
             },
@@ -205,7 +213,19 @@ impl Graphics {
             b't' | b'T' => match decode(transfer) {
                 Ok(decoded) => {
                     let id = self.store(keys.image, decoded);
-                    let place = if keys.action == b'T' { self.request(keys, id) } else { None };
+                    let place = if keys.action == b'T' {
+                        let request = self.request(keys, id);
+                        if keys.virtual_placement {
+                            if let Some(request) = request {
+                                self.place_virtual(request);
+                            }
+                            None
+                        } else {
+                            request
+                        }
+                    } else {
+                        None
+                    };
                     Outcome { reply: reply(keys, Ok(())), place, delete: None }
                 }
                 Err(error) => Outcome { reply: reply(keys, Err(error)), place: None, delete: None },
@@ -228,6 +248,7 @@ impl Graphics {
         self.forget(id);
         if was.is_some_and(|size| size != (decoded.width, decoded.height)) {
             self.placements.retain(|_, placement| placement.image != id);
+            self.virtuals.retain(|_, placement| placement.image != id);
         }
 
         self.used += decoded.rgba.len();
@@ -239,11 +260,15 @@ impl Graphics {
         while self.used > MAX_STORE {
             // A preview nothing shows goes before an image a placement still keeps on screen; only
             // when every image has one does the oldest transmission go.
-            let placed = |id: &u32| self.placements.values().any(|placement| placement.image == *id);
+            let placed = |id: &u32| {
+                self.placements.values().any(|placement| placement.image == *id)
+                    || self.virtuals.values().any(|placement| placement.image == *id)
+            };
             let victim = self.order.iter().find(|id| !placed(id)).copied().or_else(|| self.order.front().copied());
             let Some(victim) = victim else { break };
             self.forget(victim);
             self.placements.retain(|_, placement| placement.image != victim);
+            self.virtuals.retain(|_, placement| placement.image != victim);
         }
         id
     }
@@ -320,13 +345,45 @@ impl Graphics {
         Some(anchor)
     }
 
+    fn place_virtual(&mut self, request: Request) {
+        if request.columns == 0 || request.rows == 0 {
+            return;
+        }
+        let placement = Placement {
+            image: request.image,
+            number: request.number,
+            columns: request.columns,
+            rows: request.rows,
+            crop: request.crop,
+            z: request.z,
+        };
+        self.virtuals.insert((request.image, request.number), placement);
+    }
+
+    pub fn virtual_placement(&self, image: u32, number: u32) -> Option<&Placement> {
+        self.virtuals.get(&(image, number)).or_else(|| {
+            (number == 0)
+                .then(|| self.virtuals.iter().find(|((img, _), _)| *img == image).map(|(_, p)| p))
+                .flatten()
+        })
+    }
+
     pub fn placement(&self, anchor: u32) -> Option<&Placement> {
         self.placements.get(&anchor)
+    }
+
+    pub fn has_placements(&self) -> bool {
+        !self.placements.is_empty()
+    }
+
+    pub fn retain_anchors(&mut self, mut keep: impl FnMut(u32) -> bool) {
+        self.placements.retain(|anchor, _| keep(*anchor));
     }
 
     /// Drops every placement and keeps the data, for a screen that goes away under the images.
     pub fn clear_placements(&mut self) {
         self.placements.clear();
+        self.virtuals.clear();
     }
 
     pub fn image(&self, id: u32) -> Option<&Arc<Image>> {
@@ -340,7 +397,12 @@ impl Graphics {
 
     /// Rows above the viewport that can still reach into it.
     pub fn tallest(&self) -> usize {
-        self.placements.values().map(|placement| placement.rows as usize).max().unwrap_or(0)
+        self.placements
+            .values()
+            .chain(self.virtuals.values())
+            .map(|placement| placement.rows as usize)
+            .max()
+            .unwrap_or(0)
     }
 
     /// `d` names what to delete. The modes that name cells go back to the grid; the rest are
@@ -354,6 +416,7 @@ impl Graphics {
         let area = match keys.delete.to_ascii_lowercase() {
             b'a' => {
                 self.placements.clear();
+                self.virtuals.clear();
                 if free {
                     self.images.clear();
                     self.order.clear();
@@ -363,11 +426,13 @@ impl Graphics {
             }
             b'i' => {
                 self.placements.retain(|_, placement| placement.image != keys.image || !chosen(placement));
+                self.virtuals.retain(|_, placement| placement.image != keys.image || !chosen(placement));
                 self.release(keys.image, free);
                 return Outcome::default();
             }
             b'r' => {
                 self.placements.retain(|_, placement| !(x..=y).contains(&placement.image));
+                self.virtuals.retain(|_, placement| !(x..=y).contains(&placement.image));
                 for id in x..=y {
                     self.release(id, free);
                 }
@@ -378,7 +443,21 @@ impl Graphics {
             b'q' => Area::Cell { column: cell(x), row: cell(y), z: Some(keys.z) },
             b'x' => Area::Column(cell(x)),
             b'y' => Area::Row(cell(y)),
-            b'z' => Area::Z(keys.z),
+            b'z' => {
+                let mut removed = Vec::new();
+                self.virtuals.retain(|_, placement| {
+                    if placement.z == keys.z {
+                        removed.push(placement.image);
+                        false
+                    } else {
+                        true
+                    }
+                });
+                for id in removed {
+                    self.release(id, free);
+                }
+                Area::Z(keys.z)
+            }
             _ => return Outcome { reply: reply(keys, Err("ENOTSUPPORTED:delete mode")), place: None, delete: None },
         };
         Outcome { reply: None, place: None, delete: Some(Delete { area, free }) }
@@ -386,7 +465,10 @@ impl Graphics {
 
     /// Frees an image once nothing shows it, which is what the capital delete modes do.
     fn release(&mut self, id: u32, free: bool) {
-        if free && !self.placements.values().any(|placement| placement.image == id) {
+        if free
+            && !self.placements.values().any(|placement| placement.image == id)
+            && !self.virtuals.values().any(|placement| placement.image == id)
+        {
             self.forget(id);
         }
     }
@@ -472,6 +554,7 @@ fn parse(body: &[u8]) -> Option<(Keys, &[u8])> {
             "d" => keys.delete = letter,
             "m" => keys.more = number == 1,
             "z" => keys.z = signed,
+            "U" => keys.virtual_placement = number == 1,
             _ => {}
         }
     }

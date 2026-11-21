@@ -898,3 +898,58 @@ fn a_word_selection_stops_at_a_space_after_an_anchor() {
     fixture.session.term.selection = Some(Selection::new(SelectionType::Semantic, point, Side::Left));
     assert_eq!(fixture.session.term.selection_to_string().as_deref(), Some("foo"));
 }
+
+#[test]
+fn overwriting_a_wide_spacer_over_an_image_keeps_it() {
+    let mut f = Fixture::new(20, 10);
+    f.show("i=1,p=1,c=2,r=2,C=1");
+    f.feed("日");
+    f.feed("\x1b[1;2Ha");
+    let pictures = f.pictures();
+    assert_eq!(pictures.len(), 1, "clear_wide on the right spacer must preserve the picture anchor");
+    assert_eq!((pictures[0].row, pictures[0].column), (0, 0));
+}
+
+#[test]
+fn line_erase_over_an_image_preserves_its_anchor() {
+    for seq in ["\x1b[K", "\x1b[2K", "\x1b[2X"] {
+        let mut f = Fixture::new(20, 10);
+        f.show("i=1,p=1,c=2,r=2,C=1");
+        f.feed("\x1b[1;1H");
+        f.feed(seq);
+        assert_eq!(f.pictures().len(), 1, "sequence {seq:?} should keep the picture anchor");
+    }
+}
+
+#[test]
+fn clearing_the_screen_prunes_orphan_placements() {
+    let mut f = Fixture::new(20, 5);
+    f.feed("\x1b[?1049h");
+    f.show("i=1,c=2,r=4,C=1");
+    assert_eq!(f.session.graphics.tallest(), 4);
+    f.feed("\x1b[2J");
+    assert!(f.pictures().is_empty());
+    assert_eq!(f.session.graphics.tallest(), 0, "orphan placements must be pruned after ED 2");
+}
+
+#[test]
+fn synchronized_marks_and_status_read_flushed_grid_state() {
+    let mut f = Fixture::new(20, 6);
+    f.feed(&format!("\x1b[?2026h\r\n\r\n{PROMPT}\x1b[1m\x1bP$qm\x1b\\\x1b[?2026l"));
+    let block_row = f.rows().into_iter().find(|row| row.block.is_some()).expect("prompt block");
+    assert_eq!(block_row.line, Line(2));
+    assert_eq!(f.session.replies, vec!["\x1bP1$r0;1m\x1b\\"]);
+}
+
+#[test]
+fn unicode_placeholder_places_and_clears_a_virtual_image() {
+    let mut f = Fixture::new(20, 6);
+    f.feed("\x1b_Ga=T,f=24,s=1,v=1,i=42,c=2,r=2,U=1,q=2;AAAA\x1b\\");
+    assert!(f.pictures().is_empty(), "virtual placement waits for placeholder cells");
+    f.feed("\x1b[2;3H\x1b[38;2;0;0;42m\u{10EEEE}\u{10EEEE}\x1b[3;3H\u{10EEEE}\u{10EEEE}\x1b[39m");
+    let pics = f.pictures();
+    assert_eq!(pics.len(), 1);
+    assert_eq!((pics[0].image, pics[0].row, pics[0].column, pics[0].columns, pics[0].rows), (42, 1, 2, 2, 2));
+    f.feed("\x1b[2;3H  \x1b[3;3H  ");
+    assert!(f.pictures().is_empty());
+}
