@@ -15,7 +15,7 @@ Koral runs on Linux under Wayland and is developed on Hyprland.
 yay -S koral-bin
 ```
 
-To build from source (edition 2024, Rust >= 1.85):
+To build from source (edition 2024, Rust >= 1.88):
 
 ```sh
 cargo build --release

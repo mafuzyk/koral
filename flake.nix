@@ -12,7 +12,7 @@
       lib = nixpkgs.lib;
       systems = [ "x86_64-linux" ];
       forAllSystems = f: lib.genAttrs systems (system: f (import nixpkgs { inherit system; }));
-      version = "1.1.2";
+      version = "1.2.0";
       releaseVersion = "1.1.2";
     in
     {
@@ -22,7 +22,7 @@
           inherit version;
           src = self;
 
-          cargoHash = "sha256-qA+sWunx4+gWMyWTEm0P7b8HKnrUXz+T25Kcslp7EPI=";
+          cargoHash = "sha256-ZB3YkHNsfWiOL7Rp25msxdbPJ3cgfBisQrKQR7Oo6W4=";
 
           nativeBuildInputs = with pkgs; [ pkg-config makeWrapper ];
           buildInputs = with pkgs; [ libxkbcommon wayland fontconfig vulkan-loader libGL ];
