@@ -1,6 +1,6 @@
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
-use koral::theme::{Theme, hex};
+use koral::theme::{BUILTINS, Theme, hex, is_builtin, mix, theme_name};
 
 const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
     Rgb { r, g, b }
@@ -129,4 +129,29 @@ fn an_unknown_reference_is_an_error() {
 #[test]
 fn a_damaged_theme_is_an_error() {
     assert!(Theme::with_sharky("coral abyss nope\n", "theme.sharky").is_err());
+}
+
+#[test]
+fn builtin_themes_resolve_and_have_readable_contrast() {
+    let luminance = |c: Rgb| {
+        let channel = |v: u8| {
+            let v = f32::from(v) / 255.0;
+            if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
+    };
+    assert_eq!(BUILTINS.len(), 14);
+    for info in BUILTINS {
+        assert!(is_builtin(info.id));
+        assert_eq!(theme_name(info.id), Some(info.name));
+        let theme = Theme::builtin(info.id).expect(info.id);
+        let l1 = luminance(theme.foreground);
+        let l2 = luminance(theme.background);
+        let contrast = (l1.max(l2) + 0.05) / (l1.min(l2) + 0.05);
+        assert!(contrast > 4.5, "{} contrast too low: {contrast}", info.id);
+    }
+    assert!(Theme::builtin("unknown-theme").is_none());
+    assert!(!is_builtin("unknown-theme"));
+    assert_eq!(Theme::resolve_named(Some("dracula")), Theme::builtin("dracula").unwrap());
+    assert_eq!(mix(rgb(0, 0, 0), rgb(100, 200, 50), 0.5), rgb(50, 100, 25));
 }

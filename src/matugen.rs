@@ -27,8 +27,12 @@ fn colors_path() -> Option<PathBuf> {
 }
 
 pub fn theme(enabled: bool) -> Theme {
+    resolve_theme(enabled, None)
+}
+
+pub fn resolve_theme(enabled: bool, name: Option<&str>) -> Theme {
     let colors = colors_path().filter(|_| enabled).and_then(|path| std::fs::read_to_string(path).ok());
-    colors.map_or_else(Theme::sharky, |colors| Theme::with_colors(&colors))
+    colors.map_or_else(|| Theme::resolve_named(name), |colors| Theme::with_colors(&colors))
 }
 
 /// Matugen's config text with Koral's template in it, or None when it is already there.
