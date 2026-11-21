@@ -4,7 +4,7 @@ use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::Term;
 use alacritty_terminal::term::test::TermSize;
-use koral::links::{Link, allowed, at};
+use koral::links::{Link, allowed, at, at_in};
 use koral::pty::term_config;
 use koral::session::Session;
 
@@ -87,4 +87,38 @@ fn only_safe_schemes_are_allowed() {
     for uri in ["javascript:alert(1)", "data:text/html,x", "ssh://a", "-x", ""] {
         assert!(!allowed(uri), "{uri}");
     }
+}
+
+#[test]
+fn finds_local_file_paths_from_cwd_home_and_root() {
+    let root = std::env::temp_dir().join(format!("koral-links-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    let file = src.join("main.rs");
+    std::fs::write(&file, "fn main() {}\n").unwrap();
+
+    let cwd = root.to_str().unwrap();
+    let run = |text: &str, col: usize, cwd: Option<&str>, home: Option<&str>| {
+        let term = Term::new(term_config(), &TermSize::new(80, 5), VoidListener);
+        let mut session = Session::new(term);
+        session.feed(text.as_bytes(), Instant::now());
+        at_in(&session.term, point(0, col), cwd, home)
+    };
+
+    let rel = run("at src/main.rs:12:4.", 8, Some(cwd), None).unwrap();
+    assert_eq!(rel.uri, format!("file://{}", file.display()));
+    assert_eq!(rel.range, point(0, 3)..=point(0, 13));
+
+    let abs_line = format!("see {} ok", file.display());
+    let abs = run(&abs_line, 6, None, None).unwrap();
+    assert_eq!(abs.uri, format!("file://{}", file.display()));
+
+    let tilde = run("open ~/src/main.rs", 8, None, Some(cwd)).unwrap();
+    assert_eq!(tilde.uri, format!("file://{}", file.display()));
+
+    assert!(run("missing src/nope.rs", 10, Some(cwd), None).is_none());
+    assert!(run("plain word", 2, Some(cwd), None).is_none());
+
+    let _ = std::fs::remove_dir_all(&root);
 }

@@ -8,7 +8,7 @@ use alacritty_terminal::selection::Selection;
 use alacritty_terminal::term::TermMode;
 use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use koral::blocks::Activity;
-use koral::config::{self, Config};
+use koral::config::{self, Args, Config, Launch, USAGE};
 use koral::blink::Blink;
 use koral::fonts;
 use koral::frame::{self, Chrome, CursorView, Frame, Layout, TabView};
@@ -36,13 +36,6 @@ use winit::window::{CursorIcon, UserAttentionType, Window, WindowId};
 
 const CONFIRM_WINDOW: Duration = Duration::from_secs(3);
 
-const USAGE: &str = "\
-Usage: koral [--version | --help]
-
-  -h, --help  print this help
-  --version   print the version
-";
-
 /// stderr for a launch from a terminal, the log for a launch from the desktop icon.
 fn report(message: &str) {
     eprintln!("koral: {message}");
@@ -50,21 +43,21 @@ fn report(message: &str) {
 }
 
 fn main() {
-    match std::env::args().nth(1).as_deref() {
-        Some("--version") => {
+    let args = match config::parse_args(std::env::args().skip(1)) {
+        Ok(Launch::Version) => {
             println!("koral {}", env!("CARGO_PKG_VERSION"));
             return;
         }
-        Some("-h" | "--help") => {
+        Ok(Launch::Help) => {
             print!("{USAGE}");
             return;
         }
-        Some(other) => {
-            eprintln!("koral: unknown argument '{other}'\n\n{USAGE}");
+        Ok(Launch::Run(args)) => args,
+        Err(message) => {
+            eprintln!("koral: {message}\n\n{USAGE}");
             std::process::exit(2);
         }
-        None => {}
-    }
+    };
     let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
         Ok(event_loop) => event_loop,
         Err(error) => {
@@ -73,7 +66,7 @@ fn main() {
         }
     };
     let proxy = event_loop.create_proxy();
-    let mut app = App::new(proxy);
+    let mut app = App::new(proxy, args);
     if let Err(error) = event_loop.run_app(&mut app) {
         report(&format!("cannot run: {error}"));
         std::process::exit(1);
@@ -105,6 +98,7 @@ enum Drag {
 
 struct App {
     proxy: EventLoopProxy<UserEvent>,
+    args: Args,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     tabs: Option<Tabs<Terminal>>,
@@ -136,7 +130,7 @@ struct App {
 }
 
 impl App {
-    fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
+    fn new(proxy: EventLoopProxy<UserEvent>, args: Args) -> Self {
         if let Some(Err(error)) = config::home().map(|home| config::migrate(&home.join("koral"))) {
             report(&format!("cannot rename config.koral: {error}"));
         }
@@ -148,6 +142,7 @@ impl App {
         matugen::watch(proxy.clone());
         Self {
             proxy,
+            args,
             window: None,
             renderer: None,
             tabs: None,
@@ -224,32 +219,50 @@ impl App {
         let Some(geometry) = self.geometry() else {
             return;
         };
-        let cwd = self.active().and_then(|tab| {
-            let session = tab.session.lock();
-            session.blocks.latest()?.cwd.clone().map(PathBuf::from)
+        let initial = self.next_id == 0;
+        let cwd = if initial { self.args.cwd.take() } else { None }.or_else(|| {
+            self.active().and_then(|tab| {
+                let session = tab.session.lock();
+                session.blocks.latest()?.cwd.clone().map(PathBuf::from)
+            })
         });
         let id = self.next_id;
         self.next_id += 1;
 
-        let fallback = default_shell();
-        let preferred = std::env::var("KORAL_SHELL")
-            .ok()
-            .or_else(|| self.config.shell.clone())
-            .unwrap_or_else(|| fallback.clone());
-        let mut shells = vec![preferred];
-        if shells[0] != fallback {
-            shells.push(fallback);
-        }
-        // A bad `polyp shell` must not cost the user the window: the default gets a turn.
-        let terminal = shells.iter().find_map(|shell| {
-            match Terminal::spawn(id, self.proxy.clone(), shell, geometry, cwd.clone()) {
+        let mut terminal = if initial && let Some((prog, cmd_args)) = self.args.command.take() {
+            match Terminal::spawn_with_args(id, self.proxy.clone(), &prog, &cmd_args, geometry, cwd) {
                 Ok(terminal) => Some(terminal),
                 Err(error) => {
-                    report(&format!("cannot start {shell}: {error}"));
+                    report(&format!("cannot start {prog}: {error}"));
                     None
                 }
             }
-        });
+        } else {
+            let fallback = default_shell();
+            let preferred = std::env::var("KORAL_SHELL")
+                .ok()
+                .or_else(|| self.config.shell.clone())
+                .unwrap_or_else(|| fallback.clone());
+            let mut shells = vec![preferred];
+            if shells[0] != fallback {
+                shells.push(fallback);
+            }
+            // A bad `polyp shell` must not cost the user the window: the default gets a turn.
+            shells.iter().find_map(|shell| {
+                match Terminal::spawn(id, self.proxy.clone(), shell, geometry, cwd.clone()) {
+                    Ok(terminal) => Some(terminal),
+                    Err(error) => {
+                        report(&format!("cannot start {shell}: {error}"));
+                        None
+                    }
+                }
+            })
+        };
+        if let Some(ref mut terminal) = terminal {
+            if initial {
+                terminal.title = self.args.title.clone();
+            }
+        }
         if let Some(terminal) = terminal {
             match &mut self.tabs {
                 Some(tabs) => tabs.push(terminal),
@@ -425,11 +438,35 @@ impl App {
         }
     }
 
+    fn reload_config(&mut self) {
+        let Some(source) = config::path().and_then(|path| std::fs::read_to_string(path).ok()) else {
+            return;
+        };
+        if source == self.source {
+            return;
+        }
+        let (config, errors) = config::parse(&source);
+        for error in errors {
+            report(&format!("config.sharky {error}"));
+        }
+        let font_changed = config.face() != self.config.face() || config.font_size != self.config.font_size;
+        self.source = source;
+        self.config = config;
+        self.theme = matugen::theme(self.config.matugen);
+        if font_changed && let Some(renderer) = &mut self.renderer {
+            renderer.set_font(&self.config.face(), input::zoomed(self.config.font_size, self.zoom));
+        }
+        self.resize_all();
+        self.redraw();
+    }
+
     fn search_key(&mut self, key: &Key, text: Option<&str>) {
         let direction = if self.mods.shift_key() { Direction::Right } else { Direction::Left };
         match key {
             Key::Named(NamedKey::Escape) => self.search = None,
             Key::Named(NamedKey::Enter) => self.search_step(direction),
+            Key::Named(NamedKey::ArrowUp) => self.search_step(Direction::Left),
+            Key::Named(NamedKey::ArrowDown) => self.search_step(Direction::Right),
             Key::Named(NamedKey::Backspace) => self.search_edit(|query| {
                 query.pop();
             }),
@@ -828,7 +865,14 @@ impl App {
             && self.drag == Drag::None
             && self.layout().is_some_and(|layout| self.cursor.1 >= layout.strip() && !layout.in_gutter(self.cursor.0));
         let point = if held { self.point_under_cursor() } else { None };
-        let link = point.and_then(|(point, _)| links::at(&self.active()?.session.lock().term, point));
+        let link = point.and_then(|(point, block)| {
+            let session = self.active()?.session.lock();
+            let cwd = block
+                .and_then(|id| session.blocks.get(id))
+                .and_then(|block| block.cwd.as_deref())
+                .or_else(|| session.blocks.latest().and_then(|block| block.cwd.as_deref()));
+            links::at_in(&session.term, point, cwd, self.home.as_deref())
+        });
         if link != self.link {
             if let Some(window) = &self.window {
                 window.set_cursor(if link.is_some() { CursorIcon::Pointer } else { CursorIcon::Default });
@@ -961,7 +1005,14 @@ impl App {
         };
         frame::draw_chrome(&mut frame, &chrome, layout, &self.theme);
         if let Some(search) = &self.search {
-            frame::draw_search_bar(&mut frame, &search.query, search.current.is_some(), layout, &self.theme);
+            frame::draw_search_bar_status(
+                &mut frame,
+                &search.query,
+                search.current.is_some(),
+                search.position,
+                layout,
+                &self.theme,
+            );
         } else if let Some(link) = &self.link {
             frame::draw_link_bar(&mut frame, &link.uri, layout, &self.theme);
         }
@@ -1007,9 +1058,11 @@ impl ApplicationHandler<UserEvent> for App {
         if self.window.is_some() {
             return;
         }
+        let title = self.args.title.as_deref().unwrap_or("koral");
+        let class = self.args.class.as_deref().unwrap_or("koral");
         let attributes = Window::default_attributes()
-            .with_title("koral")
-            .with_name("koral", "koral")
+            .with_title(title)
+            .with_name(class, class)
             .with_inner_size(LogicalSize::new(960.0, 600.0))
             .with_transparent(true)
             .with_decorations(false);
@@ -1094,6 +1147,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.theme = matugen::theme(self.config.matugen);
                 self.redraw();
             }
+            UserEvent::Config => self.reload_config(),
             UserEvent::Fonts(fonts, list) => {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.set_fonts(*fonts);

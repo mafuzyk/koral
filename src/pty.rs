@@ -40,6 +40,7 @@ pub enum UserEvent {
     Copy(String),
     Color(u64, usize, ColorReply),
     Colors,
+    Config,
     Blink,
     Title(u64, Option<String>),
     Bell(u64),
@@ -107,7 +108,7 @@ pub struct Terminal {
     pub scroll: usize,
     pub title: Option<String>,
     pub rang: bool,
-    pty: Arc<Mutex<Pty>>,
+    pty: Option<Arc<Mutex<Pty>>>,
     writer: Sender<Vec<u8>>,
     wake: Arc<Poller>,
     closed: Arc<AtomicBool>,
@@ -118,6 +119,17 @@ impl Terminal {
         id: u64,
         proxy: EventLoopProxy<UserEvent>,
         shell: &str,
+        geometry: Geometry,
+        cwd: Option<PathBuf>,
+    ) -> std::io::Result<Self> {
+        Self::spawn_with_args(id, proxy, shell, &[], geometry, cwd)
+    }
+
+    pub fn spawn_with_args(
+        id: u64,
+        proxy: EventLoopProxy<UserEvent>,
+        shell: &str,
+        args: &[String],
         geometry: Geometry,
         cwd: Option<PathBuf>,
     ) -> std::io::Result<Self> {
@@ -134,7 +146,7 @@ impl Terminal {
             ("TERM_PROGRAM".to_string(), "koral".to_string()),
         ]);
         let options = Options {
-            shell: Some(Shell::new(shell.to_string(), Vec::new())),
+            shell: Some(Shell::new(shell.to_string(), args.to_vec())),
             working_directory: cwd,
             drain_on_exit: false,
             env,
@@ -152,7 +164,7 @@ impl Terminal {
         let (reader_wake, reader_closed) = (wake.clone(), closed.clone());
         std::thread::spawn(move || read_loop(id, reader_pty, reader_session, proxy, reader_wake, reader_closed));
 
-        Ok(Self { id, session, scroll: 0, title: None, rang: false, pty, writer, wake, closed })
+        Ok(Self { id, session, scroll: 0, title: None, rang: false, pty: Some(pty), writer, wake, closed })
     }
 
     pub fn write(&self, bytes: Vec<u8>) {
@@ -164,7 +176,9 @@ impl Terminal {
         session.term.resize(geometry.term_size());
         session.graphics.set_cell(geometry.cell_width.into(), geometry.cell_height.into());
         drop(session);
-        locked(&self.pty).on_resize(geometry.window_size());
+        if let Some(pty) = &self.pty {
+            locked(pty).on_resize(geometry.window_size());
+        }
     }
 }
 
@@ -178,6 +192,10 @@ impl Drop for Terminal {
         // Wake the reader so it releases the PTY, which then hangs up the child.
         self.closed.store(true, Ordering::SeqCst);
         let _ = self.wake.notify();
+        if let Some(pty) = self.pty.take() {
+            // Off the window thread: `Pty::drop` calls `child.wait()` which can block.
+            std::thread::spawn(move || drop(pty));
+        }
     }
 }
 

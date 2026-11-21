@@ -7,6 +7,66 @@ use crate::render::Face;
 
 const INSTRUCTION: &str = "polyp";
 
+pub const USAGE: &str = "\
+Usage: koral [OPTIONS] [-e COMMAND [ARGS...]]
+
+  -h, --help                   print this help
+  --version                    print the version
+  --working-directory, --cwd   initial working directory
+  --title                      initial window and tab title
+  --class, --app-id            window class / Wayland app-id
+  -e, --command                run COMMAND with ARGS in the initial tab
+";
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Args {
+    pub cwd: Option<PathBuf>,
+    pub title: Option<String>,
+    pub class: Option<String>,
+    pub command: Option<(String, Vec<String>)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Launch {
+    Help,
+    Version,
+    Run(Args),
+}
+
+pub fn parse_args<I, S>(args: I) -> Result<Launch, String>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let mut iter = args.into_iter().map(Into::into);
+    let mut parsed = Args::default();
+    while let Some(arg) = iter.next() {
+        let mut take_value = |flag: &str| iter.next().ok_or_else(|| format!("missing value for '{flag}'"));
+        if let Some(value) = arg.strip_prefix("--working-directory=").or_else(|| arg.strip_prefix("--cwd=")) {
+            parsed.cwd = Some(PathBuf::from(value));
+        } else if let Some(value) = arg.strip_prefix("--title=") {
+            parsed.title = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("--class=").or_else(|| arg.strip_prefix("--app-id=")) {
+            parsed.class = Some(value.to_string());
+        } else {
+            match arg.as_str() {
+                "--version" => return Ok(Launch::Version),
+                "-h" | "--help" => return Ok(Launch::Help),
+                "--working-directory" | "--cwd" => parsed.cwd = Some(PathBuf::from(take_value(&arg)?)),
+                "--title" => parsed.title = Some(take_value(&arg)?),
+                "--class" | "--app-id" => parsed.class = Some(take_value(&arg)?),
+                "-e" | "--command" | "--" => {
+                    let prog = iter.next().ok_or_else(|| format!("missing command for '{arg}'"))?;
+                    parsed.command = Some((prog, iter.collect()));
+                    break;
+                }
+                _ => return Err(format!("unknown argument '{arg}'")),
+            }
+        }
+    }
+    Ok(Launch::Run(parsed))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub font: String,

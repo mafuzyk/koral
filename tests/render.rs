@@ -159,7 +159,8 @@ fn preedit_text_is_underlined_at_the_cursor() {
     assert_eq!(frame.lines.len(), 1);
     assert_eq!((frame.lines[0].x, frame.lines[0].y), (30.0, 40.0));
     assert_eq!(frame.lines[0].spans[0].text, "ãé");
-    assert_eq!(frame.quads.len(), 1);
+    assert_eq!(frame.quads.len(), 2);
+    assert_eq!(frame.quads[0].color, rgba(theme.background, 1.0));
 }
 
 const INK: [f32; 4] = [1.0; 4];
@@ -369,6 +370,7 @@ fn a_narrow_window_still_draws_the_search_bar() {
 fn a_tab_kept_in_a_cell_draws_one_cell_wide() {
     assert_eq!(koral::frame::shown('\t'), ' ');
     assert_eq!(koral::frame::shown('\0'), ' ');
+    assert_eq!(koral::frame::shown('\u{10EEEE}'), ' ');
     assert_eq!(koral::frame::shown('a'), 'a');
 }
 
@@ -461,4 +463,37 @@ fn eviction_leaves_the_screen_it_just_drew() {
     let screen: Vec<u64> = (0..MAX_CACHED_LINES as u64 + 200).collect();
     assert_eq!(shape_into(&mut cache, &screen), screen.len());
     assert_eq!(shape_into(&mut cache, &screen), 0, "the screen that triggered an eviction is shaped nothing");
+}
+
+#[test]
+fn search_bar_shows_match_counter_when_present() {
+    let mut frame = Frame::default();
+    koral::frame::draw_search_bar_status(&mut frame, "needle", true, Some((3, 14)), layout(), &Theme::default());
+    let text: String = frame.lines.iter().flat_map(|line| &line.spans).map(|span| span.text.as_str()).collect();
+    assert!(text.contains("3/14"), "expected 3/14 in {text:?}");
+}
+
+#[test]
+fn scrollback_shows_thumb_and_failed_block_ticks() {
+    let term = Term::new(Config::default(), &TermSize::new(20, 5), VoidListener);
+    let mut session = Session::new(term);
+    let now = Instant::now();
+    for i in 0..10 {
+        let status = if i == 3 { 1 } else { 0 };
+        let seq = format!("\x1b]133;A\x1b\\$ \x1b]133;B\x1b\\cmd{i}\r\n\x1b]133;C\x1b\\out{i}\r\n\x1b]133;D;{status}\x1b\\");
+        session.feed(seq.as_bytes(), now);
+    }
+    let rows = rows(&session.term, &session.blocks);
+    let theme = Theme::default();
+    let cursor = CursorView { focused: true, visible: true };
+    let view = koral::frame::Layout { height: 38.0 + 5.0 * 20.0, ..layout() };
+
+    let mut at_bottom = Frame::default();
+    draw_terminal(&mut at_bottom, &session.term, &session.blocks, &rows, 0, cursor, view, &theme);
+    assert!(!at_bottom.quads.iter().any(|q| q.color == rgba(theme.muted, 0.45)));
+
+    let mut scrolled = Frame::default();
+    draw_terminal(&mut scrolled, &session.term, &session.blocks, &rows, 3, cursor, view, &theme);
+    assert!(scrolled.quads.iter().any(|q| q.color == rgba(theme.muted, 0.45)), "expected scroll thumb");
+    assert!(scrolled.quads.iter().any(|q| q.color == rgba(theme.failure, 0.85)), "expected failure tick");
 }

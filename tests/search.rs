@@ -110,3 +110,22 @@ fn only_what_is_in_view_is_marked() {
     let found = search("one").visible(&session.term, Line(1), Line(2));
     assert_eq!(found.iter().map(|hit| *hit.start()).collect::<Vec<_>>(), vec![line(2, 0)]);
 }
+
+#[test]
+fn step_reports_match_position_and_total() {
+    let session = session("one\r\ntwo one\r\none\r\n");
+    let mut s = search("one");
+    assert_eq!(s.position, None);
+    assert!(s.step(&session.term, Direction::Left).is_some());
+    assert_eq!(s.position, Some((3, 3)));
+    assert!(s.step(&session.term, Direction::Left).is_some());
+    assert_eq!(s.position, Some((2, 3)));
+    assert!(s.step(&session.term, Direction::Left).is_some());
+    assert_eq!(s.position, Some((1, 3)));
+    assert!(s.step(&session.term, Direction::Right).is_some());
+    assert_eq!(s.position, Some((2, 3)));
+    s.set_query("missing".to_string());
+    assert_eq!(s.position, None);
+    assert!(s.step(&session.term, Direction::Left).is_none());
+    assert_eq!(s.position, None);
+}

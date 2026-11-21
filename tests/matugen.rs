@@ -1,4 +1,6 @@
-use koral::matugen::{TEMPLATE, add_template, on_path};
+use std::time::{Duration, UNIX_EPOCH};
+
+use koral::matugen::{TEMPLATE, add_template, diff_stamps, on_path};
 use koral::theme::{Theme, hex};
 
 const NEW: &str = "[templates.koral]\ninput_path = \"/c/koral/matugen.template\"\noutput_path = \"/c/koral/matugen.colors\"\n";
@@ -60,4 +62,16 @@ fn the_template_sets_every_colour_of_the_theme() {
     for slot in [theme.background, theme.foreground, theme.cursor, theme.accent, theme.success, theme.failure, theme.muted] {
         assert_eq!(Some(slot), color);
     }
+}
+
+#[test]
+fn diff_stamps_separates_theme_changes_from_config_changes() {
+    let t0 = Some(UNIX_EPOCH + Duration::from_secs(10));
+    let t1 = Some(UNIX_EPOCH + Duration::from_secs(20));
+    let base = [t0, t0, t0];
+    assert_eq!(diff_stamps(&base, &base), (false, false));
+    assert_eq!(diff_stamps(&base, &[t1, t0, t0]), (true, false));
+    assert_eq!(diff_stamps(&base, &[t0, t1, t0]), (true, false));
+    assert_eq!(diff_stamps(&base, &[t0, t0, t1]), (false, true));
+    assert_eq!(diff_stamps(&base, &[t1, t0, t1]), (true, true));
 }

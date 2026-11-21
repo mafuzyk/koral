@@ -282,7 +282,9 @@ pub fn draw_terminal<L: EventListener>(
             let box_thickness = layout.scale.max(1.0);
 
             let mut text = String::from(shown(cell.c));
-            if let Some(extra) = cell.zerowidth() {
+            if cell.c != crate::view::PLACEHOLDER_CHAR
+                && let Some(extra) = cell.zerowidth()
+            {
                 text.extend(extra.iter());
             }
             let mut text = without_anchors(&text);
@@ -333,11 +335,34 @@ pub fn draw_terminal<L: EventListener>(
     if let Some(block) = pinned(rows, top, blocks).and_then(|id| blocks.get(id)) {
         draw_pinned(frame, block, layout, theme);
     }
+
+    if scroll > 0 && rows.len() > layout.lines() {
+        let track_y = layout.grid_y();
+        let track_h = layout.lines() as f32 * layout.cell.height;
+        let bar_w = (2.0 * layout.scale).round().max(1.0);
+        let bar_x = layout.width - bar_w - (2.0 * layout.scale).round();
+        let total = rows.len() as f32;
+        let max_top = (rows.len() - layout.lines()) as f32;
+        let thumb_h = (layout.lines() as f32 / total * track_h).max(8.0 * layout.scale).min(track_h);
+        let thumb_y = track_y + (top as f32 / max_top) * (track_h - thumb_h);
+        frame.quads.push(Quad::new(bar_x, thumb_y, bar_w, thumb_h, rgba(theme.muted, 0.45)));
+        for (idx, row) in rows.iter().enumerate() {
+            if row
+                .block
+                .and_then(|id| blocks.get(id))
+                .and_then(|block| block.status)
+                .is_some_and(|status| status != 0)
+            {
+                let tick_y = track_y + (idx as f32 / total) * (track_h - bar_w);
+                frame.quads.push(Quad::new(bar_x, tick_y, bar_w, bar_w, rgba(theme.failure, 0.85)));
+            }
+        }
+    }
 }
 
 /// The character a cell draws. alacritty keeps tabs in the grid for copying, and a font would widen them.
 pub fn shown(ch: char) -> char {
-    if matches!(ch, '\0' | '\t') { ' ' } else { ch }
+    if matches!(ch, '\0' | '\t' | '\u{10EEEE}') { ' ' } else { ch }
 }
 
 pub fn draw_search(
@@ -395,10 +420,29 @@ fn bottom_panel(frame: &mut Frame, columns: f32, layout: Layout, theme: &Theme) 
 }
 
 pub fn draw_search_bar(frame: &mut Frame, query: &str, found: bool, layout: Layout, theme: &Theme) {
+    draw_search_bar_status(frame, query, found, None, layout, theme);
+}
+
+pub fn draw_search_bar_status(
+    frame: &mut Frame,
+    query: &str,
+    found: bool,
+    position: Option<(usize, usize)>,
+    layout: Layout,
+    theme: &Theme,
+) {
     let (scale, cell) = (layout.scale, layout.cell);
     let inset = PANEL_INSET * scale;
     let (x, width, text_y) = bottom_panel(frame, SEARCH_COLUMNS, layout, theme);
-    let status = if found || query.is_empty() { "" } else { "No matches" };
+    let (status, status_color) = if query.is_empty() {
+        (String::new(), theme.muted)
+    } else if !found {
+        ("No matches".to_string(), theme.failure)
+    } else if let Some((index, total)) = position {
+        (format!("{index}/{total}"), theme.muted)
+    } else {
+        (String::new(), theme.muted)
+    };
     let room = (((width - inset * 2.0) / cell.width) as usize).saturating_sub(status.chars().count());
     let shown = fit(query, room.saturating_sub(1));
     let caret = x + inset + shown.chars().count() as f32 * cell.width;
@@ -411,7 +455,7 @@ pub fn draw_search_bar(frame: &mut Frame, query: &str, found: bool, layout: Layo
     frame.lines.push(TextLine { x: x + inset, y: text_y, small: false, spans });
     if !status.is_empty() {
         let status_x = x + width - inset - status.chars().count() as f32 * cell.width;
-        frame.lines.push(TextLine { x: status_x, y: text_y, small: false, spans: vec![Span::plain(status, theme.failure)] });
+        frame.lines.push(TextLine { x: status_x, y: text_y, small: false, spans: vec![Span::plain(status, status_color)] });
     }
 }
 
@@ -534,6 +578,7 @@ pub fn cursor_position<L: EventListener>(term: &Term<L>, rows: &[Row], scroll: u
 pub fn draw_preedit(frame: &mut Frame, text: &str, x: f32, y: f32, layout: Layout, theme: &Theme) {
     let width = text.chars().count() as f32 * layout.cell.width;
     let (thickness, offset) = decoration(layout.cell);
+    frame.quads.push(Quad::new(x, y, width, layout.cell.height, rgba(theme.background, 1.0)));
     frame.quads.push(Quad::new(x, y + layout.cell.height - offset, width, thickness, rgba(theme.accent, 1.0)));
     frame.lines.push(TextLine { x, y, small: false, spans: vec![Span::plain(text.to_string(), theme.foreground)] });
 }

@@ -21,6 +21,7 @@ pub fn escape(query: &str) -> String {
 pub struct Search {
     pub query: String,
     pub current: Option<Match>,
+    pub position: Option<(usize, usize)>,
     regex: Option<RegexSearch>,
 }
 
@@ -29,6 +30,7 @@ impl Search {
         self.regex = RegexSearch::new(&escape(&query)).ok().filter(|_| !query.is_empty());
         self.query = query;
         self.current = None;
+        self.position = None;
     }
 
     pub fn step<L: EventListener>(&mut self, term: &Term<L>, direction: Direction) -> Option<Match> {
@@ -40,6 +42,18 @@ impl Search {
             (Some(found), Direction::Left) => found.start().sub(term, Boundary::None, 1),
         };
         self.current = term.search_next(regex, origin, direction, Side::Left, None);
+        self.position = self.current.as_ref().and_then(|current| {
+            let top = Point::new(term.topmost_line(), Column(0));
+            let mut total = 0;
+            let mut index = None;
+            for found in RegexIter::new(top, bottom, Direction::Right, term, regex) {
+                total += 1;
+                if found.start() == current.start() {
+                    index = Some(total);
+                }
+            }
+            Some((index?, total))
+        });
         self.current.clone()
     }
 
