@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::WindowSize;
 use alacritty_terminal::tty::{self, Options, Pty, Shell};
-use koral::pty::{device_reply, pump, write_loop};
+use koral::pty::{device_reply, pump, term_config_with, write_loop};
 use polling::Poller;
 
 #[test]
@@ -103,4 +103,10 @@ fn a_closed_tab_releases_the_reader() {
     finished
         .recv_timeout(Duration::from_secs(2))
         .expect("the reader must stop once the tab is gone");
+}
+
+#[test]
+fn configurable_scrollback_propagates_to_terminal_config() {
+    assert_eq!(term_config_with(25_000).scrolling_history, 25_000);
+    assert_eq!(term_config_with(0).scrolling_history, 0);
 }

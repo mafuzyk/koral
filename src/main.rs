@@ -2,27 +2,28 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::index::{Column, Point, Side};
-use alacritty_terminal::index::Direction;
+use alacritty_terminal::index::{Column, Direction, Point, Side};
 use alacritty_terminal::selection::Selection;
-use alacritty_terminal::term::TermMode;
+use alacritty_terminal::term::{ClipboardType, TermMode};
 use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use koral::blocks::Activity;
 use koral::config::{self, Args, Config, Launch, USAGE};
 use koral::blink::Blink;
 use koral::fonts;
-use koral::frame::{self, Chrome, CursorView, Frame, Layout, TabView};
+use koral::frame::{self, Chrome, CursorView, Frame, Layout, PaneLayout, TabView};
+use koral::ipc::{self, Request};
 use koral::links::{self, Link};
 use koral::matugen;
-use koral::input::{self, Action, Clicks, Mouse, binding};
+use koral::input::{self, Action, Clicks, Mouse, resolve_binding};
 use koral::keyboard::{self, KeyPress, Stage};
 use koral::lag;
 use koral::notify::{self, Limiter};
 use koral::pty::{Geometry, Terminal, UserEvent};
 use koral::render::{Renderer, rgba};
 use koral::search::Search;
-use koral::settings::{self, Command, FIELDS, Kind, Outcome, Settings, Zone};
-use koral::tabs::{self, Bar, Hit, Ring, Tabs};
+use koral::settings::{self, Command, FIELDS, Kind, Outcome, Settings, SettingsView, Zone};
+use koral::splits::{Axis, CloseResult, Dir, SplitTree};
+use koral::tabs::{self, Bar, Hit, Rect, Ring, Tabs};
 use koral::theme::Theme;
 use koral::view;
 use winit::application::ApplicationHandler;
@@ -53,6 +54,20 @@ fn main() {
             return;
         }
         Ok(Launch::Run(args)) => args,
+        Ok(Launch::Control(ctl)) => {
+            match koral::ipc::parse_cli(&ctl).and_then(|(socket, req)| koral::ipc::send(socket, &req)) {
+                Ok(out) => {
+                    if !out.is_empty() {
+                        println!("{out}");
+                    }
+                    return;
+                }
+                Err(message) => {
+                    eprintln!("koral ctl: {message}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Err(message) => {
             eprintln!("koral: {message}\n\n{USAGE}");
             std::process::exit(2);
@@ -89,11 +104,45 @@ fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 enum Drag {
     None,
     Selecting,
     Tab(usize),
+    Divider(Vec<bool>, Axis, Rect),
+}
+
+enum Tab {
+    Terminal(SplitTree<Terminal>),
+    Settings(Settings),
+}
+
+impl Tab {
+    fn as_tree(&self) -> Option<&SplitTree<Terminal>> {
+        match self {
+            Self::Terminal(tree) => Some(tree),
+            Self::Settings(_) => None,
+        }
+    }
+
+    fn as_tree_mut(&mut self) -> Option<&mut SplitTree<Terminal>> {
+        match self {
+            Self::Terminal(tree) => Some(tree),
+            Self::Settings(_) => None,
+        }
+    }
+
+    fn active_terminal(&self) -> Option<&Terminal> {
+        self.as_tree().map(SplitTree::active)
+    }
+
+    fn active_terminal_mut(&mut self) -> Option<&mut Terminal> {
+        self.as_tree_mut().map(SplitTree::active_mut)
+    }
+
+    fn is_settings(&self) -> bool {
+        matches!(self, Self::Settings(_))
+    }
 }
 
 struct App {
@@ -101,11 +150,11 @@ struct App {
     args: Args,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
-    tabs: Option<Tabs<Terminal>>,
+    ipc: Option<ipc::Server>,
+    tabs: Option<Tabs<Tab>>,
     next_id: u64,
     config: Config,
     source: String,
-    settings: Option<Settings>,
     settings_error: Option<String>,
     fonts: Vec<String>,
     theme: Theme,
@@ -126,7 +175,7 @@ struct App {
     window_title: String,
     notices: Limiter,
     search: Option<Search>,
-    link: Option<Link>,
+    link: Option<(u64, Link)>,
 }
 
 impl App {
@@ -145,12 +194,12 @@ impl App {
             args,
             window: None,
             renderer: None,
+            ipc: None,
             tabs: None,
             next_id: 0,
-            theme: matugen::theme(config.matugen),
+            theme: matugen::resolve_theme(config.matugen, config.theme.as_deref()),
             config,
             source,
-            settings: None,
             settings_error: None,
             fonts: Vec::new(),
             home: std::env::var("HOME").ok(),
@@ -186,14 +235,26 @@ impl App {
         })
     }
 
-    fn geometry(&self) -> Option<Geometry> {
-        let layout = self.layout()?;
-        Some(Geometry {
-            columns: layout.columns(),
-            lines: layout.lines(),
+    fn divider_px(layout: Layout) -> f32 {
+        (2.0 * layout.scale).round().max(1.0)
+    }
+
+    fn geometry_for(rect: Rect, layout: Layout) -> Geometry {
+        let pane = PaneLayout::from_rect(rect, layout);
+        Geometry {
+            columns: pane.columns(),
+            lines: pane.lines(),
             cell_width: layout.cell.width as u16,
             cell_height: layout.cell.height as u16,
-        })
+        }
+    }
+
+    fn active_pane(&self) -> Option<(u64, Rect, PaneLayout)> {
+        let layout = self.layout()?;
+        let tree = self.tabs.as_ref()?.active()?.as_tree()?;
+        let (panes, _) = tree.layout(layout.content_rect(), Self::divider_px(layout));
+        let (id, rect) = panes.into_iter().find(|(id, _)| *id == tree.active_id())?;
+        Some((id, rect, PaneLayout::from_rect(rect, layout)))
     }
 
     fn bar(&self) -> Option<Bar> {
@@ -208,29 +269,45 @@ impl App {
     }
 
     fn active(&self) -> Option<&Terminal> {
-        self.tabs.as_ref()?.active()
+        self.tabs.as_ref()?.active()?.active_terminal()
     }
 
     fn active_mut(&mut self) -> Option<&mut Terminal> {
-        self.tabs.as_mut()?.active_mut()
+        self.tabs.as_mut()?.active_mut()?.active_terminal_mut()
     }
 
-    fn open_tab(&mut self) {
-        let Some(geometry) = self.geometry() else {
-            return;
-        };
-        let initial = self.next_id == 0;
-        let cwd = if initial { self.args.cwd.take() } else { None }.or_else(|| {
-            self.active().and_then(|tab| {
-                let session = tab.session.lock();
-                session.blocks.latest()?.cwd.clone().map(PathBuf::from)
-            })
-        });
+    fn active_settings_mut(&mut self) -> Option<&mut Settings> {
+        match self.tabs.as_mut()?.active_mut()? {
+            Tab::Settings(settings) => Some(settings),
+            Tab::Terminal(_) => None,
+        }
+    }
+
+    fn active_is_settings(&self) -> bool {
+        self.tabs.as_ref().and_then(Tabs::active).is_some_and(Tab::is_settings)
+    }
+
+    fn terminal(&self, id: u64) -> Option<&Terminal> {
+        self.tabs.as_ref()?.iter().find_map(|tab| tab.as_tree()?.get(id))
+    }
+
+    fn terminal_mut(&mut self, id: u64) -> Option<&mut Terminal> {
+        self.tabs.as_mut()?.iter_mut().find_map(|tab| tab.as_tree_mut()?.get_mut(id))
+    }
+
+    fn spawn_terminal(
+        &mut self,
+        geometry: Geometry,
+        cwd: Option<PathBuf>,
+        title: Option<String>,
+        command: Option<(String, Vec<String>)>,
+    ) -> Option<Terminal> {
         let id = self.next_id;
         self.next_id += 1;
-
-        let mut terminal = if initial && let Some((prog, cmd_args)) = self.args.command.take() {
-            match Terminal::spawn_with_args(id, self.proxy.clone(), &prog, &cmd_args, geometry, cwd) {
+        let scrollback = self.config.scrollback;
+        let socket = self.ipc.as_ref().map(ipc::Server::path).map(PathBuf::from);
+        let mut terminal = if let Some((prog, cmd_args)) = command {
+            match Terminal::spawn_configured(id, self.proxy.clone(), &prog, &cmd_args, geometry, cwd, scrollback, socket.as_deref()) {
                 Ok(terminal) => Some(terminal),
                 Err(error) => {
                     report(&format!("cannot start {prog}: {error}"));
@@ -249,7 +326,7 @@ impl App {
             }
             // A bad `polyp shell` must not cost the user the window: the default gets a turn.
             shells.iter().find_map(|shell| {
-                match Terminal::spawn(id, self.proxy.clone(), shell, geometry, cwd.clone()) {
+                match Terminal::spawn_configured(id, self.proxy.clone(), shell, &[], geometry, cwd.clone(), scrollback, socket.as_deref()) {
                     Ok(terminal) => Some(terminal),
                     Err(error) => {
                         report(&format!("cannot start {shell}: {error}"));
@@ -258,18 +335,117 @@ impl App {
                 }
             })
         };
-        if let Some(ref mut terminal) = terminal {
-            if initial {
-                terminal.title = self.args.title.clone();
-            }
+        if let Some(ref mut term) = terminal
+            && title.is_some()
+        {
+            term.title = title;
         }
-        if let Some(terminal) = terminal {
-            match &mut self.tabs {
-                Some(tabs) => tabs.push(terminal),
-                None => self.tabs = Some(Tabs::new(terminal)),
-            }
+        terminal
+    }
+
+    fn active_cwd(&self) -> Option<PathBuf> {
+        self.active().and_then(|tab| {
+            let session = tab.session.lock();
+            session.blocks.latest()?.cwd.clone().map(PathBuf::from)
+        })
+    }
+
+    fn open_tab(&mut self) {
+        let initial = self.next_id == 0;
+        let cwd = if initial { self.args.cwd.take() } else { None };
+        let title = if initial { self.args.title.clone() } else { None };
+        let command = if initial { self.args.command.take() } else { None };
+        self.open_tab_with(cwd, title, command);
+    }
+
+    fn open_tab_with(&mut self, cwd: Option<PathBuf>, title: Option<String>, command: Option<(String, Vec<String>)>) {
+        let Some(layout) = self.layout() else {
+            return;
+        };
+        let geometry = Self::geometry_for(layout.content_rect(), layout);
+        let cwd = cwd.or_else(|| self.active_cwd());
+        let Some(terminal) = self.spawn_terminal(geometry, cwd, title, command) else {
+            return;
+        };
+        let tab = Tab::Terminal(SplitTree::new(terminal.id, terminal));
+        match &mut self.tabs {
+            Some(tabs) => tabs.push(tab),
+            None => self.tabs = Some(Tabs::new(tab)),
         }
+        self.resize_all();
         self.redraw();
+    }
+
+    fn split_active(&mut self, axis: Axis, cwd: Option<PathBuf>) -> bool {
+        let Some(layout) = self.layout() else {
+            return false;
+        };
+        if !self.tabs.as_ref().and_then(Tabs::active).is_some_and(|t| t.as_tree().is_some()) {
+            return false;
+        }
+        let cwd = cwd.or_else(|| self.active_cwd());
+        let geometry = Self::geometry_for(layout.content_rect(), layout);
+        let Some(terminal) = self.spawn_terminal(geometry, cwd, None, None) else {
+            return false;
+        };
+        let new_id = terminal.id;
+        if let Some(tree) = self.tabs.as_mut().and_then(Tabs::active_mut).and_then(Tab::as_tree_mut) {
+            tree.split_active(axis, new_id, terminal);
+        }
+        self.search = None;
+        self.link = None;
+        self.resize_all();
+        self.redraw();
+        true
+    }
+
+    fn close_active_pane(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(active_idx) = self.tabs.as_ref().map(Tabs::active_index) else {
+            return;
+        };
+        let is_terminal = self.tabs.as_ref().and_then(Tabs::active).is_some_and(|t| t.as_tree().is_some());
+        if !is_terminal {
+            self.request_close(active_idx, event_loop);
+            return;
+        }
+        let result = if let Some(tree) = self.tabs.as_mut().and_then(Tabs::active_mut).and_then(Tab::as_tree_mut) {
+            let id = tree.active_id();
+            tree.close(id)
+        } else {
+            CloseResult::NotFound
+        };
+        match result {
+            CloseResult::LastPane => self.request_close(active_idx, event_loop),
+            CloseResult::Closed => {
+                self.search = None;
+                self.link = None;
+                self.resize_all();
+                self.redraw();
+            }
+            CloseResult::NotFound => {}
+        }
+    }
+
+    fn focus_dir(&mut self, dir: Dir) {
+        let Some(layout) = self.layout() else {
+            return;
+        };
+        let div = Self::divider_px(layout);
+        if let Some(tree) = self.tabs.as_mut().and_then(Tabs::active_mut).and_then(Tab::as_tree_mut)
+            && tree.focus_dir(dir, layout.content_rect(), div)
+        {
+            self.search = None;
+            self.redraw();
+        }
+    }
+
+    fn resize_dir(&mut self, dir: Dir) {
+        if let Some(tree) = self.tabs.as_mut().and_then(Tabs::active_mut).and_then(Tab::as_tree_mut)
+            && tree.resize_active(dir, 0.05)
+        {
+            self.resize_all();
+            self.redraw();
+        }
     }
 
     /// A running command gets a second chance: the tab asks instead of a dialog.
@@ -277,8 +453,16 @@ impl App {
         let Some(tab) = self.tabs.as_ref().and_then(|tabs| tabs.iter().nth(index)) else {
             return;
         };
-        let id = tab.id;
-        let running = tab.session.lock().blocks.activity() == Activity::Running;
+        let Tab::Terminal(tree) = tab else {
+            self.confirming = None;
+            self.close_tab(index, event_loop);
+            return;
+        };
+        let id = tree.active_id();
+        let running = tree
+            .iter()
+            .into_iter()
+            .any(|(_, term)| term.session.lock().blocks.activity() == Activity::Running);
         let confirmed = self.confirming.is_some_and(|(pending, at)| pending == id && at.elapsed() < CONFIRM_WINDOW);
         if running && !confirmed {
             self.confirming = Some((id, Instant::now()));
@@ -297,6 +481,9 @@ impl App {
                 event_loop.exit();
             }
         }
+        self.search = None;
+        self.link = None;
+        self.resize_all();
         self.redraw();
     }
 
@@ -312,11 +499,12 @@ impl App {
     }
 
     fn ime(&mut self, ime: Ime) {
+        let in_settings = self.active_is_settings();
         match ime {
             Ime::Preedit(text, _) => self.preedit = Some(text).filter(|text| !text.is_empty()),
-            Ime::Commit(text) if self.settings.is_some() => {
+            Ime::Commit(text) if in_settings => {
                 self.preedit = None;
-                text.chars().for_each(|ch| self.settings_command(Command::Type(ch)));
+                text.chars().for_each(|ch| self.settings_command(Command::Type(ch), None));
             }
             Ime::Commit(text) if self.search.is_some() => {
                 self.preedit = None;
@@ -363,11 +551,26 @@ impl App {
             Action::PageDown => self.scroll_lines(-self.page()),
             Action::OpenSettings => {
                 self.search = None;
-                self.toggle_settings();
+                self.toggle_settings(event_loop);
             }
             Action::ZoomIn => self.zoom_to(self.zoom + 1.0),
             Action::ZoomOut => self.zoom_to(self.zoom - 1.0),
             Action::ZoomReset => self.zoom_to(0.0),
+            Action::SplitRight => {
+                self.split_active(Axis::Horizontal, None);
+            }
+            Action::SplitDown => {
+                self.split_active(Axis::Vertical, None);
+            }
+            Action::ClosePane => self.close_active_pane(event_loop),
+            Action::FocusLeft => self.focus_dir(Dir::Left),
+            Action::FocusRight => self.focus_dir(Dir::Right),
+            Action::FocusUp => self.focus_dir(Dir::Up),
+            Action::FocusDown => self.focus_dir(Dir::Down),
+            Action::ResizeLeft => self.resize_dir(Dir::Left),
+            Action::ResizeRight => self.resize_dir(Dir::Right),
+            Action::ResizeUp => self.resize_dir(Dir::Up),
+            Action::ResizeDown => self.resize_dir(Dir::Down),
         }
         self.redraw();
     }
@@ -382,49 +585,92 @@ impl App {
         self.resize_all();
     }
 
-    fn toggle_settings(&mut self) {
-        self.settings = match self.settings {
-            Some(_) => None,
-            None => Some(Settings { fonts: self.fonts.clone(), ..Settings::default() }),
-        };
+    fn toggle_settings(&mut self, event_loop: &ActiveEventLoop) {
+        let existing = self.tabs.as_ref().and_then(|tabs| tabs.iter().position(Tab::is_settings));
+        match existing {
+            Some(index) => {
+                let active = self.tabs.as_ref().map(Tabs::active_index) == Some(index);
+                let len = self.tabs.as_ref().map_or(0, Tabs::len);
+                if active && len > 1 {
+                    self.close_tab(index, event_loop);
+                } else if !active {
+                    self.with_tabs(|tabs| tabs.select(index));
+                }
+            }
+            None => {
+                let tab = Tab::Settings(Settings::new(self.fonts.clone()));
+                match &mut self.tabs {
+                    Some(tabs) => tabs.push(tab),
+                    None => self.tabs = Some(Tabs::new(tab)),
+                }
+            }
+        }
         self.settings_error = None;
         self.redraw();
     }
 
-    fn settings_command(&mut self, command: Command) {
-        let Some(settings) = &mut self.settings else {
-            return;
+    fn open_or_focus_settings(&mut self) {
+        let existing = self.tabs.as_ref().and_then(|tabs| tabs.iter().position(Tab::is_settings));
+        if let Some(index) = existing {
+            self.with_tabs(|tabs| tabs.select(index));
+        } else {
+            let tab = Tab::Settings(Settings::new(self.fonts.clone()));
+            match &mut self.tabs {
+                Some(tabs) => tabs.push(tab),
+                None => self.tabs = Some(Tabs::new(tab)),
+            }
+        }
+        self.settings_error = None;
+        self.redraw();
+    }
+
+    fn settings_command(&mut self, command: Command, event_loop: Option<&ActiveEventLoop>) {
+        let visible_rows = self
+            .layout()
+            .map(|l| SettingsView::new(l.width, l.height, l.strip(), l.scale, l.cell.height).visible_rows)
+            .unwrap_or(15);
+        let config_snapshot = self.config.clone();
+        let outcome = {
+            let Some(settings) = self.active_settings_mut() else {
+                return;
+            };
+            let outcome = settings.handle(command, &config_snapshot);
+            settings.keep_selected_visible(visible_rows);
+            outcome
         };
         self.settings_error = None;
-        match settings.handle(command, &self.config) {
+        match outcome {
             Outcome::Nothing => {}
-            Outcome::Close => self.settings = None,
+            Outcome::Close => {
+                if let (Some(idx), Some(el)) = (self.tabs.as_ref().map(Tabs::active_index), event_loop)
+                    && self.tabs.as_ref().is_some_and(|t| t.len() > 1)
+                {
+                    self.close_tab(idx, el);
+                }
+            }
             Outcome::Change(key, value) => self.change_setting(key, &value),
         }
         self.redraw();
     }
 
-    /// Live first, then saved: the file stays the source of truth for the next start.
-    fn change_setting(&mut self, key: &str, value: &str) {
-        if key == "matugen" && value == "on" && let Err(message) = matugen::install() {
-            self.settings_error = Some(message);
-            return;
+    fn apply_setting_update(&mut self, key: &str, value: &str) -> Result<(), String> {
+        if key == "matugen" && value == "on" {
+            matugen::install()?;
         }
         // An editor may have touched the file while koral runs: start from what is on disk now.
-        let current = config::path()
+        let mut current = config::path()
             .and_then(|path| std::fs::read_to_string(path).ok())
             .unwrap_or_else(|| self.source.clone());
-        let (source, config) = match config::update(&current, key, value) {
-            Ok(updated) => updated,
-            Err(message) => {
-                self.settings_error = Some(message);
-                return;
+        if key == "theme" && self.config.matugen {
+            if let Ok((updated, _)) = config::update(&current, "matugen", "off") {
+                current = updated;
             }
-        };
+        }
+        let (source, config) = config::update(&current, key, value)?;
         let font_changed = config.face() != self.config.face() || config.font_size != self.config.font_size;
         self.source = source;
         self.config = config;
-        self.theme = matugen::theme(self.config.matugen);
+        self.theme = matugen::resolve_theme(self.config.matugen, self.config.theme.as_deref());
 
         if font_changed && let Some(renderer) = &mut self.renderer {
             renderer.set_font(&self.config.face(), input::zoomed(self.config.font_size, self.zoom));
@@ -432,9 +678,16 @@ impl App {
         self.resize_all();
 
         match config::path().map(|path| config::save(&path, &self.source)) {
-            Some(Ok(())) => {}
-            Some(Err(error)) => self.settings_error = Some(format!("Not saved: {error}")),
-            None => self.settings_error = Some("Not saved: no config folder".to_string()),
+            Some(Ok(())) => Ok(()),
+            Some(Err(error)) => Err(format!("Not saved: {error}")),
+            None => Err("Not saved: no config folder".to_string()),
+        }
+    }
+
+    /// Live first, then saved: the file stays the source of truth for the next start.
+    fn change_setting(&mut self, key: &str, value: &str) {
+        if let Err(message) = self.apply_setting_update(key, value) {
+            self.settings_error = Some(message);
         }
     }
 
@@ -452,7 +705,7 @@ impl App {
         let font_changed = config.face() != self.config.face() || config.font_size != self.config.font_size;
         self.source = source;
         self.config = config;
-        self.theme = matugen::theme(self.config.matugen);
+        self.theme = matugen::resolve_theme(self.config.matugen, self.config.theme.as_deref());
         if font_changed && let Some(renderer) = &mut self.renderer {
             renderer.set_font(&self.config.face(), input::zoomed(self.config.font_size, self.zoom));
         }
@@ -494,9 +747,10 @@ impl App {
     }
 
     fn search_step(&mut self, direction: Direction) {
-        let Some(lines) = self.layout().map(|layout| layout.lines()) else {
+        let Some((_, _, pane)) = self.active_pane() else {
             return;
         };
+        let lines = pane.lines();
         let Some(mut search) = self.search.take() else {
             return;
         };
@@ -518,7 +772,7 @@ impl App {
         self.redraw();
     }
 
-    fn settings_key(&mut self, key: &Key, text: Option<&str>) {
+    fn settings_key(&mut self, key: &Key, text: Option<&str>, event_loop: &ActiveEventLoop) {
         let command = match key {
             Key::Named(NamedKey::ArrowUp) => Some(Command::Up),
             Key::Named(NamedKey::ArrowDown) => Some(Command::Down),
@@ -530,69 +784,79 @@ impl App {
             _ => None,
         };
         if let Some(command) = command {
-            self.settings_command(command);
+            self.settings_command(command, Some(event_loop));
         } else if let Some(text) = text {
             for ch in text.chars().filter(|ch| !ch.is_control()) {
-                self.settings_command(Command::Type(ch));
+                self.settings_command(Command::Type(ch), Some(event_loop));
             }
         }
     }
 
-    /// True when the click belonged to the open panel.
-    fn press_settings(&mut self) -> bool {
+    /// True when the active tab is Settings and consumed the click.
+    fn press_settings(&mut self, event_loop: &ActiveEventLoop) -> bool {
         let Some(layout) = self.layout() else {
             return false;
         };
-        let Some(open) = &mut self.settings else {
-            return false;
-        };
+        let view = SettingsView::new(layout.width, layout.height, layout.strip(), layout.scale, layout.cell.height);
         let (x, y) = self.cursor;
-        let zone = settings::zone(frame::panel(layout), x, y);
-        if open.picker.is_some() {
-            if let Zone::Row(row) | Zone::Less(row) | Zone::More(row) = zone
-                && open.pick(row)
+        let zone = {
+            let Some(Tab::Settings(open)) = self.tabs.as_ref().and_then(Tabs::active) else {
+                return false;
+            };
+            settings::tab_zone(view, x, y, open)
+        };
+        let picking = self.active_settings_mut().is_some_and(|open| open.picker.is_some());
+        if picking {
+            if let Zone::Row(row) = zone
+                && let Some(open) = self.active_settings_mut()
+                && open.pick(row, view.picker_rows())
             {
-                self.settings_command(Command::Confirm);
+                self.settings_command(Command::Confirm, Some(event_loop));
             }
             self.redraw();
-            return zone != Zone::Outside;
+            return true;
         }
         match zone {
-            Zone::Outside => return false,
-            Zone::Inside => {}
+            Zone::Outside | Zone::Inside => {}
             Zone::Row(row) => {
-                let chosen = open.selected == row;
-                if !chosen {
-                    open.editing = None;
-                    open.selected = row;
-                }
-                if chosen || FIELDS[row].kind == Kind::Toggle {
-                    self.settings_command(Command::Confirm);
+                let confirm = {
+                    let Some(open) = self.active_settings_mut() else {
+                        return true;
+                    };
+                    let chosen = open.selected == row;
+                    if !chosen {
+                        open.editing = None;
+                        open.selected = row;
+                    }
+                    chosen || FIELDS[row].kind == Kind::Toggle || matches!(FIELDS[row].kind, Kind::Choice(_))
+                };
+                if confirm {
+                    self.settings_command(Command::Confirm, Some(event_loop));
                 }
             }
             Zone::Less(row) => {
-                open.editing = None;
-                open.selected = row;
-                self.settings_command(Command::Less);
+                if let Some(open) = self.active_settings_mut() {
+                    open.editing = None;
+                    open.selected = row;
+                }
+                self.settings_command(Command::Less, Some(event_loop));
             }
             Zone::More(row) => {
-                open.editing = None;
-                open.selected = row;
-                self.settings_command(Command::More);
+                if let Some(open) = self.active_settings_mut() {
+                    open.editing = None;
+                    open.selected = row;
+                }
+                self.settings_command(Command::More, Some(event_loop));
             }
         }
         self.redraw();
         true
     }
 
-    fn tab_mut(&mut self, id: u64) -> Option<&mut Terminal> {
-        self.tabs.as_mut().and_then(|tabs| tabs.iter_mut().find(|tab| tab.id == id))
-    }
-
     fn bell(&mut self, id: u64) {
         let active = self.active().is_some_and(|tab| tab.id == id);
         let Ring { mark, urgent } = tabs::ring(active, self.focused);
-        if let Some(tab) = self.tab_mut(id) {
+        if let Some(tab) = self.terminal_mut(id) {
             tab.rang |= mark;
         }
         if let (true, Some(window)) = (urgent, &self.window) {
@@ -601,21 +865,24 @@ impl App {
         self.redraw();
     }
 
-    fn with_tabs(&mut self, change: impl FnOnce(&mut Tabs<Terminal>)) {
+    fn with_tabs(&mut self, change: impl FnOnce(&mut Tabs<Tab>)) {
         self.search = None;
+        self.link = None;
         if let Some(tabs) = &mut self.tabs {
             change(tabs);
         }
+        self.resize_all();
     }
 
     fn page(&self) -> i64 {
-        self.layout().map_or(1, |layout| layout.lines() as i64 - 1)
+        self.active_pane().map_or(1, |(_, _, pane)| pane.lines() as i64 - 1)
     }
 
     fn jump(&mut self, target: fn(&[view::Row], usize) -> Option<usize>) {
-        let Some(lines) = self.layout().map(|layout| layout.lines()) else {
+        let Some((_, _, pane)) = self.active_pane() else {
             return;
         };
+        let lines = pane.lines();
         let Some(tab) = self.active_mut() else {
             return;
         };
@@ -645,9 +912,10 @@ impl App {
     }
 
     fn toggle_fold(&mut self) {
-        let Some(lines) = self.layout().map(|layout| layout.lines()) else {
+        let Some((_, _, pane)) = self.active_pane() else {
             return;
         };
+        let lines = pane.lines();
         let Some(tab) = self.active() else {
             return;
         };
@@ -687,10 +955,14 @@ impl App {
     }
 
     fn scroll_lines(&mut self, delta: i64) {
-        let Some(lines) = self.layout().map(|layout| layout.lines()) else {
+        let Some((id, _, pane)) = self.active_pane() else {
             return;
         };
-        let Some(tab) = self.active_mut() else {
+        self.scroll_pane(id, pane.lines(), delta);
+    }
+
+    fn scroll_pane(&mut self, pane_id: u64, lines: usize, delta: i64) {
+        let Some(tab) = self.terminal_mut(pane_id) else {
             return;
         };
         let total = {
@@ -701,16 +973,30 @@ impl App {
         tab.scroll = (tab.scroll as i64 + delta).clamp(0, most) as usize;
     }
 
-    fn wheel(&mut self, lines: i64) {
-        if self.settings.as_ref().is_some_and(|settings| settings.picker.is_some()) {
-            let step = if lines > 0 { Command::Up } else { Command::Down };
-            (0..lines.abs()).for_each(|_| self.settings_command(step));
-            return;
-        }
-        let mode = self.mode();
+    fn wheel(&mut self, lines: i64, event_loop: &ActiveEventLoop) {
         if lines == 0 {
             return;
         }
+        if self.active_is_settings() {
+            let layout = self.layout();
+            let picking = self.active_settings_mut().is_some_and(|s| s.picker.is_some());
+            if picking {
+                let step = if lines > 0 { Command::Up } else { Command::Down };
+                (0..lines.abs()).for_each(|_| self.settings_command(step, Some(event_loop)));
+            } else if let Some(l) = layout {
+                let cap = SettingsView::new(l.width, l.height, l.strip(), l.scale, l.cell.height).visible_rows;
+                if let Some(s) = self.active_settings_mut() {
+                    s.scroll_by(lines, cap);
+                }
+                self.redraw();
+            }
+            return;
+        }
+        let target_pane = self.pane_under_cursor();
+        let mode = target_pane
+            .as_ref()
+            .and_then(|(id, _, _)| self.terminal(*id))
+            .map_or_else(|| self.mode(), |t| *t.session.lock().term.mode());
         if mode.intersects(TermMode::MOUSE_MODE) && !self.mods.shift_key() {
             let button = if lines > 0 { 64 } else { 65 };
             for _ in 0..lines.abs() {
@@ -724,8 +1010,17 @@ impl App {
                     (false, true) => "\x1bOB",
                     (false, false) => "\x1b[B",
                 };
-                self.write_active(key.repeat(lines.unsigned_abs() as usize).into_bytes());
+                if let Some((id, _, _)) = target_pane
+                    && let Some(term) = self.terminal_mut(id)
+                {
+                    term.scroll = 0;
+                    term.write(key.repeat(lines.unsigned_abs() as usize).into_bytes());
+                } else {
+                    self.write_active(key.repeat(lines.unsigned_abs() as usize).into_bytes());
+                }
             }
+        } else if let Some((id, _, pane)) = target_pane {
+            self.scroll_pane(id, pane.lines(), lines);
         } else {
             self.scroll_lines(lines);
         }
@@ -739,7 +1034,7 @@ impl App {
     /// A grabbed program that never sees motion cannot run its own selection, so a
     /// drag follows the pointer unless koral is the one selecting.
     fn report_motion(&mut self) {
-        if self.drag == Drag::Selecting {
+        if self.drag == Drag::Selecting || matches!(self.drag, Drag::Divider(..)) {
             return;
         }
         let mode = self.mode();
@@ -749,31 +1044,40 @@ impl App {
     }
 
     fn send_mouse(&mut self, button: u8, pressed: bool, motion: bool) -> bool {
-        let Some(layout) = self.layout() else {
+        let Some((id, _, pane)) = self.pane_under_cursor().or_else(|| self.active_pane()) else {
             return false;
         };
-        let (line, column) = layout.cell_at(self.cursor.0, self.cursor.1);
+        let (line, column) = pane.cell_at(self.cursor.0, self.cursor.1);
         let mouse = Mouse { button, column, line, pressed, mods: self.mods, motion };
-        match input::mouse_report(mouse, self.mode()) {
+        let Some(term) = self.terminal(id) else {
+            return false;
+        };
+        let mode = *term.session.lock().term.mode();
+        match input::mouse_report(mouse, mode) {
             Some(bytes) => {
-                if let Some(tab) = self.active() {
-                    tab.write(bytes);
-                }
+                term.write(bytes);
                 true
             }
             None => false,
         }
     }
 
-    fn point_under_cursor(&self) -> Option<(Point, Option<u32>)> {
+    fn pane_under_cursor(&self) -> Option<(u64, Rect, PaneLayout)> {
         let layout = self.layout()?;
-        let (row, column) = layout.cell_at(self.cursor.0, self.cursor.1);
-        let tab = self.active()?;
+        let tree = self.tabs.as_ref()?.active()?.as_tree()?;
+        let (id, rect) = tree.pane_at(layout.content_rect(), Self::divider_px(layout), self.cursor.0, self.cursor.1)?;
+        Some((id, rect, PaneLayout::from_rect(rect, layout)))
+    }
+
+    fn point_under_cursor(&self) -> Option<(u64, Point, Option<u32>, PaneLayout)> {
+        let (id, _, pane) = self.pane_under_cursor().or_else(|| self.active_pane())?;
+        let (row, column) = pane.cell_at(self.cursor.0, self.cursor.1);
+        let tab = self.terminal(id)?;
         let session = tab.session.lock();
         let rows = view::rows(&session.term, &session.blocks);
-        let top = frame::visible_top(&rows, layout.lines(), tab.scroll);
+        let top = frame::visible_top(&rows, pane.lines(), tab.scroll);
         let target = rows.get(top + row)?;
-        Some((Point::new(target.line, Column(column)), target.block))
+        Some((id, Point::new(target.line, Column(column)), target.block, pane))
     }
 
     fn press_strip(&mut self, button: MouseButton, event_loop: &ActiveEventLoop) {
@@ -782,7 +1086,7 @@ impl App {
         };
         match (hit_at(&bar, self.cursor), button) {
             (Hit::New, MouseButton::Left) => self.open_tab(),
-            (Hit::Settings, MouseButton::Left) => self.toggle_settings(),
+            (Hit::Settings, MouseButton::Left) => self.toggle_settings(event_loop),
             (Hit::Close(index), MouseButton::Left) => self.request_close(index, event_loop),
             (Hit::Tab(index) | Hit::Close(index), MouseButton::Middle) => self.request_close(index, event_loop),
             (Hit::Tab(index), MouseButton::Left) => {
@@ -800,6 +1104,27 @@ impl App {
     }
 
     fn press_terminal(&mut self, button: MouseButton) {
+        if let Some(layout) = self.layout()
+            && button == MouseButton::Left
+            && let Some(tree) = self.tabs.as_ref().and_then(Tabs::active).and_then(Tab::as_tree)
+            && let Some(div) = tree.divider_at(
+                layout.content_rect(),
+                Self::divider_px(layout),
+                4.0 * layout.scale,
+                self.cursor.0,
+                self.cursor.1,
+            )
+        {
+            self.drag = Drag::Divider(div.path, div.axis, div.parent);
+            return;
+        }
+        if let Some((clicked_id, _, _)) = self.pane_under_cursor()
+            && let Some(tree) = self.tabs.as_mut().and_then(Tabs::active_mut).and_then(Tab::as_tree_mut)
+            && tree.active_id() != clicked_id
+        {
+            tree.focus(clicked_id);
+        }
+
         let code = match button {
             MouseButton::Left => 0,
             MouseButton::Middle => 1,
@@ -810,7 +1135,7 @@ impl App {
         let app_mouse = mode.intersects(TermMode::MOUSE_MODE) && !self.mods.shift_key();
         if button == MouseButton::Left && !app_mouse {
             self.update_link();
-            if let Some(link) = &self.link {
+            if let Some((_, link)) = &self.link {
                 links::open(&link.uri);
                 return;
             }
@@ -828,22 +1153,19 @@ impl App {
             return;
         }
 
-        let Some(layout) = self.layout() else {
+        let Some((id, point, block, pane)) = self.point_under_cursor() else {
             return;
         };
-        let Some((point, block)) = self.point_under_cursor() else {
-            return;
-        };
-        if layout.in_gutter(self.cursor.0) {
-            if let (Some(id), Some(tab)) = (block, self.active()) {
-                tab.session.lock().blocks.toggle_fold(id);
+        if pane.in_gutter(self.cursor.0) {
+            if let (Some(block_id), Some(tab)) = (block, self.terminal(id)) {
+                tab.session.lock().blocks.toggle_fold(block_id);
             }
             self.redraw();
             return;
         }
         let clicks = self.clicks.press((point.line.0, point.column.0), Instant::now());
         let kind = input::selection_kind(clicks, self.mods);
-        if let Some(tab) = self.active() {
+        if let Some(tab) = self.terminal(id) {
             tab.session.lock().term.selection = Some(Selection::new(kind, point, Side::Left));
         }
         self.drag = Drag::Selecting;
@@ -863,15 +1185,16 @@ impl App {
     fn update_link(&mut self) {
         let held = self.mods.control_key()
             && self.drag == Drag::None
-            && self.layout().is_some_and(|layout| self.cursor.1 >= layout.strip() && !layout.in_gutter(self.cursor.0));
+            && !self.active_is_settings()
+            && self.pane_under_cursor().is_some_and(|(_, _, pane)| !pane.in_gutter(self.cursor.0));
         let point = if held { self.point_under_cursor() } else { None };
-        let link = point.and_then(|(point, block)| {
-            let session = self.active()?.session.lock();
+        let link = point.and_then(|(id, point, block, _)| {
+            let session = self.terminal(id)?.session.lock();
             let cwd = block
                 .and_then(|id| session.blocks.get(id))
                 .and_then(|block| block.cwd.as_deref())
                 .or_else(|| session.blocks.latest().and_then(|block| block.cwd.as_deref()));
-            links::at_in(&session.term, point, cwd, self.home.as_deref())
+            links::at_in(&session.term, point, cwd, self.home.as_deref()).map(|l| (id, l))
         });
         if link != self.link {
             if let Some(window) = &self.window {
@@ -885,10 +1208,10 @@ impl App {
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.cursor = (position.x as f32, position.y as f32);
         self.report_motion();
-        match self.drag {
+        match self.drag.clone() {
             Drag::Selecting => {
-                if let Some((point, _)) = self.point_under_cursor()
-                    && let Some(tab) = self.active()
+                if let Some((id, point, _, _)) = self.point_under_cursor()
+                    && let Some(tab) = self.terminal(id)
                     && let Some(selection) = &mut tab.session.lock().term.selection
                 {
                     selection.update(point, Side::Right);
@@ -903,7 +1226,40 @@ impl App {
                     self.drag = Drag::Tab(to);
                 }
             }
-            Drag::None => {}
+            Drag::Divider(path, axis, parent) => {
+                let ratio = match axis {
+                    Axis::Horizontal => (self.cursor.0 - parent.x) / parent.width.max(1.0),
+                    Axis::Vertical => (self.cursor.1 - parent.y) / parent.height.max(1.0),
+                };
+                if let Some(tree) = self.tabs.as_mut().and_then(Tabs::active_mut).and_then(Tab::as_tree_mut)
+                    && tree.set_ratio(&path, ratio)
+                {
+                    self.resize_all();
+                    self.redraw();
+                }
+            }
+            Drag::None => {
+                if self.link.is_none()
+                    && let Some(layout) = self.layout()
+                    && let Some(tree) = self.tabs.as_ref().and_then(Tabs::active).and_then(Tab::as_tree)
+                {
+                    let div = tree.divider_at(
+                        layout.content_rect(),
+                        Self::divider_px(layout),
+                        4.0 * layout.scale,
+                        self.cursor.0,
+                        self.cursor.1,
+                    );
+                    if let Some(window) = &self.window {
+                        let icon = match div.map(|d| d.axis) {
+                            Some(Axis::Horizontal) => CursorIcon::EwResize,
+                            Some(Axis::Vertical) => CursorIcon::NsResize,
+                            None => CursorIcon::Default,
+                        };
+                        window.set_cursor(icon);
+                    }
+                }
+            }
         }
         if self.layout().is_some_and(|layout| self.cursor.1 < layout.strip()) || self.drag != Drag::None {
             self.redraw();
@@ -912,12 +1268,21 @@ impl App {
     }
 
     fn resize_all(&mut self) {
-        let Some(geometry) = self.geometry() else {
+        let Some(layout) = self.layout() else {
             return;
         };
+        let area = layout.content_rect();
+        let div = Self::divider_px(layout);
         if let Some(tabs) = &mut self.tabs {
             for tab in tabs.iter_mut() {
-                tab.resize(geometry);
+                if let Some(tree) = tab.as_tree_mut() {
+                    let (panes, _) = tree.layout(area, div);
+                    for (id, rect) in panes {
+                        if let Some(term) = tree.get_mut(id) {
+                            term.resize(Self::geometry_for(rect, layout));
+                        }
+                    }
+                }
             }
         }
     }
@@ -943,50 +1308,115 @@ impl App {
         let confirming = self.confirming.filter(|(_, at)| at.elapsed() < CONFIRM_WINDOW).map(|(id, _)| id);
         let views: Vec<TabView> = tabs
             .iter()
-            .map(|tab| {
-                let wait_from = Instant::now();
-                let session = tab.session.lock();
-                cost.wait += lag::millis(wait_from);
-                TabView {
-                    title: tabs::title(&session.blocks, tab.title.as_deref(), self.home.as_deref()),
-                    activity: session.blocks.activity(),
-                    confirming: confirming == Some(tab.id),
-                    rang: tab.rang,
+            .map(|tab| match tab {
+                Tab::Settings(_) => TabView {
+                    title: "Settings".to_string(),
+                    activity: Activity::Idle,
+                    confirming: false,
+                    rang: false,
+                },
+                Tab::Terminal(tree) => {
+                    let active_id = tree.active_id();
+                    let active_term = tree.active();
+                    let wait_from = Instant::now();
+                    let session = active_term.session.lock();
+                    cost.wait += lag::millis(wait_from);
+                    let panes = tree.len();
+                    let mut title = tabs::title(&session.blocks, active_term.title.as_deref(), self.home.as_deref());
+                    if panes > 1 {
+                        title = format!("{title} [{panes}]");
+                    }
+                    let (mut activity, mut rang) = (session.blocks.activity(), active_term.rang);
+                    drop(session);
+                    for (id, term) in tree.iter() {
+                        if id == active_id {
+                            continue;
+                        }
+                        rang |= term.rang;
+                        let other = term.session.lock().blocks.activity();
+                        if activity == Activity::Idle {
+                            activity = other;
+                        }
+                    }
+                    TabView {
+                        title,
+                        activity,
+                        confirming: confirming == Some(active_id),
+                        rang,
+                    }
                 }
             })
             .collect();
 
+        let preview_id = tabs.active().and_then(|tab| match tab {
+            Tab::Settings(s) => s.preview_theme(),
+            Tab::Terminal(_) => None,
+        });
+        let display_theme = preview_id.and_then(Theme::builtin).unwrap_or_else(|| self.theme.clone());
+
         let mut frame = Frame::default();
         let mut cursor = None;
-        if let Some(tab) = tabs.active() {
-            let wait_from = Instant::now();
-            let session = tab.session.lock();
-            cost.wait += lag::millis(wait_from);
-            let rows = view::rows(&session.term, &session.blocks);
-            frame::draw_terminal(
-                &mut frame,
-                &session.term,
-                &session.blocks,
-                &rows,
-                tab.scroll,
-                CursorView { focused: self.focused, visible: self.blink_shown },
-                layout,
-                &self.theme,
-            );
-            frame::draw_pictures(&mut frame, &session.term, &session.graphics, &rows, tab.scroll, layout);
-            cursor = frame::cursor_position(&session.term, &rows, tab.scroll, layout);
-            let top = frame::visible_top(&rows, layout.lines(), tab.scroll);
-            let shown = &rows[top..rows.len().min(top + layout.lines())];
-            if let (Some(search), Some(first), Some(last)) = (&mut self.search, shown.first(), shown.last()) {
-                let matches = search.visible(&session.term, first.line, last.line);
-                frame::draw_search(&mut frame, &rows, top, &matches, search.current.as_ref(), layout, &self.theme);
+        let settings_open = tabs.active().is_some_and(Tab::is_settings);
+        let coverage = self.renderer.as_ref().map_or_else(fonts::Coverage::default, Renderer::coverage);
+
+        match tabs.active() {
+            Some(Tab::Terminal(tree)) => {
+                let area = layout.content_rect();
+                let div = Self::divider_px(layout);
+                let (pane_rects, dividers) = tree.layout(area, div);
+                let active_id = tree.active_id();
+                let active_rect = pane_rects.iter().find(|(id, _)| *id == active_id).map(|(_, r)| *r);
+                let mut per_pane = Vec::with_capacity(pane_rects.len());
+
+                for (id, rect) in &pane_rects {
+                    let Some(term) = tree.get(*id) else {
+                        continue;
+                    };
+                    let pane = PaneLayout::from_rect(*rect, layout);
+                    let is_active = *id == active_id;
+                    let wait_from = Instant::now();
+                    let session = term.session.lock();
+                    cost.wait += lag::millis(wait_from);
+                    let rows = view::rows(&session.term, &session.blocks);
+                    let pane_cursor = CursorView {
+                        focused: self.focused && is_active,
+                        visible: !is_active || self.blink_shown,
+                    };
+                    frame::draw_pane_base(&mut frame, &session.term, &session.blocks, &rows, term.scroll, pane_cursor, pane, coverage, &display_theme);
+                    frame::draw_pictures_in(&mut frame, &session.term, &session.graphics, &rows, term.scroll, pane);
+                    if is_active {
+                        cursor = frame::cursor_position_in(&session.term, &rows, term.scroll, pane);
+                    }
+                    per_pane.push((*id, pane, rows, pane_cursor, term.scroll));
+                }
+                frame.pictures.over = frame.quads.len();
+                for (id, pane, rows, pane_cursor, scroll) in &per_pane {
+                    let Some(term) = tree.get(*id) else {
+                        continue;
+                    };
+                    let session = term.session.lock();
+                    frame::draw_pane_overlays(&mut frame, &session.term, &session.blocks, rows, *scroll, *pane_cursor, *pane, &display_theme);
+                    let top = frame::visible_top(rows, pane.lines(), *scroll);
+                    let shown = &rows[top..rows.len().min(top + pane.lines())];
+                    if *id == active_id
+                        && let (Some(search), Some(first), Some(last)) = (&mut self.search, shown.first(), shown.last())
+                    {
+                        let matches = search.visible(&session.term, first.line, last.line);
+                        frame::draw_search_in(&mut frame, rows, top, &matches, search.current.as_ref(), *pane, &display_theme);
+                    }
+                    if let Some((link_pane, link)) = &self.link
+                        && link_pane == id
+                    {
+                        frame::draw_link_in(&mut frame, rows, top, link, *pane, &display_theme);
+                    }
+                }
+                frame::draw_pane_dividers(&mut frame, &dividers, active_rect, layout.scale, &display_theme);
             }
-            if let Some(link) = &self.link {
-                frame::draw_link(&mut frame, &rows, top, link, layout, &self.theme);
-            }
+            Some(Tab::Settings(_)) | None => {}
         }
+
         if let (Some(text), Some((x, y))) = (&self.preedit, cursor) {
-            frame::draw_preedit(&mut frame, text, x, y, layout, &self.theme);
+            frame::draw_preedit(&mut frame, text, x, y, layout, &display_theme);
         }
 
         let hit = hit_at(&bar, self.cursor);
@@ -1000,23 +1430,11 @@ impl App {
             hovered_close: matches!(hit, Hit::Close(_)),
             hovered_new: hit == Hit::New,
             hovered_settings: hit == Hit::Settings,
-            settings_open: self.settings.is_some(),
+            settings_open,
             bar: &bar,
         };
-        frame::draw_chrome(&mut frame, &chrome, layout, &self.theme);
-        if let Some(search) = &self.search {
-            frame::draw_search_bar_status(
-                &mut frame,
-                &search.query,
-                search.current.is_some(),
-                search.position,
-                layout,
-                &self.theme,
-            );
-        } else if let Some(link) = &self.link {
-            frame::draw_link_bar(&mut frame, &link.uri, layout, &self.theme);
-        }
-        if let Some(settings) = &self.settings {
+        frame::draw_chrome(&mut frame, &chrome, layout, &display_theme);
+        if let Some(Tab::Settings(settings)) = tabs.active() {
             let substitute = self.renderer.as_ref().and_then(|renderer| renderer.substitute());
             let notice = substitute.map(|used| format!("Can't use {}. Showing {used}.", self.config.font));
             frame::draw_settings(
@@ -1025,8 +1443,19 @@ impl App {
                 &self.config,
                 self.settings_error.as_deref().or(notice.as_deref()),
                 layout,
-                &self.theme,
+                &display_theme,
             );
+        } else if let Some(search) = &self.search {
+            frame::draw_search_bar_status(
+                &mut frame,
+                &search.query,
+                search.current.is_some(),
+                search.position,
+                layout,
+                &display_theme,
+            );
+        } else if let Some((_, link)) = &self.link {
+            frame::draw_link_bar(&mut frame, &link.uri, layout, &display_theme);
         }
 
         if let (Some(window), Some(view)) = (&self.window, views.get(tabs.active_index()))
@@ -1042,10 +1471,129 @@ impl App {
         }
         cost.grid = lag::millis(started);
         if let Some(renderer) = &mut self.renderer {
-            renderer.draw(&frame.quads, &frame.pictures, &frame.lines, frame.clip, rgba(self.theme.background, self.config.opacity), &mut cost);
+            renderer.draw(&frame.quads, &frame.pictures, &frame.lines, frame.clip, rgba(display_theme.background, self.config.opacity), &mut cost);
         }
         cost.total = lag::millis(started);
         lag::note(&cost);
+    }
+
+    fn handle_ipc(&mut self, request: Request, event_loop: &ActiveEventLoop) -> String {
+        match request {
+            Request::NewTab { cwd, title, command } => {
+                self.open_tab_with(cwd, title, command);
+                "OK\n".to_string()
+            }
+            Request::Split { axis, cwd } => {
+                if self.split_active(axis, cwd) {
+                    "OK\n".to_string()
+                } else {
+                    "ERR active tab is not a terminal\n".to_string()
+                }
+            }
+            Request::ClosePane => {
+                let Some(idx) = self.tabs.as_ref().map(Tabs::active_index) else {
+                    return "ERR no active tab\n".to_string();
+                };
+                let res = self.tabs.as_mut().and_then(Tabs::active_mut).and_then(Tab::as_tree_mut).map(|tree| {
+                    let id = tree.active_id();
+                    tree.close(id)
+                });
+                match res {
+                    None | Some(CloseResult::LastPane) => self.close_tab(idx, event_loop),
+                    Some(CloseResult::Closed) => {
+                        self.search = None;
+                        self.link = None;
+                        self.resize_all();
+                        self.redraw();
+                    }
+                    Some(CloseResult::NotFound) => return "ERR pane not found\n".to_string(),
+                }
+                "OK\n".to_string()
+            }
+            Request::CloseTab => {
+                let Some(idx) = self.tabs.as_ref().map(Tabs::active_index) else {
+                    return "ERR no active tab\n".to_string();
+                };
+                self.close_tab(idx, event_loop);
+                "OK\n".to_string()
+            }
+            Request::Focus(dir) => {
+                self.focus_dir(dir);
+                "OK\n".to_string()
+            }
+            Request::Resize(dir) => {
+                self.resize_dir(dir);
+                "OK\n".to_string()
+            }
+            Request::SetTitle(title) => {
+                let Some(term) = self.active_mut() else {
+                    return "ERR active tab is not a terminal\n".to_string();
+                };
+                term.title = tabs::clean_title(&title);
+                self.redraw();
+                "OK\n".to_string()
+            }
+            Request::SetTheme(id) => match self.apply_setting_update("theme", &id) {
+                Ok(()) => {
+                    self.redraw();
+                    "OK\n".to_string()
+                }
+                Err(message) => format!("ERR {message}\n"),
+            },
+            Request::OpenSettings => {
+                self.open_or_focus_settings();
+                "OK\n".to_string()
+            }
+            Request::Reload => {
+                self.reload_config();
+                "OK\n".to_string()
+            }
+            Request::SendText(text) => {
+                if self.active().is_none() {
+                    return "ERR active tab is not a terminal\n".to_string();
+                }
+                self.write_active(text.into_bytes());
+                self.redraw();
+                "OK\n".to_string()
+            }
+            Request::List => {
+                let Some(tabs) = &self.tabs else {
+                    return "OK\n".to_string();
+                };
+                let mut out = String::from("OK\n");
+                let active_tab = tabs.active_index();
+                for (index, tab) in tabs.iter().enumerate() {
+                    let tab_mark = if index == active_tab { "*" } else { " " };
+                    match tab {
+                        Tab::Settings(_) => {
+                            out.push_str(&format!("tab {index}{tab_mark} settings\n"));
+                        }
+                        Tab::Terminal(tree) => {
+                            let active_pane = tree.active_id();
+                            let active_term = tree.active();
+                            let tab_title = {
+                                let session = active_term.session.lock();
+                                tabs::title(&session.blocks, active_term.title.as_deref(), self.home.as_deref())
+                            };
+                            out.push_str(&format!(
+                                "tab {index}{tab_mark} panes={} active_pane={} title={tab_title}\n",
+                                tree.len(),
+                                active_pane
+                            ));
+                            for (pane_id, term) in tree.iter() {
+                                let pane_mark = if pane_id == active_pane { "*" } else { " " };
+                                let title = {
+                                    let session = term.session.lock();
+                                    tabs::title(&session.blocks, term.title.as_deref(), self.home.as_deref())
+                                };
+                                out.push_str(&format!("  pane {pane_id}{pane_mark} title={title}\n"));
+                            }
+                        }
+                    }
+                }
+                out
+            }
+        }
     }
 }
 
@@ -1103,6 +1651,12 @@ impl ApplicationHandler<UserEvent> for App {
         self.renderer = Some(pollster::block_on(Renderer::new(window.clone(), instance, &face, points, fonts)));
         window.set_ime_allowed(true);
         self.window = Some(window);
+        if self.ipc.is_none() {
+            match ipc::Server::start(self.proxy.clone()) {
+                Ok(server) => self.ipc = Some(server),
+                Err(error) => report(&format!("cannot listen on ipc socket: {error}")),
+            }
+        }
         self.open_tab();
     }
 
@@ -1110,19 +1664,57 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             UserEvent::Redraw => self.redraw(),
             UserEvent::Exited(id) => {
-                let index = self.tabs.as_ref().and_then(|tabs| tabs.iter().position(|tab| tab.id == id));
-                if let Some(index) = index {
-                    self.close_tab(index, event_loop);
+                let target = self.tabs.as_ref().and_then(|tabs| {
+                    tabs.iter().enumerate().find_map(|(index, tab)| {
+                        tab.as_tree().is_some_and(|tree| tree.contains(id)).then_some(index)
+                    })
+                });
+                if let Some(index) = target {
+                    let result = self
+                        .tabs
+                        .as_mut()
+                        .and_then(|tabs| tabs.iter_mut().nth(index))
+                        .and_then(Tab::as_tree_mut)
+                        .map_or(CloseResult::NotFound, |tree| tree.close(id));
+                    match result {
+                        CloseResult::LastPane => self.close_tab(index, event_loop),
+                        CloseResult::Closed => {
+                            if self.confirming.is_some_and(|(cid, _)| cid == id) {
+                                self.confirming = None;
+                            }
+                            if self.link.as_ref().is_some_and(|(lid, _)| *lid == id) {
+                                self.link = None;
+                            }
+                            self.resize_all();
+                            self.redraw();
+                        }
+                        CloseResult::NotFound => {}
+                    }
                 }
             }
             UserEvent::Reply(id, text) => {
-                if let Some(tab) = self.tabs.as_ref().and_then(|tabs| tabs.iter().find(|tab| tab.id == id)) {
+                if let Some(tab) = self.terminal(id) {
                     tab.write(text.into_bytes());
                 }
             }
             UserEvent::Copy(text) => self.store(text, LinuxClipboardKind::Clipboard),
+            UserEvent::PasteRequest(id, kind, reply) => {
+                if !self.config.clipboard_read {
+                    return;
+                }
+                let kind = match kind {
+                    ClipboardType::Selection => LinuxClipboardKind::Primary,
+                    ClipboardType::Clipboard => LinuxClipboardKind::Clipboard,
+                };
+                if let (Some(text), Some(tab)) = (
+                    self.clipboard.as_mut().and_then(|c| c.get().clipboard(kind).text().ok()),
+                    self.terminal(id),
+                ) {
+                    tab.write(reply(&text).into_bytes());
+                }
+            }
             UserEvent::Title(id, title) => {
-                if let Some(tab) = self.tab_mut(id) {
+                if let Some(tab) = self.terminal_mut(id) {
                     tab.title = title;
                 }
                 self.redraw();
@@ -1144,7 +1736,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.redraw();
             }
             UserEvent::Colors => {
-                self.theme = matugen::theme(self.config.matugen);
+                self.theme = matugen::resolve_theme(self.config.matugen, self.config.theme.as_deref());
                 self.redraw();
             }
             UserEvent::Config => self.reload_config(),
@@ -1152,23 +1744,43 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.set_fonts(*fonts);
                 }
-                if let Some(settings) = &mut self.settings {
-                    settings.fonts = list.clone();
+                if let Some(tabs) = &mut self.tabs {
+                    for tab in tabs.iter_mut() {
+                        if let Tab::Settings(settings) = tab {
+                            settings.fonts = list.clone();
+                        }
+                    }
                 }
                 self.fonts = list;
                 self.resize_all();
                 self.redraw();
             }
             UserEvent::Size(id, reply) => {
-                if let (Some(geometry), Some(tab)) = (self.geometry(), self.tab_mut(id)) {
+                let rect = self.layout().and_then(|layout| {
+                    let area = layout.content_rect();
+                    let div = Self::divider_px(layout);
+                    self.tabs.as_ref()?.iter().find_map(|tab| {
+                        let tree = tab.as_tree()?;
+                        if !tree.contains(id) {
+                            return None;
+                        }
+                        tree.layout(area, div).0.into_iter().find(|(pid, _)| *pid == id).map(|(_, r)| (r, layout))
+                    })
+                });
+                if let (Some((rect, layout)), Some(tab)) = (rect, self.terminal(id)) {
+                    let geometry = Self::geometry_for(rect, layout);
                     tab.write(reply(geometry.window_size()).into_bytes());
                 }
             }
             UserEvent::Color(id, index, reply) => {
                 let color = self.theme.palette(index);
-                if let Some(tab) = self.tabs.as_ref().and_then(|tabs| tabs.iter().find(|tab| tab.id == id)) {
+                if let Some(tab) = self.terminal(id) {
                     tab.write(reply(color).into_bytes());
                 }
+            }
+            UserEvent::Ipc(request, reply) => {
+                let response = self.handle_ipc(request, event_loop);
+                let _ = reply.send(response);
             }
         }
     }
@@ -1207,9 +1819,28 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 self.blink.reset(Instant::now());
-                let action = binding(&event.logical_key, self.mods);
-                if self.settings.is_some() && action != Some(Action::OpenSettings) {
-                    self.settings_key(&event.logical_key, event.text.as_deref());
+                let action = resolve_binding(&event.logical_key, self.mods, &self.config.bindings);
+                let in_settings = self.active_is_settings();
+                if in_settings {
+                    let tab_nav = matches!(
+                        action,
+                        Some(
+                            Action::OpenSettings
+                                | Action::NewTab
+                                | Action::CloseTab
+                                | Action::NextTab
+                                | Action::PreviousTab
+                                | Action::SelectTab(_)
+                                | Action::ZoomIn
+                                | Action::ZoomOut
+                                | Action::ZoomReset
+                        )
+                    );
+                    if tab_nav && let Some(action) = action {
+                        self.run(action, event_loop);
+                    } else {
+                        self.settings_key(&event.logical_key, event.text.as_deref(), event_loop);
+                    }
                     return;
                 }
                 if let Some(action) = action {
@@ -1231,7 +1862,7 @@ impl ApplicationHandler<UserEvent> for App {
                     self.redraw();
                 }
             }
-            WindowEvent::KeyboardInput { event, .. } if self.settings.is_none() && self.search.is_none() => {
+            WindowEvent::KeyboardInput { event, .. } if !self.active_is_settings() && self.search.is_none() => {
                 if let (Some(bytes), Some(tab)) = (self.kitty_key(&event, Stage::Release), self.active()) {
                     tab.write(bytes);
                 }
@@ -1239,16 +1870,13 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::Ime(ime) => self.ime(ime),
             WindowEvent::CursorMoved { position, .. } => self.cursor_moved(position),
             WindowEvent::MouseInput { state: ElementState::Pressed, button, .. } => {
-                if button == MouseButton::Left && self.press_settings() {
-                    return;
-                }
                 if self.layout().is_some_and(|layout| self.cursor.1 < layout.strip()) {
                     self.press_strip(button, event_loop);
-                } else {
-                    if self.settings.take().is_some() {
-                        self.redraw();
-                        return;
+                } else if self.active_is_settings() {
+                    if button == MouseButton::Left {
+                        self.press_settings(event_loop);
                     }
+                } else {
                     self.press_terminal(button);
                 }
             }
@@ -1261,7 +1889,7 @@ impl ApplicationHandler<UserEvent> for App {
                         (position.y as f32 / height) as i64
                     }
                 };
-                self.wheel(lines);
+                self.wheel(lines, event_loop);
             }
             _ => {}
         }

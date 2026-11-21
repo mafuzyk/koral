@@ -258,3 +258,21 @@ fn warming_leaves_the_sample_shapeable_again() {
     let glyphs: usize = buffer.layout_runs().map(|run| run.glyphs.len()).sum();
     assert_eq!(glyphs, WARM_SAMPLE.chars().count(), "every character of the sample keeps a glyph");
 }
+
+#[test]
+fn coverage_checks_primary_face_glyphs_and_advance_width() {
+    use koral::fonts::Coverage;
+
+    let mut db = Database::new();
+    db.load_font_data(font("Alpha Term", 500, 500));
+    let cov = Coverage::from_face(&db, &asking_for("Alpha Term"));
+    assert!(cov.matches(' '));
+    assert!(cov.matches('i'));
+    assert!(cov.matches('M'));
+    assert!(!cov.matches('ç'));
+    assert!(!cov.matches('😀'));
+
+    let missing_default = Coverage::from_face(&db, &asking_for("NoSuchFont"));
+    assert!(missing_default.matches('ç'));
+    assert!(!missing_default.without('ç').matches('ç'));
+}

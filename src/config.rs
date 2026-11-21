@@ -3,12 +3,16 @@ use std::path::PathBuf;
 
 use sharky_config::tokenize;
 
+use crate::input::{self, Keybind};
 use crate::render::Face;
+use crate::theme;
 
 const INSTRUCTION: &str = "polyp";
+const BIND_INSTRUCTION: &str = "bind";
 
 pub const USAGE: &str = "\
 Usage: koral [OPTIONS] [-e COMMAND [ARGS...]]
+       koral ctl [--socket PATH] COMMAND [ARGS...]
 
   -h, --help                   print this help
   --version                    print the version
@@ -16,6 +20,7 @@ Usage: koral [OPTIONS] [-e COMMAND [ARGS...]]
   --title                      initial window and tab title
   --class, --app-id            window class / Wayland app-id
   -e, --command                run COMMAND with ARGS in the initial tab
+  ctl                          send a command to a running koral window
 ";
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -31,6 +36,7 @@ pub enum Launch {
     Help,
     Version,
     Run(Args),
+    Control(Vec<String>),
 }
 
 pub fn parse_args<I, S>(args: I) -> Result<Launch, String>
@@ -38,7 +44,11 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
-    let mut iter = args.into_iter().map(Into::into);
+    let mut iter = args.into_iter().map(Into::into).peekable();
+    if iter.peek().is_some_and(|first| first == "ctl") {
+        iter.next();
+        return Ok(Launch::Control(iter.collect()));
+    }
     let mut parsed = Args::default();
     while let Some(arg) = iter.next() {
         let mut take_value = |flag: &str| iter.next().ok_or_else(|| format!("missing value for '{flag}'"));
@@ -75,6 +85,10 @@ pub struct Config {
     pub padding: f32,
     pub shell: Option<String>,
     pub matugen: bool,
+    pub theme: Option<String>,
+    pub scrollback: usize,
+    pub clipboard_read: bool,
+    pub bindings: Vec<Keybind>,
     pub font_weight: u16,
     pub bold_weight: u16,
     pub bold_italic_weight: u16,
@@ -90,6 +104,10 @@ impl Default for Config {
             padding: 8.0,
             shell: None,
             matugen: false,
+            theme: None,
+            scrollback: 10_000,
+            clipboard_read: false,
+            bindings: Vec::new(),
             font_weight: 500,
             bold_weight: 800,
             bold_italic_weight: 900,
@@ -179,6 +197,15 @@ fn apply(config: &mut Config, line: &str) -> Result<(), String> {
     let Some((instruction, rest)) = tokens.split_first() else {
         return Ok(());
     };
+    if instruction == BIND_INSTRUCTION {
+        let [shortcut, action] = rest else {
+            return Err(format!("{BIND_INSTRUCTION} takes a shortcut and an action"));
+        };
+        let (mods, key) = input::parse_shortcut(shortcut)?;
+        let action = input::parse_action(action)?;
+        config.bindings.push(Keybind { mods, key, action });
+        return Ok(());
+    }
     if instruction != INSTRUCTION {
         return Err(format!("unknown instruction '{instruction}', expected {INSTRUCTION}"));
     }
@@ -209,14 +236,35 @@ fn apply(config: &mut Config, line: &str) -> Result<(), String> {
             config.shell = Some(value.clone()).filter(|shell| !shell.is_empty());
             Ok(())
         }
-        "matugen" => match value.as_str() {
-            "on" | "off" => {
-                config.matugen = value == "on";
+        "theme" => {
+            if value.is_empty() {
+                config.theme = None;
+                Ok(())
+            } else if theme::is_builtin(value) {
+                config.theme = Some(value.clone());
+                Ok(())
+            } else {
+                Err(format!("unknown theme '{value}'"))
+            }
+        }
+        "scrollback" => match value.parse::<usize>() {
+            Ok(lines) if lines <= 1_000_000 => {
+                config.scrollback = lines;
                 Ok(())
             }
-            _ => Err(format!("'{value}' is not on or off")),
+            _ => Err(format!("'{value}' is not an integer from 0 to 1000000")),
         },
+        "clipboard_read" => toggle(value).map(|on| config.clipboard_read = on),
+        "matugen" => toggle(value).map(|on| config.matugen = on),
         other => Err(format!("unknown setting '{other}'")),
+    }
+}
+
+fn toggle(value: &str) -> Result<bool, String> {
+    match value {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        _ => Err(format!("'{value}' is not on or off")),
     }
 }
 

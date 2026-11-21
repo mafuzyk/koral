@@ -9,6 +9,66 @@ const LOCALE: &str = "en-US";
 /// The line height the renderer draws with, as a multiple of the font size in pixels.
 const LINE_HEIGHT: f32 = 1.2;
 
+/// Fast bitmask tracking codepoints `0..1024` that the primary face renders at exact cell width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Coverage {
+    bits: [u64; 16],
+}
+
+impl Default for Coverage {
+    fn default() -> Self {
+        let mut bits = [0u64; 16];
+        for word in &mut bits[..12] {
+            *word = u64::MAX;
+        }
+        Self { bits }
+    }
+}
+
+impl Coverage {
+    pub fn matches(&self, ch: char) -> bool {
+        let cp = ch as u32;
+        cp < 1024 && ((self.bits[(cp >> 6) as usize] >> (cp & 63)) & 1) != 0
+    }
+
+    pub fn without(mut self, ch: char) -> Self {
+        let cp = ch as u32;
+        if cp < 1024 {
+            self.bits[(cp >> 6) as usize] &= !(1u64 << (cp & 63));
+        }
+        self
+    }
+
+    pub fn from_face(db: &fontdb::Database, face: &Face) -> Self {
+        let primary = db
+            .faces()
+            .filter(|info| named(info, &face.family) && info.style == fontdb::Style::Normal)
+            .min_by_key(|info| info.weight.0.abs_diff(face.weight));
+        let Some(info) = primary else {
+            return Self::default();
+        };
+        let covered = db.with_face_data(info.id, |data, index| {
+            let font = ttf_parser::Face::parse(data, index).ok()?;
+            let m_advance = font.glyph_hor_advance(font.glyph_index('M')?)?;
+            let mut bits = [0u64; 16];
+            for cp in 0u32..1024 {
+                let ok = if cp <= 32 {
+                    true
+                } else if let Some(ch) = char::from_u32(cp) {
+                    font.glyph_index(ch).and_then(|id| font.glyph_hor_advance(id)) == Some(m_advance)
+                } else {
+                    false
+                };
+                if ok {
+                    bits[(cp >> 6) as usize] |= 1u64 << (cp & 63);
+                }
+            }
+            Some(Self { bits })
+        });
+        covered.flatten().unwrap_or_default()
+    }
+}
+
 pub fn cache_path() -> Option<PathBuf> {
     let cache = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from);
     Some(cache.or_else(|| Some(crate::config::home()?.join(".cache")))?.join("koral/fonts"))

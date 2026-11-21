@@ -275,6 +275,7 @@ pub struct TextLine {
     pub y: f32,
     pub small: bool,
     pub spans: Vec<Span>,
+    pub clip: Option<[f32; 4]>,
 }
 
 /// Terminal text under an open panel: the first `count` lines stop at `x` inside the band.
@@ -298,6 +299,7 @@ pub struct Picture {
     pub width: f32,
     pub height: f32,
     pub crop: [f32; 4],
+    pub clip: Option<[f32; 4]>,
 }
 
 /// Below this a picture goes under cells with a background colour, not just under the text.
@@ -358,6 +360,7 @@ pub struct Renderer {
     lines: LineCache<Buffer>,
     wanted: Face,
     face: Face,
+    coverage: fonts::Coverage,
     points: f32,
     scale: f32,
     cell: Cell,
@@ -467,6 +470,7 @@ impl Renderer {
         let text = TextRenderer::new(&mut atlas, &device, wgpu::MultisampleState::default(), None);
         let wanted = face.clone();
         let face = fonts::usable(face, font_system.db());
+        let coverage = fonts::Coverage::from_face(font_system.db(), &face);
         let cell = measure(&mut font_system, &face, points, scale);
 
         Self {
@@ -488,6 +492,7 @@ impl Renderer {
             lines: LineCache::default(),
             wanted,
             face,
+            coverage,
             points,
             scale,
             cell,
@@ -501,6 +506,10 @@ impl Renderer {
 
     pub fn cell(&self) -> Cell {
         self.cell
+    }
+
+    pub fn coverage(&self) -> fonts::Coverage {
+        self.coverage
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -539,6 +548,7 @@ impl Renderer {
     }
 
     fn remeasure(&mut self) {
+        self.coverage = fonts::Coverage::from_face(self.font_system.db(), &self.face);
         self.cell = measure(&mut self.font_system, &self.face, self.points, self.scale);
         self.lines = LineCache::default();
     }
@@ -624,13 +634,22 @@ impl Renderer {
         let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
         let cached = &self.lines;
         let areas = keys.iter().zip(lines).enumerate().map(|(index, (key, line))| {
-            let clipped = index < clip.count && (clip.top..clip.bottom).contains(&line.y);
+            let mut rect_bounds = bounds;
+            if let Some([cx, cy, cw, ch]) = line.clip {
+                rect_bounds.left = rect_bounds.left.max(cx.floor() as i32);
+                rect_bounds.top = rect_bounds.top.max(cy.floor() as i32);
+                rect_bounds.right = rect_bounds.right.min((cx + cw).ceil() as i32).max(rect_bounds.left);
+                rect_bounds.bottom = rect_bounds.bottom.min((cy + ch).ceil() as i32).max(rect_bounds.top);
+            }
+            if index < clip.count && (clip.top..clip.bottom).contains(&line.y) {
+                rect_bounds.right = rect_bounds.right.min(clip.x as i32).max(rect_bounds.left);
+            }
             TextArea {
                 buffer: cached.get(key).expect("prepare holds every line of the frame"),
                 left: line.x,
                 top: line.y,
                 scale: 1.0,
-                bounds: if clipped { TextBounds { right: clip.x as i32, ..bounds } } else { bounds },
+                bounds: rect_bounds,
                 default_color: Color::rgb(255, 255, 255),
                 custom_glyphs: &[],
             }
@@ -755,11 +774,6 @@ impl Renderer {
                 if order.is_empty() {
                     return;
                 }
-                let [x, y, area_width, area_height] = pictures.area;
-                let (left, top) = ((x as u32).min(width), (y as u32).min(height));
-                let right = ((x + area_width) as u32).min(width);
-                let bottom = ((y + area_height) as u32).min(height);
-                target.set_scissor_rect(left, top, right.saturating_sub(left), bottom.saturating_sub(top));
                 target.set_pipeline(&self.picture_pipeline);
                 // The band after the text inherits glyphon's bind group 0 and vertex buffer unless
                 // each band binds its own: the atlas layout and stride are not ours.
@@ -767,6 +781,17 @@ impl Renderer {
                 target.set_vertex_buffer(0, self.quads.slice(..));
                 for index in order {
                     let picture = &drawn[*index];
+                    let [x, y, area_width, area_height] = picture.clip.unwrap_or(pictures.area);
+                    let left = (x.max(0.0) as u32).min(width);
+                    let top = (y.max(0.0) as u32).min(height);
+                    let right = ((x + area_width).max(0.0) as u32).min(width);
+                    let bottom = ((y + area_height).max(0.0) as u32).min(height);
+                    let sw = right.saturating_sub(left);
+                    let sh = bottom.saturating_sub(top);
+                    if sw == 0 || sh == 0 {
+                        continue;
+                    }
+                    target.set_scissor_rect(left, top, sw, sh);
                     target.set_bind_group(1, &self.textures[&picture.image.generation].1, &[]);
                     let at = count + *index as u32;
                     target.draw(0..4, at..at + 1);

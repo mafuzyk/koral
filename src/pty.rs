@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{Config, Term};
+use alacritty_terminal::term::{ClipboardType, Config, Term};
 use alacritty_terminal::tty::{self, ChildEvent, EventedPty, EventedReadWrite, Options, Pty, Shell};
 use alacritty_terminal::vte::ansi::Rgb;
 use polling::{Event as PollEvent, Events, PollMode, Poller};
@@ -28,9 +28,14 @@ const FRAME: Duration = Duration::from_millis(16);
 const WRITE_WAIT: Duration = Duration::from_millis(100);
 
 type ColorReply = Arc<dyn Fn(Rgb) -> String + Send + Sync>;
+pub type PasteReply = Arc<dyn Fn(&str) -> String + Send + Sync>;
 
 pub fn term_config() -> Config {
-    Config { scrolling_history: SCROLLBACK, kitty_keyboard: true, ..Config::default() }
+    term_config_with(SCROLLBACK)
+}
+
+pub fn term_config_with(scrollback: usize) -> Config {
+    Config { scrolling_history: scrollback, kitty_keyboard: true, ..Config::default() }
 }
 
 pub enum UserEvent {
@@ -38,6 +43,7 @@ pub enum UserEvent {
     Exited(u64),
     Reply(u64, String),
     Copy(String),
+    PasteRequest(u64, ClipboardType, PasteReply),
     Color(u64, usize, ColorReply),
     Colors,
     Config,
@@ -47,6 +53,7 @@ pub enum UserEvent {
     Notify(u64, Notice),
     Size(u64, SizeReply),
     Fonts(Box<FontSystem>, Vec<String>),
+    Ipc(crate::ipc::Request, Sender<String>),
 }
 
 pub type SizeReply = Arc<dyn Fn(WindowSize) -> String + Sync + Send>;
@@ -91,6 +98,7 @@ impl EventListener for Listener {
             Event::PtyWrite(text) => UserEvent::Reply(self.tab, device_reply(text)),
             Event::TextAreaSizeRequest(reply) => UserEvent::Size(self.tab, reply),
             Event::ClipboardStore(_, text) => UserEvent::Copy(text),
+            Event::ClipboardLoad(kind, reply) => UserEvent::PasteRequest(self.tab, kind, reply),
             Event::ColorRequest(index, reply) => UserEvent::Color(self.tab, index, reply),
             Event::CursorBlinkingChange => UserEvent::Blink,
             Event::Title(text) => UserEvent::Title(self.tab, clean_title(&text)),
@@ -133,18 +141,35 @@ impl Terminal {
         geometry: Geometry,
         cwd: Option<PathBuf>,
     ) -> std::io::Result<Self> {
+        Self::spawn_configured(id, proxy, shell, args, geometry, cwd, SCROLLBACK, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_configured(
+        id: u64,
+        proxy: EventLoopProxy<UserEvent>,
+        shell: &str,
+        args: &[String],
+        geometry: Geometry,
+        cwd: Option<PathBuf>,
+        scrollback: usize,
+        socket_path: Option<&Path>,
+    ) -> std::io::Result<Self> {
         let listener = Listener { tab: id, proxy: proxy.clone() };
-        let term = Term::new(term_config(), &geometry.term_size(), listener);
+        let term = Term::new(term_config_with(scrollback), &geometry.term_size(), listener);
         let mut session = Session::new(term);
         session.graphics.set_cell(geometry.cell_width.into(), geometry.cell_height.into());
         let session = Arc::new(FairMutex::new(session));
 
         // shortcut: no koral terminfo entry, add one if an app needs it.
-        let env = HashMap::from([
+        let mut env = HashMap::from([
             ("TERM".to_string(), "xterm-256color".to_string()),
             ("COLORTERM".to_string(), "truecolor".to_string()),
             ("TERM_PROGRAM".to_string(), "koral".to_string()),
         ]);
+        if let Some(socket) = socket_path {
+            env.insert("KORAL_SOCKET".to_string(), socket.to_string_lossy().into_owned());
+        }
         let options = Options {
             shell: Some(Shell::new(shell.to_string(), args.to_vec())),
             working_directory: cwd,

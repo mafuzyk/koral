@@ -201,6 +201,146 @@ pub enum Action {
     ZoomIn,
     ZoomOut,
     ZoomReset,
+    SplitRight,
+    SplitDown,
+    ClosePane,
+    FocusLeft,
+    FocusRight,
+    FocusUp,
+    FocusDown,
+    ResizeLeft,
+    ResizeRight,
+    ResizeUp,
+    ResizeDown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindKey {
+    Char(char),
+    Named(NamedKey),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Keybind {
+    pub mods: ModifiersState,
+    pub key: BindKey,
+    pub action: Option<Action>,
+}
+
+pub fn parse_shortcut(spec: &str) -> Result<(ModifiersState, BindKey), String> {
+    let trimmed = spec.trim();
+    if trimmed.is_empty() {
+        return Err("empty keybinding".to_string());
+    }
+    let (mod_part, key_part) = if trimmed == "+" {
+        ("", "+")
+    } else if let Some(prefix) = trimmed.strip_suffix("++") {
+        (prefix, "+")
+    } else if let Some((left, right)) = trimmed.rsplit_once('+') {
+        (left, right)
+    } else {
+        ("", trimmed)
+    };
+    if key_part.is_empty() {
+        return Err(format!("missing key in '{spec}'"));
+    }
+    let mut mods = ModifiersState::empty();
+    if !mod_part.is_empty() {
+        for part in mod_part.split('+') {
+            match part.to_ascii_lowercase().as_str() {
+                "ctrl" | "control" => mods |= ModifiersState::CONTROL,
+                "shift" => mods |= ModifiersState::SHIFT,
+                "alt" | "meta" => mods |= ModifiersState::ALT,
+                "super" | "logo" | "win" => mods |= ModifiersState::SUPER,
+                other => return Err(format!("unknown modifier '{other}' in '{spec}'")),
+            }
+        }
+    }
+    let key = parse_bind_key(key_part).ok_or_else(|| format!("unknown key '{key_part}' in '{spec}'"))?;
+    Ok((mods, key))
+}
+
+fn parse_bind_key(part: &str) -> Option<BindKey> {
+    let lower = part.to_ascii_lowercase();
+    let named = match lower.as_str() {
+        "tab" => Some(NamedKey::Tab),
+        "enter" | "return" => Some(NamedKey::Enter),
+        "esc" | "escape" => Some(NamedKey::Escape),
+        "backspace" => Some(NamedKey::Backspace),
+        "space" => Some(NamedKey::Space),
+        "pageup" | "page_up" => Some(NamedKey::PageUp),
+        "pagedown" | "page_down" => Some(NamedKey::PageDown),
+        "home" => Some(NamedKey::Home),
+        "end" => Some(NamedKey::End),
+        "insert" => Some(NamedKey::Insert),
+        "delete" => Some(NamedKey::Delete),
+        "left" | "arrowleft" => Some(NamedKey::ArrowLeft),
+        "right" | "arrowright" => Some(NamedKey::ArrowRight),
+        "up" | "arrowup" => Some(NamedKey::ArrowUp),
+        "down" | "arrowdown" => Some(NamedKey::ArrowDown),
+        "f1" => Some(NamedKey::F1),
+        "f2" => Some(NamedKey::F2),
+        "f3" => Some(NamedKey::F3),
+        "f4" => Some(NamedKey::F4),
+        "f5" => Some(NamedKey::F5),
+        "f6" => Some(NamedKey::F6),
+        "f7" => Some(NamedKey::F7),
+        "f8" => Some(NamedKey::F8),
+        "f9" => Some(NamedKey::F9),
+        "f10" => Some(NamedKey::F10),
+        "f11" => Some(NamedKey::F11),
+        "f12" => Some(NamedKey::F12),
+        _ => None,
+    };
+    if let Some(named) = named {
+        return Some(BindKey::Named(named));
+    }
+    let mut chars = part.chars();
+    let ch = chars.next()?;
+    chars.next().is_none().then(|| BindKey::Char(ch.to_ascii_lowercase()))
+}
+
+pub fn parse_action(name: &str) -> Result<Option<Action>, String> {
+    let action = match name.to_ascii_lowercase().as_str() {
+        "none" | "unbind" => return Ok(None),
+        "new_tab" => Action::NewTab,
+        "close_tab" => Action::CloseTab,
+        "next_tab" => Action::NextTab,
+        "prev_tab" | "previous_tab" => Action::PreviousTab,
+        "copy" => Action::Copy,
+        "paste" => Action::Paste,
+        "prev_prompt" | "previous_prompt" => Action::PreviousPrompt,
+        "next_prompt" => Action::NextPrompt,
+        "copy_output" => Action::CopyOutput,
+        "toggle_fold" => Action::ToggleFold,
+        "search" => Action::Search,
+        "page_up" => Action::PageUp,
+        "page_down" => Action::PageDown,
+        "settings" | "open_settings" => Action::OpenSettings,
+        "zoom_in" => Action::ZoomIn,
+        "zoom_out" => Action::ZoomOut,
+        "zoom_reset" => Action::ZoomReset,
+        "split_right" => Action::SplitRight,
+        "split_down" => Action::SplitDown,
+        "close_pane" => Action::ClosePane,
+        "focus_left" => Action::FocusLeft,
+        "focus_right" => Action::FocusRight,
+        "focus_up" => Action::FocusUp,
+        "focus_down" => Action::FocusDown,
+        "resize_left" => Action::ResizeLeft,
+        "resize_right" => Action::ResizeRight,
+        "resize_up" => Action::ResizeUp,
+        "resize_down" => Action::ResizeDown,
+        other => {
+            if let Some(digit) = other.strip_prefix("tab_").and_then(|d| d.parse::<usize>().ok())
+                && (1..=9).contains(&digit)
+            {
+                return Ok(Some(Action::SelectTab(digit - 1)));
+            }
+            return Err(format!("unknown action '{name}'"));
+        }
+    };
+    Ok(Some(action))
 }
 
 const CLICK_WINDOW: Duration = Duration::from_millis(400);
@@ -237,14 +377,72 @@ pub fn zoomed(size: f32, delta: f32) -> f32 {
     (size + delta).clamp(6.0, 72.0)
 }
 
+pub fn resolve_binding(key: &Key, mods: ModifiersState, custom: &[Keybind]) -> Option<Action> {
+    let active_mods = mods & (ModifiersState::CONTROL | ModifiersState::SHIFT | ModifiersState::ALT | ModifiersState::SUPER);
+    for rule in custom.iter().rev() {
+        if rule.mods == active_mods && key_matches(&rule.key, key, active_mods.shift_key()) {
+            return rule.action;
+        }
+    }
+    binding(key, mods)
+}
+
+fn unshifted_symbol(ch: char) -> Option<char> {
+    match ch {
+        '<' => Some(','),
+        '>' => Some('.'),
+        '+' => Some('='),
+        '_' => Some('-'),
+        ')' => Some('0'),
+        '!' => Some('1'),
+        '@' => Some('2'),
+        '#' => Some('3'),
+        '$' => Some('4'),
+        '%' => Some('5'),
+        '^' => Some('6'),
+        '&' => Some('7'),
+        '*' => Some('8'),
+        '(' => Some('9'),
+        '?' => Some('/'),
+        _ => None,
+    }
+}
+
+fn key_matches(target: &BindKey, key: &Key, shift: bool) -> bool {
+    match (target, key) {
+        (BindKey::Named(a), Key::Named(b)) => a == b,
+        (BindKey::Char(a), Key::Character(text)) => {
+            let mut chars = text.chars();
+            let Some(ch) = chars.next() else {
+                return false;
+            };
+            if chars.next().is_some() {
+                return false;
+            }
+            ch.to_ascii_lowercase() == *a || (shift && unshifted_symbol(ch) == Some(*a))
+        }
+        _ => false,
+    }
+}
+
 pub fn binding(key: &Key, mods: ModifiersState) -> Option<Action> {
     let shift = mods.shift_key();
+    let ctrl_alt_shift = ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SHIFT;
+    let ctrl_shift = ModifiersState::CONTROL | ModifiersState::SHIFT;
     match key {
         Key::Named(NamedKey::Tab) if mods.control_key() => {
             Some(if shift { Action::PreviousTab } else { Action::NextTab })
         }
         Key::Named(NamedKey::PageUp) if shift => Some(Action::PageUp),
         Key::Named(NamedKey::PageDown) if shift => Some(Action::PageDown),
+        Key::Named(NamedKey::ArrowLeft) if mods == ctrl_alt_shift => Some(Action::ResizeLeft),
+        Key::Named(NamedKey::ArrowRight) if mods == ctrl_alt_shift => Some(Action::ResizeRight),
+        Key::Named(NamedKey::ArrowUp) if mods == ctrl_alt_shift => Some(Action::ResizeUp),
+        Key::Named(NamedKey::ArrowDown) if mods == ctrl_alt_shift => Some(Action::ResizeDown),
+        Key::Named(NamedKey::ArrowLeft) if mods == ctrl_shift => Some(Action::FocusLeft),
+        Key::Named(NamedKey::ArrowRight) if mods == ctrl_shift => Some(Action::FocusRight),
+        Key::Named(NamedKey::ArrowUp) if mods == ctrl_shift => Some(Action::FocusUp),
+        Key::Named(NamedKey::ArrowDown) if mods == ctrl_shift => Some(Action::FocusDown),
         Key::Character(text) if mods == ModifiersState::ALT => match text.parse::<usize>() {
             Ok(digit @ 1..=9) => Some(Action::SelectTab(digit - 1)),
             _ => None,
@@ -258,6 +456,9 @@ pub fn binding(key: &Key, mods: ModifiersState) -> Option<Action> {
             match text.to_ascii_lowercase().as_str() {
                 "t" => Some(Action::NewTab),
                 "w" => Some(Action::CloseTab),
+                "d" => Some(Action::SplitRight),
+                "e" => Some(Action::SplitDown),
+                "q" => Some(Action::ClosePane),
                 "c" => Some(Action::Copy),
                 "v" => Some(Action::Paste),
                 "z" => Some(Action::PreviousPrompt),

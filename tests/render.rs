@@ -6,7 +6,8 @@ use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::Rgb;
 use koral::blocks::Activity;
-use koral::frame::{Chrome, CursorView, Frame, TabView, Underline, draw_chrome, draw_terminal, underline};
+use koral::fonts::Coverage;
+use koral::frame::{Chrome, CursorView, Frame, TabView, Underline, draw_chrome, draw_terminal, draw_terminal_in, underline};
 use glyphon::{Style, Weight};
 use koral::render::{Face, LineCache, MAX_CACHED_LINES, Quad, attrs, rgba, surface_format};
 use koral::session::Session;
@@ -123,6 +124,7 @@ fn picture(id: u32, number: u32, z: i32) -> koral::render::Picture {
         width: 1.0,
         height: 1.0,
         crop: [0.0, 0.0, 1.0, 1.0],
+        clip: None,
     }
 }
 
@@ -496,4 +498,37 @@ fn scrollback_shows_thumb_and_failed_block_ticks() {
     draw_terminal(&mut scrolled, &session.term, &session.blocks, &rows, 3, cursor, view, &theme);
     assert!(scrolled.quads.iter().any(|q| q.color == rgba(theme.muted, 0.45)), "expected scroll thumb");
     assert!(scrolled.quads.iter().any(|q| q.color == rgba(theme.failure, 0.85)), "expected failure tick");
+}
+
+#[test]
+fn a_glyph_missing_from_the_primary_face_splits_so_following_text_stays_aligned() {
+    let term = Term::new(Config::default(), &TermSize::new(20, 5), VoidListener);
+    let mut session = Session::new(term);
+    session.feed("ação ok".as_bytes(), Instant::now());
+    let rows = rows(&session.term, &session.blocks);
+    let mut frame = Frame::default();
+    let cursor = CursorView { focused: true, visible: true };
+    let pane = layout().pane();
+    draw_terminal_in(
+        &mut frame,
+        &session.term,
+        &session.blocks,
+        &rows,
+        0,
+        cursor,
+        pane,
+        Coverage::default().without('ç'),
+        &Theme::default(),
+    );
+    let x0 = pane.grid_x();
+    let cell_w = pane.cell.width;
+    let parts: Vec<(usize, String)> = frame
+        .lines
+        .iter()
+        .map(|line| {
+            let text: String = line.spans.iter().map(|s| s.text.as_str()).collect();
+            (((line.x - x0) / cell_w).round() as usize, text)
+        })
+        .collect();
+    assert_eq!(parts, [(0, "a".to_string()), (1, "ç".to_string()), (2, "ão ok".to_string())]);
 }

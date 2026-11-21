@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
 use koral::config::{Config, append, log_path, migrate, parse, path, set};
+use koral::input::{Action, BindKey, Keybind};
+use winit::keyboard::ModifiersState;
 
 fn config(source: &str) -> Config {
     parse(source).0
@@ -204,4 +206,48 @@ fn italic_style_is_oblique_or_italic() {
     assert_eq!(errors("polyp italic_style slanted\n").len(), 1);
     assert!(!config("polyp italic_style italic\n").face().oblique);
     assert!(config("").face().oblique);
+}
+
+#[test]
+fn theme_scrollback_clipboard_and_binds_parse_and_validate() {
+    let source = "\
+polyp theme dracula
+polyp scrollback 50000
+polyp clipboard_read on
+bind ctrl+shift+n new_tab
+bind ctrl++ zoom_in
+bind ctrl+shift+, settings
+";
+    let (parsed, errs) = parse(source);
+    assert!(errs.is_empty(), "{errs:?}");
+    assert_eq!(parsed.theme.as_deref(), Some("dracula"));
+    assert_eq!(parsed.scrollback, 50_000);
+    assert!(parsed.clipboard_read);
+    assert_eq!(
+        parsed.bindings,
+        vec![
+            Keybind {
+                mods: ModifiersState::CONTROL | ModifiersState::SHIFT,
+                key: BindKey::Char('n'),
+                action: Some(Action::NewTab),
+            },
+            Keybind {
+                mods: ModifiersState::CONTROL,
+                key: BindKey::Char('+'),
+                action: Some(Action::ZoomIn),
+            },
+            Keybind {
+                mods: ModifiersState::CONTROL | ModifiersState::SHIFT,
+                key: BindKey::Char(','),
+                action: Some(Action::OpenSettings),
+            },
+        ]
+    );
+
+    assert_eq!(errors("polyp theme nonexistent\n").len(), 1);
+    assert_eq!(errors("polyp scrollback -5\n").len(), 1);
+    assert_eq!(errors("polyp scrollback 99999999\n").len(), 1);
+    assert_eq!(errors("polyp clipboard_read maybe\n").len(), 1);
+    assert_eq!(errors("bind ctrl+shift+x nope\n").len(), 1);
+    assert!(set(source, "opacity", "0.75").contains("bind ctrl+shift+n new_tab"));
 }

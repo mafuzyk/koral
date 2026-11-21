@@ -63,4 +63,8 @@ fn parses_launch_options_and_command() {
     for bad in [vec!["--cwd"], vec!["--title"], vec!["--class"], vec!["-e"], vec!["--command"], vec!["--"], vec!["--unknown"]] {
         assert!(parse_args(bad).is_err());
     }
+    assert_eq!(
+        parse_args(["ctl", "--socket", "/tmp/k.sock", "list"]),
+        Ok(Launch::Control(vec!["--socket".into(), "/tmp/k.sock".into(), "list".into()]))
+    );
 }

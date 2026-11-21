@@ -10,14 +10,18 @@ use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 
 use crate::boxes;
 use crate::blocks::{Activity, Block, BlockStore};
-use crate::format;
 use crate::config::Config;
+use crate::fonts::Coverage;
+use crate::format;
 use crate::graphics::Graphics;
 use crate::links::Link;
 use crate::render::{Cell, Clip, Picture, Pictures, Quad, Shape, Span, TextLine, rgba};
-use crate::settings::{FIELDS, Kind, Panel, Picker, Settings, value, visible};
+use crate::settings::{
+    FIELDS, FormRow, Kind, Picker, PickerKind, Settings, SettingsView, display_value, form_rows, visible,
+};
+use crate::splits::Divider;
 use crate::tabs::{Bar, CLOSE_ZONE, Rect};
-use crate::theme::Theme;
+use crate::theme::{Theme, mix, theme_name};
 use crate::view::{Row, pinned, placed, without_anchors};
 
 const STRIP_HEIGHT: f32 = 38.0;
@@ -58,15 +62,80 @@ impl Layout {
         self.strip() + self.padding * self.scale / 2.0
     }
 
+    pub fn content_rect(&self) -> Rect {
+        Rect { x: 0.0, y: self.strip(), width: self.width, height: (self.height - self.strip()).max(1.0) }
+    }
+
+    pub fn pane(&self) -> PaneLayout {
+        PaneLayout::from_rect(self.content_rect(), *self)
+    }
+
     pub fn columns(&self) -> usize {
-        (((self.width - self.grid_x() - self.left()) / self.cell.width) as usize).max(2)
+        self.pane().columns()
     }
 
     pub fn lines(&self) -> usize {
-        (((self.height - self.grid_y() - self.left()) / self.cell.height) as usize).max(1)
+        self.pane().lines()
     }
 
     /// The visible (row, column) under a window position.
+    pub fn cell_at(&self, x: f32, y: f32) -> (usize, usize) {
+        self.pane().cell_at(x, y)
+    }
+
+    pub fn in_gutter(&self, x: f32) -> bool {
+        self.pane().in_gutter(x)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PaneLayout {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub scale: f32,
+    pub padding: f32,
+    pub cell: Cell,
+}
+
+impl PaneLayout {
+    pub fn from_rect(rect: Rect, layout: Layout) -> Self {
+        Self {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            scale: layout.scale,
+            padding: layout.padding,
+            cell: layout.cell,
+        }
+    }
+
+    pub fn left(&self) -> f32 {
+        self.x + self.padding * self.scale
+    }
+
+    pub fn gutter(&self) -> f32 {
+        GUTTER_CELLS * self.cell.width
+    }
+
+    pub fn grid_x(&self) -> f32 {
+        self.left() + self.gutter()
+    }
+
+    pub fn grid_y(&self) -> f32 {
+        self.y + self.padding * self.scale / 2.0
+    }
+
+    pub fn columns(&self) -> usize {
+        (((self.width - self.padding * self.scale * 2.0 - self.gutter()) / self.cell.width) as usize).max(2)
+    }
+
+    pub fn lines(&self) -> usize {
+        (((self.height - self.padding * self.scale * 1.5) / self.cell.height) as usize).max(1)
+    }
+
     pub fn cell_at(&self, x: f32, y: f32) -> (usize, usize) {
         let row = ((y - self.grid_y()).max(0.0) / self.cell.height) as usize;
         let column = ((x - self.grid_x()).max(0.0) / self.cell.width) as usize;
@@ -74,7 +143,15 @@ impl Layout {
     }
 
     pub fn in_gutter(&self, x: f32) -> bool {
-        x < self.grid_x()
+        x >= self.x && x < self.grid_x()
+    }
+
+    pub fn clip_rect(&self) -> [f32; 4] {
+        [self.x, self.y, self.width, self.height]
+    }
+
+    pub fn grid_clip_rect(&self) -> [f32; 4] {
+        [self.grid_x(), self.grid_y(), self.columns() as f32 * self.cell.width, self.lines() as f32 * self.cell.height]
     }
 }
 
@@ -190,11 +267,6 @@ pub fn visible_top(rows: &[Row], lines: usize, scroll: usize) -> usize {
     rows.len().saturating_sub(lines + scroll)
 }
 
-/// Past this a glyph may come from a fallback font with its own width, so it draws apart
-/// and what follows keeps its column.
-// shortcut: a font that lacks an accented letter still shifts its line, split there if one shows up.
-const LAST_COMMON_CHAR: char = '\u{2FF}';
-
 pub fn draw_terminal<L: EventListener>(
     frame: &mut Frame,
     term: &Term<L>,
@@ -205,19 +277,39 @@ pub fn draw_terminal<L: EventListener>(
     layout: Layout,
     theme: &Theme,
 ) {
-    let top = visible_top(rows, layout.lines(), scroll);
-    let selection = term.selection.as_ref().and_then(|selection| selection.to_range(term));
+    draw_terminal_in(frame, term, blocks, rows, scroll, cursor, layout.pane(), Coverage::default(), theme);
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn draw_terminal_in<L: EventListener>(
+    frame: &mut Frame,
+    term: &Term<L>,
+    blocks: &BlockStore,
+    rows: &[Row],
+    scroll: usize,
+    cursor: CursorView,
+    pane: PaneLayout,
+    coverage: Coverage,
+    theme: &Theme,
+) {
+    draw_pane_base(frame, term, blocks, rows, scroll, cursor, pane, coverage, theme);
+    frame.pictures.over = frame.quads.len();
+    draw_pane_overlays(frame, term, blocks, rows, scroll, cursor, pane, theme);
+}
+
+fn find_caret<L: EventListener>(
+    term: &Term<L>,
+    rows: &[Row],
+    top: usize,
+    scroll: usize,
+    cursor: CursorView,
+    pane: PaneLayout,
+) -> Option<(usize, usize, f32)> {
     let grid = term.grid();
-    let columns = grid.columns();
-    let colors = term.colors();
-    let default_bg = theme.resolve(Color::Named(NamedColor::Background), colors);
-    let (thickness, offset) = decoration(layout.cell);
-    // A solid block hides the glyph under it, so that glyph takes the background colour.
-    let solid = matches!(term.cursor_style().shape, CursorShape::Block);
-    let caret = (scroll == 0 && cursor.visible && term.mode().contains(TermMode::SHOW_CURSOR))
-        .then(|| grid.cursor.point)
+    (scroll == 0 && cursor.visible && term.mode().contains(TermMode::SHOW_CURSOR))
+        .then_some(grid.cursor.point)
         .and_then(|point| {
-            rows[top..].iter().take(layout.lines()).position(|row| row.line == point.line).map(|index| {
+            rows[top..].iter().take(pane.lines()).position(|row| row.line == point.line).map(|index| {
                 let flags = grid[point].flags;
                 // A wide glyph takes two cells: the cursor covers both from the leading one.
                 let (column, wide) = if flags.contains(Flags::WIDE_CHAR_SPACER) {
@@ -229,10 +321,35 @@ pub fn draw_terminal<L: EventListener>(
                 };
                 (index, column, wide)
             })
-        });
+        })
+}
 
-    for (index, row) in rows[top..].iter().take(layout.lines()).enumerate() {
-        let y = layout.grid_y() + index as f32 * layout.cell.height;
+#[allow(clippy::too_many_arguments)]
+pub fn draw_pane_base<L: EventListener>(
+    frame: &mut Frame,
+    term: &Term<L>,
+    blocks: &BlockStore,
+    rows: &[Row],
+    scroll: usize,
+    cursor: CursorView,
+    pane: PaneLayout,
+    coverage: Coverage,
+    theme: &Theme,
+) {
+    let top = visible_top(rows, pane.lines(), scroll);
+    let selection = term.selection.as_ref().and_then(|selection| selection.to_range(term));
+    let grid = term.grid();
+    let columns = grid.columns();
+    let colors = term.colors();
+    let default_bg = theme.resolve(Color::Named(NamedColor::Background), colors);
+    let (thickness, offset) = decoration(pane.cell);
+    // Only the focused solid block hides the glyph under it; unfocused splits draw an outline.
+    let solid = cursor.focused && matches!(term.cursor_style().shape, CursorShape::Block);
+    let caret = find_caret(term, rows, top, scroll, cursor, pane);
+    let clip = Some(pane.clip_rect());
+
+    for (index, row) in rows[top..].iter().take(pane.lines()).enumerate() {
+        let y = pane.grid_y() + index as f32 * pane.cell.height;
         let cells = &grid[row.line];
         let mut pieces: Vec<(usize, Vec<Span>)> = Vec::new();
         let mut after_symbol = false;
@@ -262,24 +379,24 @@ pub fn draw_terminal<L: EventListener>(
                 fg = bg;
             }
 
-            let x = layout.grid_x() + column as f32 * layout.cell.width;
+            let x = pane.grid_x() + column as f32 * pane.cell.width;
             let wide = if cell.flags.contains(Flags::WIDE_CHAR) { 2.0 } else { 1.0 };
-            let width = layout.cell.width * wide;
+            let width = pane.cell.width * wide;
             let selected = selection.is_some_and(|range| range.contains(Point::new(row.line, Column(column))));
             if selected {
-                frame.quads.push(Quad::new(x, y, width, layout.cell.height, rgba(theme.accent, 0.35)));
+                frame.quads.push(Quad::new(x, y, width, pane.cell.height, rgba(theme.accent, 0.35)));
             } else if bg != default_bg {
-                frame.quads.push(Quad::new(x, y, width, layout.cell.height, rgba(bg, 1.0)));
+                frame.quads.push(Quad::new(x, y, width, pane.cell.height, rgba(bg, 1.0)));
             }
             if let Some(style) = underline_style(cell.flags) {
                 let color = cell.underline_color().map_or(fg, |color| theme.resolve(color, colors));
-                let top = y + layout.cell.height - offset;
+                let top = y + pane.cell.height - offset;
                 frame.quads.extend(underline(style, x, top, width, thickness, rgba(color, 1.0)));
             }
             if cell.flags.contains(Flags::STRIKEOUT) {
-                frame.quads.push(Quad::new(x, y + strike(layout.cell), width, thickness, rgba(fg, 1.0)));
+                frame.quads.push(Quad::new(x, y + strike(pane.cell), width, thickness, rgba(fg, 1.0)));
             }
-            let box_thickness = layout.scale.max(1.0);
+            let box_thickness = pane.scale.max(1.0);
 
             let mut text = String::from(shown(cell.c));
             if cell.c != crate::view::PLACEHOLDER_CHAR
@@ -288,14 +405,14 @@ pub fn draw_terminal<L: EventListener>(
                 text.extend(extra.iter());
             }
             let mut text = without_anchors(&text);
-            if let Some(quads) = boxes::quads(cell.c, x, y, width, layout.cell.height, box_thickness, rgba(fg, 1.0)) {
+            if let Some(quads) = boxes::quads(cell.c, x, y, width, pane.cell.height, box_thickness, rgba(fg, 1.0)) {
                 frame.quads.extend(quads);
                 text = " ".to_string();
             }
             let bold = cell.flags.intersects(Flags::BOLD);
             let italic = cell.flags.intersects(Flags::ITALIC);
             let color = (fg.r, fg.g, fg.b);
-            let symbol = text.chars().next().is_some_and(|ch| ch > LAST_COMMON_CHAR);
+            let symbol = text.chars().next().is_some_and(|ch| !coverage.matches(ch));
             if symbol || after_symbol || pieces.is_empty() {
                 pieces.push((column, Vec::new()));
             }
@@ -315,35 +432,46 @@ pub fn draw_terminal<L: EventListener>(
             }
             if let Some(last) = spans.last_mut() {
                 last.text.truncate(last.text.trim_end().len());
-                let x = layout.grid_x() + column as f32 * layout.cell.width;
-                frame.lines.push(TextLine { x, y, small: false, spans });
+                let x = pane.grid_x() + column as f32 * pane.cell.width;
+                frame.lines.push(TextLine { x, y, small: false, spans, clip });
             }
         }
 
         if let Some(block) = row.block.and_then(|id| blocks.get(id)) {
-            draw_block_marks(frame, block, row, y, blocks, layout, theme);
+            draw_block_marks(frame, block, row, y, blocks, pane, theme);
         }
     }
+}
 
-    frame.pictures.over = frame.quads.len();
-
-    if let Some((index, column, wide)) = caret {
+#[allow(clippy::too_many_arguments)]
+pub fn draw_pane_overlays<L: EventListener>(
+    frame: &mut Frame,
+    term: &Term<L>,
+    blocks: &BlockStore,
+    rows: &[Row],
+    scroll: usize,
+    cursor: CursorView,
+    pane: PaneLayout,
+    theme: &Theme,
+) {
+    let top = visible_top(rows, pane.lines(), scroll);
+    if let Some((index, column, wide)) = find_caret(term, rows, top, scroll, cursor, pane) {
         let shape = term.cursor_style().shape;
-        draw_cursor(frame, shape, index, column, layout.cell.width * wide, cursor.focused, layout, theme);
+        draw_cursor(frame, shape, index, column, pane.cell.width * wide, cursor.focused, pane, theme);
     }
 
     if let Some(block) = pinned(rows, top, blocks).and_then(|id| blocks.get(id)) {
-        draw_pinned(frame, block, layout, theme);
+        draw_pinned(frame, block, pane, theme);
     }
 
-    if scroll > 0 && rows.len() > layout.lines() {
-        let track_y = layout.grid_y();
-        let track_h = layout.lines() as f32 * layout.cell.height;
-        let bar_w = (2.0 * layout.scale).round().max(1.0);
-        let bar_x = layout.width - bar_w - (2.0 * layout.scale).round();
+    if scroll > 0 && rows.len() > pane.lines() {
+        let track_y = pane.grid_y();
+        let track_h = pane.lines() as f32 * pane.cell.height;
+        let bar_w = (2.0 * pane.scale).round().max(1.0);
+        let bar_x = pane.x + pane.width - bar_w - (2.0 * pane.scale).round();
         let total = rows.len() as f32;
-        let max_top = (rows.len() - layout.lines()) as f32;
-        let thumb_h = (layout.lines() as f32 / total * track_h).max(8.0 * layout.scale).min(track_h);
+        let max_top = (rows.len() - pane.lines()) as f32;
+        let thumb_h = (pane.lines() as f32 / total * track_h).max(8.0 * pane.scale).min(track_h);
         let thumb_y = track_y + (top as f32 / max_top) * (track_h - thumb_h);
         frame.quads.push(Quad::new(bar_x, thumb_y, bar_w, thumb_h, rgba(theme.muted, 0.45)));
         for (idx, row) in rows.iter().enumerate() {
@@ -357,6 +485,26 @@ pub fn draw_terminal<L: EventListener>(
                 frame.quads.push(Quad::new(bar_x, tick_y, bar_w, bar_w, rgba(theme.failure, 0.85)));
             }
         }
+    }
+}
+
+pub fn draw_pane_dividers(
+    frame: &mut Frame,
+    dividers: &[Divider],
+    active_rect: Option<Rect>,
+    scale: f32,
+    theme: &Theme,
+) {
+    if dividers.is_empty() {
+        return;
+    }
+    let line = rgba(mix(theme.background, theme.foreground, 0.18), 1.0);
+    for div in dividers {
+        frame.quads.push(Quad::new(div.rect.x, div.rect.y, div.rect.width, div.rect.height, line));
+    }
+    if let Some(active) = active_rect {
+        let bar_h = (2.0 * scale).round().max(1.0);
+        frame.quads.push(Quad::new(active.x, active.y, active.width, bar_h, rgba(theme.accent, 0.8)));
     }
 }
 
@@ -374,22 +522,34 @@ pub fn draw_search(
     layout: Layout,
     theme: &Theme,
 ) {
-    let cell = layout.cell;
+    draw_search_in(frame, rows, top, matches, current, layout.pane(), theme);
+}
+
+pub fn draw_search_in(
+    frame: &mut Frame,
+    rows: &[Row],
+    top: usize,
+    matches: &[Match],
+    current: Option<&Match>,
+    pane: PaneLayout,
+    theme: &Theme,
+) {
+    let cell = pane.cell;
     for found in matches {
         let (start, end) = (found.start(), found.end());
-        for (index, row) in rows.iter().enumerate().skip(top).take(layout.lines()) {
+        for (index, row) in rows.iter().enumerate().skip(top).take(pane.lines()) {
             if row.line < start.line || row.line > end.line {
                 continue;
             }
             let first = if row.line == start.line { start.column.0 } else { 0 };
-            let last = if row.line == end.line { end.column.0 + 1 } else { layout.columns() };
-            let (x, y) = (layout.grid_x() + first as f32 * cell.width, layout.grid_y() + (index - top) as f32 * cell.height);
+            let last = if row.line == end.line { end.column.0 + 1 } else { pane.columns() };
+            let (x, y) = (pane.grid_x() + first as f32 * cell.width, pane.grid_y() + (index - top) as f32 * cell.height);
             let width = last.saturating_sub(first) as f32 * cell.width;
             let focused = current == Some(found);
             let alpha = if focused { 0.6 } else { 0.25 };
             frame.quads.push(Quad::new(x, y, width, cell.height, rgba(theme.accent, alpha)));
             if focused {
-                let line = layout.scale.max(1.0);
+                let line = pane.scale.max(1.0);
                 let ink = rgba(theme.foreground, 1.0);
                 frame.quads.push(Quad::new(x, y, width, line, ink));
                 frame.quads.push(Quad::new(x, y + cell.height - line, width, line, ink));
@@ -413,7 +573,7 @@ fn bottom_panel(frame: &mut Frame, columns: f32, layout: Layout, theme: &Theme) 
         y,
         width,
         height,
-        color: rgba(theme.ansi[0], 1.0),
+        color: rgba(mix(theme.background, theme.foreground, 0.08), 1.0),
         shape: Shape::Rounded { radius: 10.0 * scale },
     });
     (x, width, y + (height - cell.height) / 2.0)
@@ -452,25 +612,29 @@ pub fn draw_search_bar_status(
     } else {
         vec![Span::plain(shown, theme.foreground)]
     };
-    frame.lines.push(TextLine { x: x + inset, y: text_y, small: false, spans });
+    frame.lines.push(TextLine { x: x + inset, y: text_y, small: false, spans, clip: None });
     if !status.is_empty() {
         let status_x = x + width - inset - status.chars().count() as f32 * cell.width;
-        frame.lines.push(TextLine { x: status_x, y: text_y, small: false, spans: vec![Span::plain(status, status_color)] });
+        frame.lines.push(TextLine { x: status_x, y: text_y, small: false, spans: vec![Span::plain(status, status_color)], clip: None });
     }
 }
 
 pub fn draw_link(frame: &mut Frame, rows: &[Row], top: usize, link: &Link, layout: Layout, theme: &Theme) {
+    draw_link_in(frame, rows, top, link, layout.pane(), theme);
+}
+
+pub fn draw_link_in(frame: &mut Frame, rows: &[Row], top: usize, link: &Link, pane: PaneLayout, theme: &Theme) {
     let (start, end) = (link.range.start(), link.range.end());
-    let cell = layout.cell;
-    let line = layout.scale.max(1.0);
-    for (index, row) in rows.iter().enumerate().skip(top).take(layout.lines()) {
+    let cell = pane.cell;
+    let line = pane.scale.max(1.0);
+    for (index, row) in rows.iter().enumerate().skip(top).take(pane.lines()) {
         if row.line < start.line || row.line > end.line {
             continue;
         }
         let first = if row.line == start.line { start.column.0 } else { 0 };
-        let last = if row.line == end.line { end.column.0 + 1 } else { layout.columns() };
-        let x = layout.grid_x() + first as f32 * cell.width;
-        let y = layout.grid_y() + (index - top + 1) as f32 * cell.height - 2.0 * line;
+        let last = if row.line == end.line { end.column.0 + 1 } else { pane.columns() };
+        let x = pane.grid_x() + first as f32 * cell.width;
+        let y = pane.grid_y() + (index - top + 1) as f32 * cell.height - 2.0 * line;
         frame.quads.push(Quad::new(x, y, last.saturating_sub(first) as f32 * cell.width, line, rgba(theme.accent, 1.0)));
     }
 }
@@ -481,7 +645,7 @@ pub fn draw_link_bar(frame: &mut Frame, uri: &str, layout: Layout, theme: &Theme
     let inset = PANEL_INSET * layout.scale;
     let (x, width, y) = bottom_panel(frame, uri.chars().count() as f32, layout, theme);
     let shown = fit(uri, ((width - inset * 2.0) / cell.width) as usize);
-    frame.lines.push(TextLine { x: x + inset, y, small: false, spans: vec![Span::plain(shown, theme.foreground)] });
+    frame.lines.push(TextLine { x: x + inset, y, small: false, spans: vec![Span::plain(shown, theme.foreground)], clip: None });
 }
 
 /// The size a placement draws at, and the part of the image it shows. The cells are the size: the
@@ -501,19 +665,41 @@ pub fn draw_pictures<L: EventListener>(
     scroll: usize,
     layout: Layout,
 ) {
-    let cell = layout.cell;
-    let top = visible_top(rows, layout.lines(), scroll);
-    for found in placed(term, graphics, rows, top, layout.lines()) {
+    draw_pictures_in(frame, term, graphics, rows, scroll, layout.pane());
+}
+
+pub fn draw_pictures_in<L: EventListener>(
+    frame: &mut Frame,
+    term: &Term<L>,
+    graphics: &Graphics,
+    rows: &[Row],
+    scroll: usize,
+    pane: PaneLayout,
+) {
+    let cell = pane.cell;
+    let top = visible_top(rows, pane.lines(), scroll);
+    let area_rect = pane.grid_clip_rect();
+    for found in placed(term, graphics, rows, top, pane.lines()) {
         let Some(image) = graphics.image(found.image) else { continue };
         let area = (found.columns as f32 * cell.width, found.rows as f32 * cell.height);
         let ((width, height), crop) = picture_box((image.width, image.height), found.crop, area);
-        let x = layout.grid_x() + found.column as f32 * cell.width;
-        let y = layout.grid_y() + found.row as f32 * cell.height;
-        let picture = Picture { image: image.clone(), id: found.image, number: found.number, z: found.z, x, y, width, height, crop };
+        let x = pane.grid_x() + found.column as f32 * cell.width;
+        let y = pane.grid_y() + found.row as f32 * cell.height;
+        let picture = Picture {
+            image: image.clone(),
+            id: found.image,
+            number: found.number,
+            z: found.z,
+            x,
+            y,
+            width,
+            height,
+            crop,
+            clip: Some(area_rect),
+        };
         frame.pictures.list.push(picture);
     }
-    let area = (layout.columns() as f32 * cell.width, layout.lines() as f32 * cell.height);
-    frame.pictures.area = [layout.grid_x(), layout.grid_y(), area.0, area.1];
+    frame.pictures.area = area_rect;
 }
 
 fn draw_block_marks(
@@ -522,12 +708,13 @@ fn draw_block_marks(
     row: &Row,
     y: f32,
     blocks: &BlockStore,
-    layout: Layout,
+    pane: PaneLayout,
     theme: &Theme,
 ) {
     if block.status.is_none() && block.command.is_none() {
         return;
     }
+    let clip = Some(pane.clip_rect());
     let toggle = if block.folded { "▸" } else { "▾" };
     let toggle_color = match block.status {
         Some(0) => theme.success,
@@ -535,10 +722,11 @@ fn draw_block_marks(
         None => theme.accent,
     };
     frame.lines.push(TextLine {
-        x: layout.left(),
+        x: pane.left(),
         y,
         small: false,
         spans: vec![Span::plain(toggle, toggle_color)],
+        clip,
     });
 
     let running = blocks.activity() == Activity::Running && blocks.latest().is_some_and(|last| last.id == block.id);
@@ -560,17 +748,21 @@ fn draw_block_marks(
     }
 
     let characters: usize = spans.iter().map(|span| span.text.chars().count()).sum();
-    let x = layout.width - layout.left() - characters as f32 * layout.cell.width * 0.82;
-    frame.lines.push(TextLine { x, y, small: true, spans });
+    let x = pane.x + pane.width - pane.padding * pane.scale - characters as f32 * pane.cell.width * 0.82;
+    frame.lines.push(TextLine { x, y, small: true, spans, clip });
 }
 
 /// Where the cursor sits on screen, when it is on screen.
 pub fn cursor_position<L: EventListener>(term: &Term<L>, rows: &[Row], scroll: usize, layout: Layout) -> Option<(f32, f32)> {
-    let top = visible_top(rows, layout.lines(), scroll);
+    cursor_position_in(term, rows, scroll, layout.pane())
+}
+
+pub fn cursor_position_in<L: EventListener>(term: &Term<L>, rows: &[Row], scroll: usize, pane: PaneLayout) -> Option<(f32, f32)> {
+    let top = visible_top(rows, pane.lines(), scroll);
     let cursor = term.grid().cursor.point;
-    let index = rows[top..].iter().take(layout.lines()).position(|row| row.line == cursor.line)?;
-    let x = layout.grid_x() + cursor.column.0 as f32 * layout.cell.width;
-    Some((x, layout.grid_y() + index as f32 * layout.cell.height))
+    let index = rows[top..].iter().take(pane.lines()).position(|row| row.line == cursor.line)?;
+    let x = pane.grid_x() + cursor.column.0 as f32 * pane.cell.width;
+    Some((x, pane.grid_y() + index as f32 * pane.cell.height))
 }
 
 /// Text an input method is still composing.
@@ -580,9 +772,10 @@ pub fn draw_preedit(frame: &mut Frame, text: &str, x: f32, y: f32, layout: Layou
     let (thickness, offset) = decoration(layout.cell);
     frame.quads.push(Quad::new(x, y, width, layout.cell.height, rgba(theme.background, 1.0)));
     frame.quads.push(Quad::new(x, y + layout.cell.height - offset, width, thickness, rgba(theme.accent, 1.0)));
-    frame.lines.push(TextLine { x, y, small: false, spans: vec![Span::plain(text.to_string(), theme.foreground)] });
+    frame.lines.push(TextLine { x, y, small: false, spans: vec![Span::plain(text.to_string(), theme.foreground)], clip: None });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_cursor(
     frame: &mut Frame,
     shape: CursorShape,
@@ -590,14 +783,22 @@ fn draw_cursor(
     column: usize,
     width: f32,
     focused: bool,
-    layout: Layout,
+    pane: PaneLayout,
     theme: &Theme,
 ) {
-    let x = layout.grid_x() + column as f32 * layout.cell.width;
-    let y = layout.grid_y() + index as f32 * layout.cell.height;
-    let thickness = (2.0 * layout.scale).round();
-    let color = rgba(theme.cursor, if focused { 0.9 } else { 0.4 });
-    let height = layout.cell.height;
+    let x = pane.grid_x() + column as f32 * pane.cell.width;
+    let y = pane.grid_y() + index as f32 * pane.cell.height;
+    let thickness = (2.0 * pane.scale).round().max(1.0);
+    let color = rgba(theme.cursor, if focused { 0.9 } else { 0.5 });
+    let height = pane.cell.height;
+    if !focused && matches!(shape, CursorShape::Block) {
+        let edge = pane.scale.max(1.0);
+        frame.quads.push(Quad::new(x, y, width, edge, color));
+        frame.quads.push(Quad::new(x, y + height - edge, width, edge, color));
+        frame.quads.push(Quad::new(x, y, edge, height, color));
+        frame.quads.push(Quad::new(x + width - edge, y, edge, height, color));
+        return;
+    }
     frame.quads.push(match shape {
         CursorShape::Beam => Quad::new(x, y, thickness, height, color),
         CursorShape::Underline => Quad::new(x, y + height - thickness, width, thickness, color),
@@ -606,27 +807,18 @@ fn draw_cursor(
     });
 }
 
-fn draw_pinned(frame: &mut Frame, block: &Block, layout: Layout, theme: &Theme) {
-    let y = layout.grid_y();
-    frame.quads.push(Quad::new(0.0, y, layout.width, layout.cell.height, rgba(theme.ansi[0], 1.0)));
+fn draw_pinned(frame: &mut Frame, block: &Block, pane: PaneLayout, theme: &Theme) {
+    let y = pane.grid_y();
+    let clip = Some(pane.clip_rect());
+    frame.quads.push(Quad::new(pane.x, y, pane.width, pane.cell.height, rgba(mix(theme.background, theme.foreground, 0.08), 1.0)));
     let command = block.command.as_deref().and_then(|text| text.lines().next()).unwrap_or("running");
     frame.lines.push(TextLine {
-        x: layout.left(),
+        x: pane.left(),
         y,
         small: false,
         spans: vec![Span::plain(format!("▾ {command}"), theme.foreground)],
+        clip,
     });
-}
-
-pub fn panel(layout: Layout) -> Panel {
-    let scale = layout.scale;
-    let width = (420.0 * scale).min(layout.width - 16.0 * scale);
-    Panel {
-        x: layout.width - width - 8.0 * scale,
-        y: layout.strip() + 6.0 * scale,
-        width,
-        row_height: (layout.cell.height + 12.0 * scale).round(),
-    }
 }
 
 pub fn draw_settings(
@@ -637,187 +829,536 @@ pub fn draw_settings(
     layout: Layout,
     theme: &Theme,
 ) {
-    let area = panel(layout);
+    let view = SettingsView::new(layout.width, layout.height, layout.strip(), layout.scale, layout.cell.height);
     let scale = layout.scale;
-    let inset = 14.0 * scale;
-    let bottom = area.y + area.height();
-    frame.clip = Clip { count: frame.lines.len(), x: area.x, top: area.y - layout.cell.height, bottom };
+    let small_cell = layout.cell.width * 0.82;
+    let inset = view.inset();
+
+    // Header
+    let header_clip = Some([view.container.x, view.header_y, view.container.width, view.row_height]);
+    frame.lines.push(TextLine {
+        x: view.container.x,
+        y: view.header_y,
+        small: false,
+        spans: vec![Span::plain("Settings", theme.foreground)],
+        clip: header_clip,
+    });
+    let subtitle = "~/.config/koral/config.sharky";
+    let sub_x = (view.container.x + view.container.width - subtitle.chars().count() as f32 * small_cell).max(view.container.x + 120.0 * scale);
+    frame.lines.push(TextLine {
+        x: sub_x,
+        y: view.header_y + 2.0 * scale,
+        small: true,
+        spans: vec![Span::plain(subtitle, theme.muted)],
+        clip: header_clip,
+    });
+    frame.quads.push(Quad::new(
+        view.container.x,
+        view.list_y - 4.0 * scale,
+        view.container.width,
+        scale.max(1.0),
+        rgba(theme.muted, 0.25),
+    ));
+
+    // Left panel container
     frame.quads.push(Quad {
-        x: area.x,
-        y: area.y,
-        width: area.width,
-        height: area.height(),
-        color: rgba(theme.ansi[0], 1.0),
+        x: view.left.x,
+        y: view.left.y,
+        width: view.left.width,
+        height: view.left.height,
+        color: rgba(mix(theme.background, theme.foreground, 0.04), 1.0),
         shape: Shape::Rounded { radius: 10.0 * scale },
     });
 
-    frame.lines.push(TextLine {
-        x: area.x + inset,
-        y: area.y + (area.row_height - layout.cell.height) / 2.0,
-        small: false,
-        spans: vec![Span::plain("Settings", theme.foreground)],
-    });
-
     if let Some(picker) = &settings.picker {
-        draw_picker(frame, settings, picker, config, area, layout, theme);
-        return;
+        draw_picker(frame, settings, picker, config, view, layout, theme);
+    } else {
+        draw_form(frame, settings, config, view, layout, theme);
     }
 
-    let small_cell = layout.cell.width * 0.82;
-    for (index, field) in FIELDS.iter().enumerate() {
-        let top = area.y + (index + 1) as f32 * area.row_height;
-        let y = top + (area.row_height - layout.cell.height) / 2.0;
-        let selected = index == settings.selected;
-        if selected {
-            frame.quads.push(selected_row(area, top, scale, theme));
-        }
-        let label = if selected { theme.foreground } else { theme.muted };
-        frame.lines.push(TextLine {
-            x: area.x + inset,
-            y,
-            small: true,
-            spans: vec![Span::plain(field.label, label)],
-        });
-
-        let right = area.x + area.width - inset;
-        match (field.kind, settings.editing.as_ref().filter(|_| selected)) {
-            (Kind::Number { .. }, _) => {
-                let text = value(index, config);
-                let arrows = [(area.less_x(), "‹"), (area.x + area.width - area.arrow_width(), "›")];
-                for (x, arrow) in arrows {
-                    frame.lines.push(TextLine {
-                        x: x + (area.arrow_width() - small_cell) / 2.0,
-                        y,
-                        small: true,
-                        spans: vec![Span::plain(arrow, theme.accent)],
-                    });
-                }
-                let width = text.chars().count() as f32 * small_cell;
-                let middle = area.x + area.width - 2.5 * area.arrow_width();
-                frame.lines.push(TextLine {
-                    x: middle - width / 2.0,
-                    y,
-                    small: true,
-                    spans: vec![Span::plain(text, theme.foreground)],
-                });
-            }
-            (Kind::Toggle, _) => {
-                let on = value(index, config) == "on";
-                let (width, height, gap) = (30.0 * scale, 16.0 * scale, 3.0 * scale);
-                let state = if on { "on" } else { "off" };
-                let state_width = state.chars().count() as f32 * small_cell;
-                frame.lines.push(TextLine {
-                    x: right - width - 8.0 * scale - state_width,
-                    y,
-                    small: true,
-                    spans: vec![Span::plain(state, theme.muted)],
-                });
-                let track = top + (area.row_height - height) / 2.0;
-                let knob = height - gap * 2.0;
-                frame.quads.push(Quad {
-                    x: right - width,
-                    y: track,
-                    width,
-                    height,
-                    color: if on { rgba(theme.accent, 1.0) } else { rgba(theme.muted, 0.35) },
-                    shape: Shape::Rounded { radius: height / 2.0 },
-                });
-                frame.quads.push(Quad {
-                    x: if on { right - gap - knob } else { right - width + gap },
-                    y: track + gap,
-                    width: knob,
-                    height: knob,
-                    color: rgba(if on { theme.background } else { theme.foreground }, 1.0),
-                    shape: Shape::Rounded { radius: knob / 2.0 },
-                });
-            }
-            (Kind::Text | Kind::Font, editing) => {
-                let room = ((area.width * 0.55 - inset) / small_cell) as usize;
-                let text = editing.cloned().unwrap_or_else(|| value(index, config));
-                let shown = if text.is_empty() && editing.is_none() {
-                    "Default".to_string()
-                } else {
-                    fit(&text, room)
-                };
-                let width = shown.chars().count() as f32 * small_cell;
-                let color = if editing.is_some() { theme.foreground } else { theme.muted };
-                frame.lines.push(TextLine {
-                    x: right - width,
-                    y,
-                    small: true,
-                    spans: vec![Span::plain(shown, color)],
-                });
-                if editing.is_some() {
-                    let caret = Quad::new(right + scale, y + 3.0 * scale, 2.0 * scale, layout.cell.height - 6.0 * scale, rgba(theme.accent, 1.0));
-                    frame.quads.push(caret);
-                }
-            }
-        }
+    if let Some(right) = view.right {
+        draw_preview_column(frame, settings, config, view, right, layout, theme);
     }
 
+    // Hint / error footer
     let kind = FIELDS[settings.selected].kind;
-    let (hint, color) = match (error, settings.editing.is_some()) {
-        (Some(message), _) => (brief(message), theme.failure),
-        (None, true) => ("Enter saves. Esc cancels.", theme.muted),
-        (None, false) if kind == Kind::Toggle => ("Colours update on each matugen run.", theme.muted),
-        (None, false) if kind == Kind::Font => ("Enter lists the installed fonts.", theme.muted),
-        (None, false) => ("Arrows change a setting. Esc closes.", theme.muted),
+    let (hint, color) = match (error, settings.editing.is_some(), settings.picker.as_ref().map(|p| p.kind)) {
+        (Some(message), _, _) => (brief(message), theme.failure),
+        (None, true, _) => ("Type value. Enter saves, Esc cancels.", theme.muted),
+        (None, false, Some(PickerKind::Theme)) => ("Arrows preview theme. Type to filter. Enter saves, Esc reverts.", theme.muted),
+        (None, false, Some(PickerKind::Font)) => ("Type to filter fonts. Enter applies, Esc goes back.", theme.muted),
+        (None, false, None) if kind == Kind::Theme => ("Left/Right cycles presets, Enter opens picker.", theme.muted),
+        (None, false, None) if kind == Kind::Font => ("Enter lists installed monospace fonts.", theme.muted),
+        (None, false, None) if kind == Kind::Toggle => ("Enter or arrows toggle this setting.", theme.muted),
+        (None, false, None) => ("Left/Right adjusts, Up/Down selects, Esc closes tab.", theme.muted),
     };
-    let room = ((area.width - inset * 2.0) / small_cell) as usize;
+    let room = (view.container.width / small_cell) as usize;
     frame.lines.push(TextLine {
-        x: area.x + inset,
-        y: bottom - area.row_height + (area.row_height - layout.cell.height) / 2.0,
+        x: view.container.x,
+        y: view.hint_y + (view.row_height - layout.cell.height) / 2.0,
         small: true,
         spans: vec![Span::plain(fit(hint, room), color)],
+        clip: Some([view.container.x, view.hint_y, view.container.width, view.row_height]),
     });
+    let _ = inset;
 }
 
-fn selected_row(area: Panel, top: f32, scale: f32, theme: &Theme) -> Quad {
+fn draw_form(frame: &mut Frame, settings: &Settings, config: &Config, view: SettingsView, layout: Layout, theme: &Theme) {
+    let scale = layout.scale;
+    let inset = view.inset();
+    let small_cell = layout.cell.width * 0.82;
+    let left_clip = Some([view.left.x, view.left.y, view.left.width, view.left.height]);
+    let rows = form_rows();
+    let max_scroll = rows.len().saturating_sub(view.visible_rows);
+    let scroll = settings.scroll.min(max_scroll);
+
+    for (visual, entry) in rows.iter().skip(scroll).take(view.visible_rows).enumerate() {
+        let top = view.left.y + visual as f32 * view.row_height;
+        let y = top + (view.row_height - layout.cell.height) / 2.0;
+        match *entry {
+            FormRow::Header(section) => {
+                frame.lines.push(TextLine {
+                    x: view.left.x + inset,
+                    y,
+                    small: true,
+                    spans: vec![Span::plain(section.label(), theme.accent)],
+                    clip: left_clip,
+                });
+                frame.quads.push(Quad::new(
+                    view.left.x + inset,
+                    top + view.row_height - 2.0 * scale,
+                    view.left.width - inset * 2.0,
+                    scale.max(1.0),
+                    rgba(theme.muted, 0.2),
+                ));
+            }
+            FormRow::Field(index) => {
+                let field = FIELDS[index];
+                let selected = index == settings.selected;
+                if selected {
+                    frame.quads.push(selected_row(view.left, top, view.row_height, scale, theme));
+                    frame.quads.push(Quad::new(
+                        view.left.x + 5.0 * scale,
+                        top + 5.0 * scale,
+                        (3.0 * scale).round().max(2.0),
+                        view.row_height - 10.0 * scale,
+                        rgba(theme.accent, 1.0),
+                    ));
+                }
+                let label = if selected { theme.foreground } else { theme.muted };
+                frame.lines.push(TextLine {
+                    x: view.left.x + inset + 4.0 * scale,
+                    y,
+                    small: true,
+                    spans: vec![Span::plain(field.label, label)],
+                    clip: left_clip,
+                });
+
+                let right = view.left.x + view.left.width - inset;
+                match (field.kind, settings.editing.as_ref().filter(|_| selected)) {
+                    (Kind::Number { .. } | Kind::Choice(_), _) => {
+                        let text = display_value(index, config);
+                        if let Some((less_x, more_x)) = view.arrows(field.kind) {
+                            for (ax, arrow) in [(less_x, "‹"), (more_x, "›")] {
+                                frame.lines.push(TextLine {
+                                    x: ax + (view.arrow_width - small_cell) / 2.0,
+                                    y,
+                                    small: true,
+                                    spans: vec![Span::plain(arrow, theme.accent)],
+                                    clip: left_clip,
+                                });
+                            }
+                            let val_w = text.chars().count() as f32 * small_cell;
+                            let middle = (less_x + view.arrow_width + more_x) / 2.0;
+                            frame.lines.push(TextLine {
+                                x: middle - val_w / 2.0,
+                                y,
+                                small: true,
+                                spans: vec![Span::plain(text, theme.foreground)],
+                                clip: left_clip,
+                            });
+                        }
+                    }
+                    (Kind::Theme, _) => {
+                        let text = display_value(index, config);
+                        if let Some((less_x, more_x)) = view.arrows(Kind::Theme) {
+                            for (ax, arrow) in [(less_x, "‹"), (more_x, "›")] {
+                                frame.lines.push(TextLine {
+                                    x: ax + (view.arrow_width - small_cell) / 2.0,
+                                    y,
+                                    small: true,
+                                    spans: vec![Span::plain(arrow, theme.accent)],
+                                    clip: left_clip,
+                                });
+                            }
+                            let avail = ((more_x - (less_x + view.arrow_width) - 4.0 * scale) / small_cell) as usize;
+                            let shown = fit(&text, avail.max(4));
+                            let val_w = shown.chars().count() as f32 * small_cell;
+                            let middle = (less_x + view.arrow_width + more_x) / 2.0;
+                            frame.lines.push(TextLine {
+                                x: middle - val_w / 2.0,
+                                y,
+                                small: true,
+                                spans: vec![Span::plain(shown, theme.foreground)],
+                                clip: left_clip,
+                            });
+                        }
+                    }
+                    (Kind::Toggle, _) => {
+                        let on = display_value(index, config) == "on";
+                        let (width, height, gap) = (30.0 * scale, 16.0 * scale, 3.0 * scale);
+                        let state = if on { "on" } else { "off" };
+                        let state_width = state.chars().count() as f32 * small_cell;
+                        frame.lines.push(TextLine {
+                            x: right - width - 8.0 * scale - state_width,
+                            y,
+                            small: true,
+                            spans: vec![Span::plain(state, theme.muted)],
+                            clip: left_clip,
+                        });
+                        let track = top + (view.row_height - height) / 2.0;
+                        let knob = height - gap * 2.0;
+                        frame.quads.push(Quad {
+                            x: right - width,
+                            y: track,
+                            width,
+                            height,
+                            color: if on { rgba(theme.accent, 1.0) } else { rgba(theme.muted, 0.35) },
+                            shape: Shape::Rounded { radius: height / 2.0 },
+                        });
+                        frame.quads.push(Quad {
+                            x: if on { right - gap - knob } else { right - width + gap },
+                            y: track + gap,
+                            width: knob,
+                            height: knob,
+                            color: rgba(if on { theme.background } else { theme.foreground }, 1.0),
+                            shape: Shape::Rounded { radius: knob / 2.0 },
+                        });
+                    }
+                    (Kind::Text | Kind::Font, editing) => {
+                        let suffix = if field.kind == Kind::Font { "  ›" } else { "" };
+                        let room = ((view.left.width * 0.50 - inset) / small_cell) as usize;
+                        let text = editing.cloned().unwrap_or_else(|| display_value(index, config));
+                        let shown = format!("{}{}", fit(&text, room.saturating_sub(suffix.len())), suffix);
+                        let width = shown.chars().count() as f32 * small_cell;
+                        let color = if editing.is_some() { theme.foreground } else { theme.muted };
+                        frame.lines.push(TextLine {
+                            x: right - width,
+                            y,
+                            small: true,
+                            spans: vec![Span::plain(shown, color)],
+                            clip: left_clip,
+                        });
+                        if editing.is_some() {
+                            let caret = Quad::new(right + scale, y + 3.0 * scale, 2.0 * scale, layout.cell.height - 6.0 * scale, rgba(theme.accent, 1.0));
+                            frame.quads.push(caret);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn selected_row(box_rect: Rect, top: f32, row_height: f32, scale: f32, theme: &Theme) -> Quad {
     Quad {
-        x: area.x + 4.0 * scale,
+        x: box_rect.x + 4.0 * scale,
         y: top + 2.0 * scale,
-        width: area.width - 8.0 * scale,
-        height: area.row_height - 4.0 * scale,
+        width: box_rect.width - 8.0 * scale,
+        height: row_height - 4.0 * scale,
         color: rgba(theme.foreground, 0.08),
         shape: Shape::Rounded { radius: 7.0 * scale },
     }
 }
 
-/// The installed fonts in the rows of the fields, with the filter on the hint line.
-fn draw_picker(frame: &mut Frame, settings: &Settings, picker: &Picker, config: &Config, area: Panel, layout: Layout, theme: &Theme) {
+/// Filterable list replacing the form inside the left column when choosing a Font or Theme.
+fn draw_picker(
+    frame: &mut Frame,
+    settings: &Settings,
+    picker: &Picker,
+    config: &Config,
+    view: SettingsView,
+    layout: Layout,
+    theme: &Theme,
+) {
     let scale = layout.scale;
-    let inset = 14.0 * scale;
+    let inset = view.inset();
     let small_cell = layout.cell.width * 0.82;
-    let room = ((area.width - inset * 2.0) / small_cell) as usize;
-    // The list starts under the title, the hint takes the last row.
-    let text_y = |row: usize| area.y + (row + 1) as f32 * area.row_height + (area.row_height - layout.cell.height) / 2.0;
+    let left_clip = Some([view.left.x, view.left.y, view.left.width, view.left.height]);
+    let rows_cap = view.picker_rows();
 
-    let found = settings.found();
-    for (row, index) in visible(picker.selected, found.len()).enumerate() {
-        if index == picker.selected {
-            frame.quads.push(selected_row(area, area.y + row as f32 * area.row_height, scale, theme));
+    // Filter search box on row 0
+    frame.quads.push(Quad {
+        x: view.left.x + 6.0 * scale,
+        y: view.left.y + 3.0 * scale,
+        width: view.left.width - 12.0 * scale,
+        height: view.row_height - 6.0 * scale,
+        color: rgba(mix(theme.background, theme.foreground, 0.09), 1.0),
+        shape: Shape::Rounded { radius: 6.0 * scale },
+    });
+    let search_y = view.left.y + (view.row_height - layout.cell.height) / 2.0;
+    let room = ((view.left.width - inset * 2.0) / small_cell) as usize;
+    let (filter_text, filter_color) = if picker.query.is_empty() {
+        let placeholder = match picker.kind {
+            PickerKind::Font => "Filter installed monospace fonts...",
+            PickerKind::Theme => "Filter built-in themes...",
+        };
+        (placeholder.to_string(), theme.muted)
+    } else {
+        (fit(&picker.query, room.saturating_sub(1)), theme.foreground)
+    };
+    frame.lines.push(TextLine {
+        x: view.left.x + inset,
+        y: search_y,
+        small: true,
+        spans: vec![Span::plain(filter_text.clone(), filter_color)],
+        clip: left_clip,
+    });
+    if !picker.query.is_empty() {
+        let caret_x = view.left.x + inset + filter_text.chars().count() as f32 * small_cell + scale;
+        frame.quads.push(Quad::new(caret_x, search_y + 3.0 * scale, 2.0 * scale, layout.cell.height - 6.0 * scale, rgba(theme.accent, 1.0)));
+    }
+
+    match picker.kind {
+        PickerKind::Font => {
+            let found = settings.found();
+            if found.is_empty() {
+                frame.lines.push(TextLine {
+                    x: view.left.x + inset,
+                    y: view.left.y + view.row_height + (view.row_height - layout.cell.height) / 2.0,
+                    small: true,
+                    spans: vec![Span::plain("No matching fonts", theme.failure)],
+                    clip: left_clip,
+                });
+                return;
+            }
+            for (row, index) in visible(picker.selected, found.len(), rows_cap).enumerate() {
+                let top = view.left.y + (row + 1) as f32 * view.row_height;
+                let y = top + (view.row_height - layout.cell.height) / 2.0;
+                if index == picker.selected {
+                    frame.quads.push(selected_row(view.left, top, view.row_height, scale, theme));
+                }
+                let color = if found[index] == config.font { theme.accent } else { theme.foreground };
+                frame.lines.push(TextLine {
+                    x: view.left.x + inset,
+                    y,
+                    small: true,
+                    spans: vec![Span::plain(fit(found[index], room), color)],
+                    clip: left_clip,
+                });
+            }
         }
-        let color = if found[index] == config.font { theme.accent } else { theme.foreground };
+        PickerKind::Theme => {
+            let found = settings.found_themes();
+            if found.is_empty() {
+                frame.lines.push(TextLine {
+                    x: view.left.x + inset,
+                    y: view.left.y + view.row_height + (view.row_height - layout.cell.height) / 2.0,
+                    small: true,
+                    spans: vec![Span::plain("No matching themes", theme.failure)],
+                    clip: left_clip,
+                });
+                return;
+            }
+            let current_id = config.theme.as_deref().unwrap_or("sharky");
+            let swatch = (10.0 * scale).round().max(6.0);
+            let gap = 3.0 * scale;
+            let swatches_w = 6.0 * swatch + 5.0 * gap;
+            let text_room = ((view.left.width - inset * 2.0 - swatches_w - 8.0 * scale) / small_cell) as usize;
+            for (row, index) in visible(picker.selected, found.len(), rows_cap).enumerate() {
+                let info = found[index];
+                let top = view.left.y + (row + 1) as f32 * view.row_height;
+                let y = top + (view.row_height - layout.cell.height) / 2.0;
+                if index == picker.selected {
+                    frame.quads.push(selected_row(view.left, top, view.row_height, scale, theme));
+                }
+                let color = if info.id == current_id { theme.accent } else { theme.foreground };
+                frame.lines.push(TextLine {
+                    x: view.left.x + inset,
+                    y,
+                    small: true,
+                    spans: vec![Span::plain(fit(info.name, text_room), color)],
+                    clip: left_clip,
+                });
+                if let Some(preset) = Theme::builtin(info.id) {
+                    let sy = top + (view.row_height - swatch) / 2.0;
+                    let sx0 = view.left.x + view.left.width - inset - swatches_w;
+                    let dots = [preset.background, preset.foreground, preset.accent, preset.ansi[1], preset.ansi[2], preset.ansi[4]];
+                    for (i, c) in dots.into_iter().enumerate() {
+                        frame.quads.push(Quad {
+                            x: sx0 + i as f32 * (swatch + gap),
+                            y: sy,
+                            width: swatch,
+                            height: swatch,
+                            color: rgba(c, 1.0),
+                            shape: Shape::Rounded { radius: 2.0 * scale },
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn draw_preview_column(
+    frame: &mut Frame,
+    settings: &Settings,
+    config: &Config,
+    view: SettingsView,
+    right: Rect,
+    layout: Layout,
+    theme: &Theme,
+) {
+    let scale = layout.scale;
+    let pad = 14.0 * scale;
+    let small_cell = layout.cell.width * 0.82;
+    let line_h = layout.cell.height;
+    let clip = Some([right.x, right.y, right.width, right.height]);
+
+    frame.quads.push(Quad {
+        x: right.x,
+        y: right.y,
+        width: right.width,
+        height: right.height,
+        color: rgba(mix(theme.background, theme.foreground, 0.04), 1.0),
+        shape: Shape::Rounded { radius: 10.0 * scale },
+    });
+
+    let active_theme_label = if config.matugen && settings.preview_theme().is_none() {
+        "Matugen".to_string()
+    } else {
+        let id = settings.preview_theme().or(config.theme.as_deref()).unwrap_or("sharky");
+        theme_name(id).unwrap_or(id).to_string()
+    };
+
+    let inner_x = right.x + pad;
+    let inner_w = right.width - pad * 2.0;
+    frame.lines.push(TextLine {
+        x: inner_x,
+        y: right.y + pad * 0.75,
+        small: true,
+        spans: vec![
+            Span::plain("Preview  ", theme.muted),
+            Span::plain(fit(&active_theme_label, ((inner_w - 80.0 * scale) / small_cell) as usize), theme.accent),
+        ],
+        clip,
+    });
+
+    // Mini terminal viewport
+    let term_y = right.y + pad * 0.75 + line_h + 6.0 * scale;
+    let term_h = line_h * 5.0 + pad * 1.4;
+    frame.quads.push(Quad {
+        x: inner_x,
+        y: term_y,
+        width: inner_w,
+        height: term_h,
+        color: rgba(theme.background, 1.0),
+        shape: Shape::Rounded { radius: 8.0 * scale },
+    });
+
+    let tx = inner_x + 12.0 * scale;
+    let ty0 = term_y + pad * 0.65;
+    let samples: [Vec<Span>; 5] = [
+        vec![
+            Span::plain("▾ ", theme.success),
+            Span::plain("~/projects/koral  ", theme.accent),
+            Span::plain("✓ 142ms", theme.success),
+        ],
+        vec![
+            Span::plain("$ ", theme.muted),
+            Span { text: "cargo ".to_string(), color: (theme.foreground.r, theme.foreground.g, theme.foreground.b), bold: true, italic: false },
+            Span::plain("test --release", theme.ansi[4]),
+        ],
+        vec![
+            Span::plain("ok ", theme.success),
+            Span::plain("500 passed", theme.foreground),
+            Span::plain("  warn ", theme.ansi[3]),
+            Span::plain("0 new", theme.muted),
+        ],
+        vec![
+            Span { text: "// italic & bold sample ".to_string(), color: (theme.muted.r, theme.muted.g, theme.muted.b), bold: false, italic: true },
+            Span::plain("ERR", theme.failure),
+        ],
+        vec![
+            Span::plain("❯ ", theme.accent),
+            Span::plain("echo ready", theme.foreground),
+        ],
+    ];
+    for (idx, spans) in samples.into_iter().enumerate() {
         frame.lines.push(TextLine {
-            x: area.x + inset,
-            y: text_y(row),
+            x: tx,
+            y: ty0 + idx as f32 * line_h,
             small: true,
-            spans: vec![Span::plain(fit(found[index], room), color)],
+            spans,
+            clip,
+        });
+    }
+    let cursor_x = tx + "❯ echo ready".chars().count() as f32 * small_cell + 2.0 * scale;
+    frame.quads.push(Quad::new(cursor_x, ty0 + 4.0 * line_h + 2.0 * scale, small_cell, line_h - 4.0 * scale, rgba(theme.cursor, 0.9)));
+
+    // 16 ANSI colour tiles (2x8 grid) + semantic colours
+    let pal_y = term_y + term_h + 12.0 * scale;
+    frame.lines.push(TextLine {
+        x: inner_x,
+        y: pal_y,
+        small: true,
+        spans: vec![Span::plain("ANSI 0–15", theme.muted)],
+        clip,
+    });
+    let gap = 5.0 * scale;
+    let tile_w = ((inner_w - gap * 7.0) / 8.0).max(8.0);
+    let tile_h = (16.0 * scale).round();
+    let grid_y = pal_y + line_h + 4.0 * scale;
+    for idx in 0..16 {
+        let col = idx % 8;
+        let row = idx / 8;
+        frame.quads.push(Quad {
+            x: inner_x + col as f32 * (tile_w + gap),
+            y: grid_y + row as f32 * (tile_h + gap),
+            width: tile_w,
+            height: tile_h,
+            color: rgba(theme.ansi[idx], 1.0),
+            shape: Shape::Rounded { radius: 4.0 * scale },
         });
     }
 
-    let (hint, color) = match (picker.query.is_empty(), found.is_empty()) {
-        (true, true) => ("Looking for installed fonts.".to_string(), theme.muted),
-        (true, false) => ("Type to filter. Enter applies. Esc goes back.".to_string(), theme.muted),
-        (false, true) => (format!("No font matches {}", picker.query), theme.failure),
-        (false, false) => (picker.query.clone(), theme.foreground),
-    };
-    let hint = fit(&hint, room);
-    if !picker.query.is_empty() {
-        let (x, y) = (area.x + inset + hint.chars().count() as f32 * small_cell, text_y(FIELDS.len()));
-        frame.quads.push(Quad::new(x + scale, y + 3.0 * scale, 2.0 * scale, layout.cell.height - 6.0 * scale, rgba(theme.accent, 1.0)));
+    // Shortcuts legend if there is vertical space below palette
+    let short_y = grid_y + (tile_h + gap) * 2.0 + 10.0 * scale;
+    let shortcuts = [
+        ("Ctrl+Shift+D / E", "Split right / down"),
+        ("Ctrl+Shift+Arrows", "Focus pane"),
+        ("Ctrl+Shift+F / G", "Fold / copy block"),
+        ("Ctrl+Shift+S", "Search scrollback"),
+    ];
+    let needed = line_h * (1 + shortcuts.len()) as f32;
+    if short_y + needed <= right.y + right.height - 6.0 * scale {
+        frame.lines.push(TextLine {
+            x: inner_x,
+            y: short_y,
+            small: true,
+            spans: vec![Span::plain("Shortcuts", theme.muted)],
+            clip,
+        });
+        for (i, (keys, desc)) in shortcuts.into_iter().enumerate() {
+            let y = short_y + (i + 1) as f32 * line_h;
+            frame.lines.push(TextLine {
+                x: inner_x,
+                y,
+                small: true,
+                spans: vec![Span::plain(keys, theme.foreground)],
+                clip,
+            });
+            let desc_x = right.x + right.width - pad - desc.chars().count() as f32 * small_cell;
+            frame.lines.push(TextLine {
+                x: desc_x.max(inner_x + 140.0 * scale),
+                y,
+                small: true,
+                spans: vec![Span::plain(desc, theme.muted)],
+                clip,
+            });
+        }
     }
-    frame.lines.push(TextLine { x: area.x + inset, y: text_y(FIELDS.len()), small: true, spans: vec![Span::plain(hint, color)] });
+    let _ = view;
 }
 
 pub fn draw_chrome(frame: &mut Frame, chrome: &Chrome<'_>, layout: Layout, theme: &Theme) {
@@ -863,12 +1404,13 @@ pub fn draw_chrome(frame: &mut Frame, chrome: &Chrome<'_>, layout: Layout, theme
                 y,
                 small: true,
                 spans: vec![Span::plain(glyph, glyph_color)],
+                clip: None,
             });
             x += small_cell * 2.0;
         }
 
         if tab.rang {
-            frame.lines.push(TextLine { x, y, small: true, spans: vec![Span::plain("!", theme.accent)] });
+            frame.lines.push(TextLine { x, y, small: true, spans: vec![Span::plain("!", theme.accent)], clip: None });
             x += small_cell * 2.0;
         }
 
@@ -884,6 +1426,7 @@ pub fn draw_chrome(frame: &mut Frame, chrome: &Chrome<'_>, layout: Layout, theme
             y,
             small: true,
             spans: vec![Span::plain(fit(title, (room / small_cell) as usize), color)],
+            clip: None,
         });
 
         if hovered || is_active {
@@ -893,6 +1436,7 @@ pub fn draw_chrome(frame: &mut Frame, chrome: &Chrome<'_>, layout: Layout, theme
                 y,
                 small: true,
                 spans: vec![Span::plain("×", color)],
+                clip: None,
             });
         }
     }
@@ -927,6 +1471,7 @@ pub fn draw_chrome(frame: &mut Frame, chrome: &Chrome<'_>, layout: Layout, theme
         y: (top + strip - layout.cell.height) / 2.0,
         small: false,
         spans: vec![Span::plain("+", color)],
+        clip: None,
     });
 }
 
