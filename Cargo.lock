@@ -1980,7 +1980,7 @@ dependencies = [
 [[package]]
 name = "sharky-config"
 version = "0.1.0"
-source = "git+https://github.com/mafuzyk/sharky-shell?tag=v3.0.0#568fa123d1977236d4296c6add7946e44d80628a"
+source = "git+https://github.com/mafuzyk/sharky-shell?tag=v4.0.0-alpha.2#140413c61f3620d8446e352b15b35aacfac80b57"
 
 [[package]]
 name = "shlex"
