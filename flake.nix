@@ -13,7 +13,7 @@
       systems = [ "x86_64-linux" ];
       forAllSystems = f: lib.genAttrs systems (system: f (import nixpkgs { inherit system; }));
       version = "1.2.1";
-      releaseVersion = "1.2.0";
+      releaseVersion = "1.2.1";
     in
     {
       packages = forAllSystems (pkgs: rec {
@@ -48,7 +48,7 @@
           version = releaseVersion;
           src = pkgs.fetchurl {
             url = "https://github.com/mafuzyk/koral/releases/download/v${releaseVersion}/koral-x86_64-linux.tar.gz";
-            hash = "sha256-kn82zJa1yqEdllcKi9VDGYWaqxbgpnqN89shcXqI06s=";
+            hash = "sha256-Td0i2367T9BcOyX5QB/vAMyQjlvh1OL6iGxLsc16B4c=";
           };
 
           nativeBuildInputs = with pkgs; [ autoPatchelfHook makeWrapper ];
