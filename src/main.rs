@@ -661,10 +661,11 @@ impl App {
         let mut current = config::path()
             .and_then(|path| std::fs::read_to_string(path).ok())
             .unwrap_or_else(|| self.source.clone());
-        if key == "theme" && self.config.matugen {
-            if let Ok((updated, _)) = config::update(&current, "matugen", "off") {
-                current = updated;
-            }
+        if key == "theme"
+            && self.config.matugen
+            && let Ok((updated, _)) = config::update(&current, "matugen", "off")
+        {
+            current = updated;
         }
         let (source, config) = config::update(&current, key, value)?;
         let font_changed = config.face() != self.config.face() || config.font_size != self.config.font_size;
