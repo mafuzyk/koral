@@ -1,7 +1,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Instant;
 
 use alacritty_terminal::vte::ansi::Rgb;
@@ -340,16 +340,12 @@ pub struct Cell {
 }
 
 pub struct Renderer {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    instance: wgpu::Instance,
-    surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
     picture_pipeline: wgpu::RenderPipeline,
     picture_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    textures: HashMap<u64, wgpu::BindGroup>,
+    textures: HashMap<u64, (Weak<Image>, wgpu::BindGroup)>,
     globals: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     quads: wgpu::Buffer,
@@ -365,6 +361,10 @@ pub struct Renderer {
     points: f32,
     scale: f32,
     cell: Cell,
+    surface: wgpu::Surface<'static>,
+    queue: wgpu::Queue,
+    device: wgpu::Device,
+    instance: wgpu::Instance,
     window: Arc<Window>,
 }
 
@@ -470,10 +470,6 @@ impl Renderer {
         let cell = measure(&mut font_system, &face, points, scale);
 
         Self {
-            device,
-            queue,
-            instance,
-            surface,
             config,
             pipeline,
             picture_pipeline,
@@ -495,6 +491,10 @@ impl Renderer {
             points,
             scale,
             cell,
+            surface,
+            queue,
+            device,
+            instance,
             window,
         }
     }
@@ -543,7 +543,7 @@ impl Renderer {
         self.lines = LineCache::default();
     }
 
-    fn upload(&mut self, image: &Image) {
+    fn upload(&mut self, image: &Arc<Image>) {
         let size = wgpu::Extent3d { width: image.width, height: image.height, depth_or_array_layers: 1 };
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("picture"),
@@ -571,7 +571,7 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
             ],
         });
-        self.textures.insert(image.generation, bind_group);
+        self.textures.insert(image.generation, (Arc::downgrade(image), bind_group));
     }
 
     /// Fills `cost` with the phases of the frame, for `lag::note`.
@@ -656,11 +656,20 @@ impl Renderer {
         let acquire_from = Instant::now();
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+            wgpu::CurrentSurfaceTexture::Timeout => {
                 self.window.request_redraw();
                 return;
             }
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Suboptimal(_) => {
+            wgpu::CurrentSurfaceTexture::Occluded => return,
+            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+                // The acquired texture must be discarded before reconfiguring the surface, or
+                // wgpu panics with PreviousOutputExists and then panics again in SurfaceTexture::drop.
+                drop(frame);
+                self.surface.configure(&self.device, &self.config);
+                self.window.request_redraw();
+                return;
+            }
+            wgpu::CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&self.device, &self.config);
                 self.window.request_redraw();
                 return;
@@ -690,8 +699,7 @@ impl Renderer {
             .filter(|picture| picture.image.width.max(picture.image.height) <= limit)
             .cloned()
             .collect();
-        let used: HashSet<u64> = drawn.iter().map(|picture| picture.image.generation).collect();
-        self.textures.retain(|generation, _| used.contains(generation));
+        self.textures.retain(|_, (image, _)| image.strong_count() > 0);
         for picture in &drawn {
             if !self.textures.contains_key(&picture.image.generation) {
                 self.upload(&picture.image);
@@ -759,7 +767,7 @@ impl Renderer {
                 target.set_vertex_buffer(0, self.quads.slice(..));
                 for index in order {
                     let picture = &drawn[*index];
-                    target.set_bind_group(1, &self.textures[&picture.image.generation], &[]);
+                    target.set_bind_group(1, &self.textures[&picture.image.generation].1, &[]);
                     let at = count + *index as u32;
                     target.draw(0..4, at..at + 1);
                 }
