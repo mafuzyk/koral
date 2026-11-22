@@ -1,119 +1,247 @@
-# Koral
+<div align="center">
 
-A Rust terminal with native sharky shell support. It understands
-[sharky](https://github.com/mafuzyk/sharky-shell) commands as units: each one can
-fold, shows its status and duration, and can be copied or jumped to on its own.
-Tabs are native, with no tmux involved.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/koral-mark-inverse.svg" />
+  <img src="assets/brand/koral-mark.svg" width="185" alt="koral halftone sea coral mark" />
+</picture>
 
-![Koral with a folded command, an image, and command status on the right](assets/screenshot.png)
+<h1>koral</h1>
 
-Koral runs on Linux under Wayland and is developed on Hyprland.
+<p><strong>A Rust Wayland terminal emulator with native <a href="https://github.com/mafuzyk/sharky-shell">sharky</a> shell integration.</strong></p>
 
-## Install
+<p>
+  Foldable command blocks, native tabs and split panes, 14 built-in themes, Kitty graphics, and live Settings — rendered on the GPU with <code>wgpu</code>.
+</p>
+
+<p>
+  <a href="https://github.com/mafuzyk/koral/releases"><img src="https://img.shields.io/github/v/release/mafuzyk/koral?style=flat-square&color=35B8C5&labelColor=09202d" alt="Release" /></a>
+  <a href="https://github.com/mafuzyk/koral/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/mafuzyk/koral/release.yml?style=flat-square&color=8CCFA8&labelColor=09202d&label=release" alt="Release workflow" /></a>
+  <a href="https://aur.archlinux.org/packages/koral-bin"><img src="https://img.shields.io/aur/version/koral-bin?style=flat-square&color=35B8C5&labelColor=09202d&label=AUR" alt="AUR" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-7ea4b3?style=flat-square&labelColor=09202d" alt="License" /></a>
+</p>
+
+<img src="assets/screenshots/hero-koral.png" width="900" alt="koral terminal showing folded sharky commands, inline image rendering, splits, search bar, and clickable file paths" />
+
+<p><em>Foldable command blocks, inline Kitty graphics, split panes, smart-case scrollback search, and clickable file paths (v1.2.1)</em></p>
+
+</div>
+
+---
+
+<h2 align="center">Installation</h2>
 
 ```sh
-yay -S koral-bin
+# Arch Linux (prebuilt binary on AUR)
+paru -S koral-bin
+
+# NixOS / Nix flakes
+nix run github:mafuzyk/koral
+
+# Prebuilt Linux x86_64 tarball
+curl -fsSLO https://github.com/mafuzyk/koral/releases/latest/download/koral-x86_64-linux.tar.gz
+tar -xzf koral-x86_64-linux.tar.gz
+install -Dm755 koral ~/.local/bin/koral
 ```
 
-To build from source (edition 2024, Rust >= 1.88):
+> [!NOTE]
+> `koral` targets Linux on Wayland (`x86_64`) and is developed on Hyprland. Other shells work as a plain GPU terminal, while foldable command blocks, exit markers, and prompt jumping require `sharky`.
+
+<details>
+<summary>Nix flake outputs, building from source, and optional runtime dependencies</summary>
+
+### Nix flake
+
+`koral-bin` is the `default` package (`nix run .` or `nix build .#`); build directly from source with:
 
 ```sh
-cargo build --release
+nix build .#koral
+```
+
+Both outputs wrap `koral` with `libnotify`, `xdg-utils`, `fontconfig`, `libxkbcommon`, `wayland`, `vulkan-loader`, and `libGL`.
+
+### Build from source
+
+Requires Rust >= 1.88 (`edition = 2024`):
+
+```sh
+cargo build --release --locked
 ./target/release/koral
 ```
 
-With Nix: `nix run .` builds and starts Koral, `nix build .#` builds it in the store.
+### Runtime & optional dependencies
 
-The default font is IosevkaTerm Nerd Font Mono. The settings tab lists the fixed-width fonts on your system and built-in colour themes. A font that is missing or proportional is replaced by a fixed-width one, and the settings tab says so.
+- **Default font:** `IosevkaTerm Nerd Font Mono` (missing or proportional fonts fall back automatically to a fixed-width system font via `fontconfig`, and the Settings tab reports the fallback).
+- **Desktop notifications (`OSC 777` / `OSC 9`):** `libnotify`.
+- **Opening clicked links and file paths:** `xdg-utils` (`xdg-open`).
+- **Full command-block integration:** [`sharky`](https://github.com/mafuzyk/sharky-shell) (`sharky-shell-bin` / `sharky-shell-git`).
 
-## Shortcuts
+</details>
 
-| Keys | Action |
-| --- | --- |
-| `ctrl+shift+t` | New tab |
-| `ctrl+shift+w` | Close tab |
-| `ctrl+tab`, `ctrl+shift+tab` | Next and previous tab |
-| `alt+1` to `alt+9` | Go to a tab |
-| `ctrl+shift+d` | Split pane right |
-| `ctrl+shift+e` | Split pane down |
-| `ctrl+shift+q` | Close pane |
-| `ctrl+shift+left/right/up/down` | Focus adjacent pane |
-| `ctrl+alt+shift+left/right/up/down` | Resize pane divider |
-| `ctrl+shift+c`, `ctrl+shift+v` | Copy and paste |
-| `ctrl+shift+z`, `ctrl+shift+x` | Previous and next prompt |
-| `ctrl+shift+f` | Fold or open a command |
-| `ctrl+shift+g` | Copy a command's output |
-| `ctrl+shift+s` | Search the scrollback |
-| `ctrl+=`, `ctrl+-`, also with `shift`; `ctrl+shift+0` | Zoom in, out and back |
-| `shift+pageup`, `shift+pagedown` | Scroll a page |
-| `ctrl+shift+,` | Settings tab |
+---
 
-Click the marker to the left of a command to fold it. Drag pane dividers or click a pane to focus it. Selecting text copies it to
-the primary selection, and the middle button pastes it. Double-click selects a
-word, triple-click a line, and `ctrl+alt` with a drag a block.
+<h2 align="center">Benches</h2>
 
-In the search bar, Enter (or `up`/`down`) steps through matches with an `N/M` counter, `shift+enter` goes downward, and
-Esc closes it. Lowercase queries ignore case.
+Median across 3 alternating runs on Wayland / Hyprland via [`scripts/bench.sh`](scripts/bench.sh), comparing `koral 1.2.1` against `kitty 0.50.0` (`--config NONE`):
 
-Hold `ctrl` over a link or local file path (`path/to/file.rs:42`) to see its real target, and `ctrl`+click to open it. When a
-program uses the mouse, `ctrl+shift`+click opens it. Only `http`, `https`, `mailto`
-and `file` links open, through `xdg-open`.
+| Benchmark | koral `1.2.1` | kitty `0.50.0` | Comparison |
+| --- | ---: | ---: | --- |
+| Launch-to-shell time | **143 ms** | 300 ms | **2.10× faster** |
+| 100 MB `cat` throughput | 1,684 ms | **804 ms** | 2.09× slower |
+| Peak RSS (100 MB flood) | 240 MiB | **138 MiB** | 1.74× higher |
 
-## Configuration
+<details>
+<summary>Reproduce & raw 3-run observations</summary>
 
-Use the gear in the tab strip (`ctrl+shift+,`) to open the Settings tab, or edit `~/.config/koral/config.sharky` (changes reload automatically):
+[`scripts/bench.sh`](scripts/bench.sh) generates ~100 MB (`head -c 75000000 /dev/urandom | base64`), spawns the terminal running a small wrapper script inside the live Wayland session, measures nanosecond timestamps before launch, at shell start, and after `cat` finishes, and reads peak memory (`VmHWM`) from `/proc/$PPID/status`.
 
+- **koral `1.2.1` raw runs:**
+  - Start: `89 ms`, `143 ms`, `147 ms` (median `143 ms`)
+  - 100 MB `cat`: `1,681 ms`, `1,684 ms`, `1,789 ms` (median `1,684 ms`)
+  - Peak RSS: `240 MiB`, `240 MiB`, `241 MiB` (median `240 MiB`)
+- **kitty `0.50.0` (`--config NONE`) raw runs:**
+  - Start: `271 ms`, `300 ms`, `327 ms` (median `300 ms`)
+  - 100 MB `cat`: `791 ms`, `804 ms`, `916 ms` (median `804 ms`)
+  - Peak RSS: `138 MiB`, `138 MiB`, `143 MiB` (median `138 MiB`)
+
+</details>
+
+---
+
+<h2 align="center">Screenshots</h2>
+
+<div align="center">
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/command-blocks-graphics.png" width="440" alt="Foldable sharky command blocks and Kitty graphics protocol rendering" />
+      <br />
+      <sub><b>Foldable command blocks &amp; Kitty graphics</b></sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/splits-remote-ctl.png" width="440" alt="Native split panes and koral ctl IPC over KORAL_SOCKET" />
+      <br />
+      <sub><b>Native split panes &amp; <code>koral ctl</code> IPC</b></sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/settings-themes.png" width="440" alt="Built-in Settings tab and 14 live-preview themes" />
+      <br />
+      <sub><b>Live Settings tab &amp; 14 built-in themes</b></sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/config-keybindings.png" width="440" alt="config.sharky polyp/bind directives with inotify live reload and CLI flags" />
+      <br />
+      <sub><b>Declarative <code>config.sharky</code>, keybinds &amp; CLI flags</b></sub>
+    </td>
+  </tr>
+</table>
+
+</div>
+
+---
+
+## Native `sharky` integration
+
+`koral` treats each `sharky` command as a structured unit rather than undifferentiated scrollback text:
+
+- **Foldable blocks:** click the marker beside any command or press `ctrl+shift+f` to collapse/expand long output with an automatic folded line count.
+- **Status & duration:** every block displays completion status (`✓` / `× <code>`) and elapsed duration on the right.
+- **Prompt navigation & output capture:** jump cleanly between commands (`ctrl+shift+z` / `ctrl+shift+x`) or copy an entire command's output (`ctrl+shift+g`).
+- **Without `sharky`:** shell resolution follows `$KORAL_SHELL` → `shell` in config → `sharky` on `PATH` → `$SHELL`. Any shell works with tabs, splits, search, links, images, and video; command folding, exit markers, and prompt jumps use `sharky` marks.
+
+---
+
+## Tabs, splits & remote control
+
+First-class tabs and split panes without `tmux`, paired with scriptable Unix socket control:
+
+- **Launch flags:** `koral [--cwd|--working-directory PATH] [--title TEXT] [--class|--app-id ID] [-e|--command COMMAND [ARGS...]]`
+- **Remote control (`koral ctl`):** every window listens on `$KORAL_SOCKET` (`$XDG_RUNTIME_DIR/koral-<pid>.sock`, `0600` permissions):
+
+```sh
+koral ctl new-tab --title logs --cwd /var/log -e tail -f syslog
+koral ctl split right            # also: down | horizontal | vertical
+koral ctl focus left             # also: right | up | down
+koral ctl resize left            # also: right | up | down
+koral ctl set-theme dracula
+koral ctl send-text "git status\n"
+koral ctl open-settings
+koral ctl reload
+koral ctl list
 ```
-polyp theme "catppuccin-mocha"
+
+- **Navigation, search & links:** `ctrl+shift+s` opens smart-case scrollback search (`Enter`/`Up`/`Down` step matches with an `N/M` counter, `Shift+Enter` steps down, lowercase queries ignore case). Hold `ctrl` over URLs or local paths (`path/to/file.rs:42`) to preview their resolved target and click to open via `xdg-open` (`ctrl+shift+click` when mouse reporting is active; restricted to `http`, `https`, `mailto`, and `file`).
+- **Mouse selection:** drag copies to primary selection (`middle-click` pastes), double-click selects a word, triple-click selects a line, and `ctrl+alt+drag` selects a rectangular block.
+
+<details>
+<summary>Default keybindings and rebindable action names</summary>
+
+### Default shortcuts
+
+| Keys | Action | Action ID (`bind`) |
+| --- | --- | --- |
+| `ctrl+shift+t` | New tab | `new_tab` |
+| `ctrl+shift+w` | Close tab | `close_tab` |
+| `ctrl+tab`, `ctrl+shift+tab` | Next / previous tab | `next_tab`, `prev_tab` |
+| `alt+1` .. `alt+9` | Switch to tab 1–9 | `tab_1` .. `tab_9` |
+| `ctrl+shift+d` | Split pane right | `split_right` |
+| `ctrl+shift+e` | Split pane down | `split_down` |
+| `ctrl+shift+q` | Close active pane | `close_pane` |
+| `ctrl+shift+left/right/up/down` | Focus adjacent pane | `focus_left/right/up/down` |
+| `ctrl+alt+shift+left/right/up/down` | Resize pane divider | `resize_left/right/up/down` |
+| `ctrl+shift+c`, `ctrl+shift+v` | Copy / paste | `copy`, `paste` |
+| `ctrl+shift+z`, `ctrl+shift+x` | Previous / next prompt | `prev_prompt`, `next_prompt` |
+| `ctrl+shift+f` | Fold or expand command block | `toggle_fold` |
+| `ctrl+shift+g` | Copy command output | `copy_output` |
+| `ctrl+shift+s` | Search scrollback | `search` |
+| `ctrl+=` / `ctrl+-` (also with `shift`), `ctrl+shift+0` | Zoom in / out / reset | `zoom_in`, `zoom_out`, `zoom_reset` |
+| `shift+pageup`, `shift+pagedown` | Scroll one page | `page_up`, `page_down` |
+| `ctrl+shift+,` | Open Settings tab | `settings` (`open_settings`) |
+
+Pass `none` or `unbind` in `bind <shortcut> unbind` to disable a default shortcut. Click pane dividers to drag-resize or click any pane to focus it.
+
+</details>
+
+---
+
+## Settings, themes & configuration
+
+Open the interactive **Settings tab** (`ctrl+shift+,` or click the `⚙` icon in the tab bar) to inspect fixed-width system fonts, preview all 14 themes live, and persist changes directly to `~/.config/koral/config.sharky`. Edits to `~/.config/koral/config.sharky` are watched with `inotify` and reload automatically:
+
+```sh
+// ~/.config/koral/config.sharky
+polyp theme "koral"                      // or sharky, dracula, catppuccin-mocha, ...
 polyp font "IosevkaTerm Nerd Font Mono"
 polyp font_size 13.5
-polyp font_weight 500
+polyp font_weight 500                    // 100..900
 polyp bold_weight 800
 polyp bold_italic_weight 900
-polyp italic_style oblique
+polyp italic_style oblique               // oblique | italic
 polyp opacity 0.8
 polyp padding 8
-polyp scrollback 10000
-polyp clipboard_read off
+polyp scrollback 10000                   // 0..1000000
+polyp clipboard_read off                 // OSC 52 clipboard reads
 polyp shell /usr/bin/sharky
-polyp matugen off
+polyp matugen off                        // pull palette from ~/.config/matugen on change
 bind ctrl+shift+n new_tab
 bind ctrl+shift+t unbind
 ```
 
-Built-in themes (`koral`, `sharky`, `terminal`, `dracula`, `catppuccin-mocha`, `catppuccin-macchiato`, `catppuccin-frappe`, `catppuccin-latte`, `tokyo-night`, `gruvbox-dark`, `nord`, `rose-pine`, `one-dark`, `solarized-dark`) can be selected in the Settings tab with a live preview palette or set with `polyp theme`. `font_weight` goes from 100 to 900, `scrollback` from `0` to `1000000`, `clipboard_read` controls OSC 52 clipboard reads, and `bind <shortcut> <action>` overrides or unbinds shortcuts. With `polyp theme sharky` (default), colours come from `theme.sharky`.
+- **14 built-in themes:** `koral`, `sharky` (reads `~/.config/sharky/theme.sharky`), `terminal`, `dracula`, `catppuccin-mocha`, `catppuccin-macchiato`, `catppuccin-frappe`, `catppuccin-latte`, `tokyo-night`, `gruvbox-dark`, `nord`, `rose-pine`, `one-dark`, and `solarized-dark`.
+- **Matugen sync:** `polyp matugen on` installs [`assets/koral.matugen`](assets/koral.matugen) into your matugen configuration and updates colours dynamically on wallpaper changes.
 
-With `matugen on`, Koral adds its template to your matugen config and takes its
-colours from the next wallpaper change.
+---
 
-## CLI & Remote Control
+## Graphics, notifications & stack
 
-```sh
-koral --cwd ~/projects --title work --class dev.koral -e fish
-koral ctl split right
-koral ctl focus left
-koral ctl new-tab --title logs --cwd /var/log -e tail -f syslog
-koral ctl set-theme dracula
-koral ctl open-settings
-koral ctl list
-```
+- **Kitty graphics protocol:** supports inline images, animations/video via `mpv --vo=kitty`, Unicode placeholders (`c=`, `r=`), `z`-index layering, and synchronized updates without screen tearing or lost image anchors.
+- **Desktop integration:** handles `OSC 777` and `OSC 9` for window titles, terminal bell, and desktop notifications, plus [`assets/koral.desktop`](assets/koral.desktop) and [`assets/koral.svg`](assets/koral.svg).
+- **Architecture:** pure Rust over `winit`, `wgpu`, `glyphon`, `alacritty_terminal`, and `sharky-config` (`v4.0.0-alpha.2`).
 
-Running terminals listen on `$KORAL_SOCKET` (`$XDG_RUNTIME_DIR/koral-<pid>.sock`) with `0600` permissions.
+---
 
-## Without sharky
+## License
 
-The shell comes from `$KORAL_SHELL`, then the `shell` config key, then sharky if found on
-`PATH`, then `$SHELL`. Any shell works as a plain terminal with tabs, search, links, images
-and video. Folds, status and prompt jumps need the marks sharky prints.
-
-## Images and video
-
-Koral speaks the kitty graphics protocol, so `mpv --vo=kitty` and other programs
-that use it work.
-
-Programs can set the tab title, ring the bell and send desktop notifications with
-`OSC 777` or `OSC 9`. Notifications need `libnotify`, and links need `xdg-utils`.
-
-## Licence
-
-GPL-3.0-only. See [LICENSE](LICENSE).
+Released under the [GNU General Public License v3.0 only](LICENSE) (`GPL-3.0-only`).
