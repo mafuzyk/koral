@@ -4,7 +4,12 @@ use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::TermMode;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
-pub fn encode(key: &Key, text: Option<&str>, mods: ModifiersState, mode: TermMode) -> Option<Vec<u8>> {
+pub fn encode(
+    key: &Key,
+    text: Option<&str>,
+    mods: ModifiersState,
+    mode: TermMode,
+) -> Option<Vec<u8>> {
     match key {
         Key::Named(named) => encode_named(*named, text, mods, mode),
         Key::Character(chars) => encode_text(text.unwrap_or(chars), mods),
@@ -51,7 +56,12 @@ fn with_alt(mut bytes: Vec<u8>, mods: ModifiersState) -> Vec<u8> {
     bytes
 }
 
-fn encode_named(key: NamedKey, text: Option<&str>, mods: ModifiersState, mode: TermMode) -> Option<Vec<u8>> {
+fn encode_named(
+    key: NamedKey,
+    text: Option<&str>,
+    mods: ModifiersState,
+    mode: TermMode,
+) -> Option<Vec<u8>> {
     let code = modifier_code(mods);
     let letter = match key {
         NamedKey::ArrowUp => Some('A'),
@@ -63,12 +73,14 @@ fn encode_named(key: NamedKey, text: Option<&str>, mods: ModifiersState, mode: T
         _ => None,
     };
     if let Some(letter) = letter {
-        return Some(match (code, mode.contains(TermMode::APP_CURSOR)) {
-            (1, true) => format!("\x1bO{letter}"),
-            (1, false) => format!("\x1b[{letter}"),
-            _ => format!("\x1b[1;{code}{letter}"),
-        }
-        .into_bytes());
+        return Some(
+            match (code, mode.contains(TermMode::APP_CURSOR)) {
+                (1, true) => format!("\x1bO{letter}"),
+                (1, false) => format!("\x1b[{letter}"),
+                _ => format!("\x1b[1;{code}{letter}"),
+            }
+            .into_bytes(),
+        );
     }
 
     let number = match key {
@@ -87,11 +99,13 @@ fn encode_named(key: NamedKey, text: Option<&str>, mods: ModifiersState, mode: T
         _ => None,
     };
     if let Some(number) = number {
-        return Some(match code {
-            1 => format!("\x1b[{number}~"),
-            _ => format!("\x1b[{number};{code}~"),
-        }
-        .into_bytes());
+        return Some(
+            match code {
+                1 => format!("\x1b[{number}~"),
+                _ => format!("\x1b[{number};{code}~"),
+            }
+            .into_bytes(),
+        );
     }
 
     let function = match key {
@@ -102,11 +116,13 @@ fn encode_named(key: NamedKey, text: Option<&str>, mods: ModifiersState, mode: T
         _ => None,
     };
     if let Some(letter) = function {
-        return Some(match code {
-            1 => format!("\x1bO{letter}"),
-            _ => format!("\x1b[1;{code}{letter}"),
-        }
-        .into_bytes());
+        return Some(
+            match code {
+                1 => format!("\x1bO{letter}"),
+                _ => format!("\x1b[1;{code}{letter}"),
+            }
+            .into_bytes(),
+        );
     }
 
     match key {
@@ -129,7 +145,10 @@ fn modifier_code(mods: ModifiersState) -> u8 {
 /// Clipboard text is untrusted: without this filter it could close the bracket
 /// and run as typed input.
 pub fn paste(text: &str, mode: TermMode) -> Vec<u8> {
-    let clean: String = text.chars().filter(|ch| !matches!(ch, '\x1b' | '\u{9b}')).collect();
+    let clean: String = text
+        .chars()
+        .filter(|ch| !matches!(ch, '\x1b' | '\u{9b}'))
+        .collect();
     if mode.contains(TermMode::BRACKETED_PASTE) {
         return format!("\x1b[200~{clean}\x1b[201~").into_bytes();
     }
@@ -155,7 +174,8 @@ pub fn motion_button(mode: TermMode, held: Option<u8>) -> Option<u8> {
     {
         return Some(button);
     }
-    mode.contains(TermMode::MOUSE_MOTION).then(|| held.unwrap_or(3))
+    mode.contains(TermMode::MOUSE_MOTION)
+        .then(|| held.unwrap_or(3))
 }
 
 pub fn mouse_report(mouse: Mouse, mode: TermMode) -> Option<Vec<u8>> {
@@ -178,7 +198,14 @@ pub fn mouse_report(mouse: Mouse, mode: TermMode) -> Option<Vec<u8>> {
         return None;
     }
     let code = if mouse.pressed { code } else { 3 + bits };
-    Some(vec![0x1b, b'[', b'M', 32 + code, 33 + mouse.column as u8, 33 + mouse.line as u8])
+    Some(vec![
+        0x1b,
+        b'[',
+        b'M',
+        32 + code,
+        33 + mouse.column as u8,
+        33 + mouse.line as u8,
+    ])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -256,7 +283,8 @@ pub fn parse_shortcut(spec: &str) -> Result<(ModifiersState, BindKey), String> {
             }
         }
     }
-    let key = parse_bind_key(key_part).ok_or_else(|| format!("unknown key '{key_part}' in '{spec}'"))?;
+    let key =
+        parse_bind_key(key_part).ok_or_else(|| format!("unknown key '{key_part}' in '{spec}'"))?;
     Ok((mods, key))
 }
 
@@ -297,7 +325,10 @@ fn parse_bind_key(part: &str) -> Option<BindKey> {
     }
     let mut chars = part.chars();
     let ch = chars.next()?;
-    chars.next().is_none().then(|| BindKey::Char(ch.to_ascii_lowercase()))
+    chars
+        .next()
+        .is_none()
+        .then(|| BindKey::Char(ch.to_ascii_lowercase()))
 }
 
 pub fn parse_action(name: &str) -> Result<Option<Action>, String> {
@@ -332,7 +363,9 @@ pub fn parse_action(name: &str) -> Result<Option<Action>, String> {
         "resize_up" => Action::ResizeUp,
         "resize_down" => Action::ResizeDown,
         other => {
-            if let Some(digit) = other.strip_prefix("tab_").and_then(|d| d.parse::<usize>().ok())
+            if let Some(digit) = other
+                .strip_prefix("tab_")
+                .and_then(|d| d.parse::<usize>().ok())
                 && (1..=9).contains(&digit)
             {
                 return Ok(Some(Action::SelectTab(digit - 1)));
@@ -354,7 +387,9 @@ pub struct Clicks {
 impl Clicks {
     pub fn press(&mut self, cell: (i32, usize), now: Instant) -> u8 {
         let count = match self.last {
-            Some((at, seen, count)) if seen == cell && now.duration_since(at) < CLICK_WINDOW => count % 3 + 1,
+            Some((at, seen, count)) if seen == cell && now.duration_since(at) < CLICK_WINDOW => {
+                count % 3 + 1
+            }
             _ => 1,
         };
         self.last = Some((now, cell, count));
@@ -378,7 +413,11 @@ pub fn zoomed(size: f32, delta: f32) -> f32 {
 }
 
 pub fn resolve_binding(key: &Key, mods: ModifiersState, custom: &[Keybind]) -> Option<Action> {
-    let active_mods = mods & (ModifiersState::CONTROL | ModifiersState::SHIFT | ModifiersState::ALT | ModifiersState::SUPER);
+    let active_mods = mods
+        & (ModifiersState::CONTROL
+            | ModifiersState::SHIFT
+            | ModifiersState::ALT
+            | ModifiersState::SUPER);
     for rule in custom.iter().rev() {
         if rule.mods == active_mods && key_matches(&rule.key, key, active_mods.shift_key()) {
             return rule.action;
@@ -430,9 +469,11 @@ pub fn binding(key: &Key, mods: ModifiersState) -> Option<Action> {
     let ctrl_alt_shift = ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SHIFT;
     let ctrl_shift = ModifiersState::CONTROL | ModifiersState::SHIFT;
     match key {
-        Key::Named(NamedKey::Tab) if mods.control_key() => {
-            Some(if shift { Action::PreviousTab } else { Action::NextTab })
-        }
+        Key::Named(NamedKey::Tab) if mods.control_key() => Some(if shift {
+            Action::PreviousTab
+        } else {
+            Action::NextTab
+        }),
         Key::Named(NamedKey::PageUp) if shift => Some(Action::PageUp),
         Key::Named(NamedKey::PageDown) if shift => Some(Action::PageDown),
         Key::Named(NamedKey::ArrowLeft) if mods == ctrl_alt_shift => Some(Action::ResizeLeft),

@@ -81,27 +81,61 @@ cargo build --release --locked
 
 <h2 align="center">Benches</h2>
 
-Median across 3 alternating runs on Wayland / Hyprland via [`scripts/bench.sh`](scripts/bench.sh), comparing `koral 1.2.1` against `kitty 0.50.0` (`--config NONE`):
+Historical results collected on 2026-11-22 with an earlier version of
+[`scripts/bench.sh`](scripts/bench.sh): Linux 7.2.15-zen1, Wayland session on
+Hyprland 0.57.1, AMD Ryzen 5 5600GT with Radeon Vega graphics, 1920x1080 @
+60 Hz. The old harness did not isolate configuration consistently or prove
+that injected keys reached the PTY. These figures are not evidence of clean
+cross-terminal performance or input latency.
 
-| Benchmark | koral `1.2.1` | kitty `0.50.0` | Comparison |
-| --- | ---: | ---: | --- |
-| Launch-to-shell time | **143 ms** | 300 ms | **2.10× faster** |
-| 100 MB `cat` throughput | 1,684 ms | **804 ms** | 2.09× slower |
-| Peak RSS (100 MB flood) | 240 MiB | **138 MiB** | 1.74× higher |
+For new runs, `--config NONE` uses an empty XDG config directory for each
+run and passes kitty's explicit `--config NONE` flag. Version reporting and
+measurements use the same resolved executable. A latency sample is invalid
+unless the process inside the PTY confirms the expected input. This method
+measures synthetic input to frame capture, not physical input-to-photon latency.
+The payload is a freshly generated 100,000,000-byte base64 file.
+The script refuses to start on the real desktop session; use an isolated
+virtual monitor (for example `WAYLAND_DISPLAY=wayland-koral-bench`) or pass
+`--allow-real-desktop` deliberately. The JSON report records the effective
+`wayland_display` and `display` targets under `environment.system`.
+
+The suite was previously exercised with
+`scripts/bench.sh --terminals koral,ghostty,alacritty,kitty --runs 5 --config NONE --json /tmp/bench.json`.
+The table below contains **historical 1.2.1 data with mixed provenance**: `kitty 0.50.0` was
+measured on 2026-11-22 in a preliminary run while `koral 1.2.1` comes from an older
+release baseline and was **not** re-measured alongside it.
+
+| Benchmark | kitty `0.50.0` (historical, 2026-11-22) | koral `1.2.1` (historical, mixed provenance) |
+| --- | ---: | ---: |
+| Cold launch-to-shell | 283 ms (3-run median) | 143 ms |
+| 100 MB `cat` to PTY | 5 ms (shell-side clock) | 1,684 ms |
+| Peak RSS (`VmHWM`) | 134,400 KiB / 131.25 MiB | 240 MiB |
+| Colored TUI frame throughput | 426.04 frames/s | not measured |
+| Historical synthetic-key figure (unverified) | 153.433 ms (one sample per run) | not measured |
 
 <details>
 <summary>Reproduce & raw 3-run observations</summary>
 
-[`scripts/bench.sh`](scripts/bench.sh) generates ~100 MB (`head -c 75000000 /dev/urandom | base64`), spawns the terminal running a small wrapper script inside the live Wayland session, measures nanosecond timestamps before launch, at shell start, and after `cat` finishes, and reads peak memory (`VmHWM`) from `/proc/$PPID/status`.
+```sh
+scripts/bench.sh --terminals koral,ghostty,alacritty,kitty --runs 5 --config NONE --json /tmp/bench.json
+```
 
-- **koral `1.2.1` raw runs:**
-  - Start: `89 ms`, `143 ms`, `147 ms` (median `143 ms`)
-  - 100 MB `cat`: `1,681 ms`, `1,684 ms`, `1,789 ms` (median `1,684 ms`)
-  - Peak RSS: `240 MiB`, `240 MiB`, `241 MiB` (median `240 MiB`)
-- **kitty `0.50.0` (`--config NONE`) raw runs:**
-  - Start: `271 ms`, `300 ms`, `327 ms` (median `300 ms`)
-  - 100 MB `cat`: `791 ms`, `804 ms`, `916 ms` (median `804 ms`)
-  - Peak RSS: `138 MiB`, `138 MiB`, `143 MiB` (median `138 MiB`)
+Kitty `0.50.0 created by Kovid Goyal`, three consecutive runs from
+`/tmp/bench-baseline-current.json` (launch ms, cat ms, VmHWM KiB, TUI frames/s,
+latency p50 ms):
+
+- `356`, `4`, `134400`, `411.00`, `140.873`
+- `283`, `5`, `134120`, `427.89`, `153.433`
+- `270`, `6`, `134560`, `426.04`, `161.049`
+- medians: `283 ms`, `5 ms`, `134400 KiB`, `426.04 fps`, `153.433 ms`
+
+The `cat` figure is measured by `date +%s%N` inside the spawned shell, so it
+excludes terminal rendering that continues after the producer finishes; treat
+it as producer time, not end-to-end scroll completion. Latency p50/p99 above
+come from one synthetic key per run and are intentionally reported as raw
+single samples. `scripts/bench-latency.py` uses `grim` screencopy capture and
+Hyprland's native key-state Lua dispatcher; see its module docstring for the
+full methodology and its `--self-test` option for percentile checks.
 
 </details>
 
@@ -222,7 +256,9 @@ polyp italic_style oblique               // oblique | italic
 polyp opacity 0.8
 polyp padding 8
 polyp scrollback 10000                   // 0..1000000
-polyp clipboard_read off                 // OSC 52 clipboard reads
+polyp clipboard_read off                 // OSC 52 clipboard reads (default)
+polyp clipboard_write ask                // OSC 52 clipboard writes: allow | ask | deny (default: ask)
+polyp notifications allow                // OSC 777/9 desktop notifications: allow | ask | deny (default: allow)
 polyp shell /usr/bin/sharky
 polyp matugen off                        // pull palette from ~/.config/matugen on change
 bind ctrl+shift+n new_tab

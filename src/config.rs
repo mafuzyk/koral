@@ -51,22 +51,35 @@ where
     }
     let mut parsed = Args::default();
     while let Some(arg) = iter.next() {
-        let mut take_value = |flag: &str| iter.next().ok_or_else(|| format!("missing value for '{flag}'"));
-        if let Some(value) = arg.strip_prefix("--working-directory=").or_else(|| arg.strip_prefix("--cwd=")) {
+        let mut take_value = |flag: &str| {
+            iter.next()
+                .ok_or_else(|| format!("missing value for '{flag}'"))
+        };
+        if let Some(value) = arg
+            .strip_prefix("--working-directory=")
+            .or_else(|| arg.strip_prefix("--cwd="))
+        {
             parsed.cwd = Some(PathBuf::from(value));
         } else if let Some(value) = arg.strip_prefix("--title=") {
             parsed.title = Some(value.to_string());
-        } else if let Some(value) = arg.strip_prefix("--class=").or_else(|| arg.strip_prefix("--app-id=")) {
+        } else if let Some(value) = arg
+            .strip_prefix("--class=")
+            .or_else(|| arg.strip_prefix("--app-id="))
+        {
             parsed.class = Some(value.to_string());
         } else {
             match arg.as_str() {
                 "--version" => return Ok(Launch::Version),
                 "-h" | "--help" => return Ok(Launch::Help),
-                "--working-directory" | "--cwd" => parsed.cwd = Some(PathBuf::from(take_value(&arg)?)),
+                "--working-directory" | "--cwd" => {
+                    parsed.cwd = Some(PathBuf::from(take_value(&arg)?))
+                }
                 "--title" => parsed.title = Some(take_value(&arg)?),
                 "--class" | "--app-id" => parsed.class = Some(take_value(&arg)?),
                 "-e" | "--command" | "--" => {
-                    let prog = iter.next().ok_or_else(|| format!("missing command for '{arg}'"))?;
+                    let prog = iter
+                        .next()
+                        .ok_or_else(|| format!("missing command for '{arg}'"))?;
                     parsed.command = Some((prog, iter.collect()));
                     break;
                 }
@@ -77,6 +90,45 @@ where
     Ok(Launch::Run(parsed))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PermissionPolicy {
+    /// Let the operation through without asking.
+    Allow,
+    /// Hold the operation until the user confirms.
+    #[default]
+    Ask,
+    /// Refuse the operation.
+    Deny,
+}
+
+impl PermissionPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Ask => "ask",
+            Self::Deny => "deny",
+        }
+    }
+}
+
+fn policy(value: &str) -> Result<PermissionPolicy, String> {
+    match value {
+        "allow" => Ok(PermissionPolicy::Allow),
+        "ask" => Ok(PermissionPolicy::Ask),
+        "deny" => Ok(PermissionPolicy::Deny),
+        _ => Err(format!("'{value}' is not allow, ask or deny")),
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum PresentModePolicy {
+    #[default]
+    Auto,
+    Fifo,
+    Mailbox,
+    Immediate,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub font: String,
@@ -85,9 +137,13 @@ pub struct Config {
     pub padding: f32,
     pub shell: Option<String>,
     pub matugen: bool,
+    pub window_decorations: bool,
+    pub present_mode: PresentModePolicy,
     pub theme: Option<String>,
     pub scrollback: usize,
     pub clipboard_read: bool,
+    pub clipboard_write: PermissionPolicy,
+    pub notifications: PermissionPolicy,
     pub bindings: Vec<Keybind>,
     pub font_weight: u16,
     pub bold_weight: u16,
@@ -104,9 +160,13 @@ impl Default for Config {
             padding: 8.0,
             shell: None,
             matugen: false,
+            window_decorations: false,
+            present_mode: PresentModePolicy::Auto,
             theme: None,
             scrollback: 10_000,
             clipboard_read: false,
+            clipboard_write: PermissionPolicy::Ask,
+            notifications: PermissionPolicy::Allow,
             bindings: Vec::new(),
             font_weight: 500,
             bold_weight: 800,
@@ -157,7 +217,10 @@ pub fn append(path: &std::path::Path, message: &str) -> std::io::Result<()> {
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs());
-    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
     writeln!(file, "[{seconds}] {message}")
 }
 
@@ -207,7 +270,9 @@ fn apply(config: &mut Config, line: &str) -> Result<(), String> {
         return Ok(());
     }
     if instruction != INSTRUCTION {
-        return Err(format!("unknown instruction '{instruction}', expected {INSTRUCTION}"));
+        return Err(format!(
+            "unknown instruction '{instruction}', expected {INSTRUCTION}"
+        ));
     }
     let [key, value] = rest else {
         return Err(format!("{INSTRUCTION} takes a key and a value"));
@@ -255,7 +320,20 @@ fn apply(config: &mut Config, line: &str) -> Result<(), String> {
             _ => Err(format!("'{value}' is not an integer from 0 to 1000000")),
         },
         "clipboard_read" => toggle(value).map(|on| config.clipboard_read = on),
+        "clipboard_write" => policy(value).map(|policy| config.clipboard_write = policy),
+        "notifications" => policy(value).map(|policy| config.notifications = policy),
         "matugen" => toggle(value).map(|on| config.matugen = on),
+        "window_decorations" => toggle(value).map(|on| config.window_decorations = on),
+        "present_mode" => {
+            config.present_mode = match value.as_str() {
+                "auto" => PresentModePolicy::Auto,
+                "fifo" => PresentModePolicy::Fifo,
+                "mailbox" => PresentModePolicy::Mailbox,
+                "immediate" => PresentModePolicy::Immediate,
+                _ => return Err(format!("'{value}' is not auto, fifo, mailbox or immediate")),
+            };
+            Ok(())
+        }
         other => Err(format!("unknown setting '{other}'")),
     }
 }
@@ -282,7 +360,9 @@ fn number(value: &str, min: f32, max: f32) -> Result<f32, String> {
 /// Where a line's trailing comment starts: the first `//` that leaves the words unchanged.
 fn comment_start(line: &str) -> Option<usize> {
     let tokens = tokenize(line).ok()?;
-    line.match_indices("//").map(|(index, _)| index).find(|index| tokenize(&line[..*index]).is_ok_and(|words| words == tokens))
+    line.match_indices("//")
+        .map(|(index, _)| index)
+        .find(|index| tokenize(&line[..*index]).is_ok_and(|words| words == tokens))
 }
 
 /// The new file text with one setting changed; every other byte stays.
@@ -292,7 +372,8 @@ pub fn set(source: &str, key: &str, value: &str) -> String {
 
     let found = lines.iter().rposition(|line| {
         tokenize(line).is_ok_and(|tokens| {
-            tokens.first().is_some_and(|word| word == INSTRUCTION) && tokens.get(1).is_some_and(|word| word == key)
+            tokens.first().is_some_and(|word| word == INSTRUCTION)
+                && tokens.get(1).is_some_and(|word| word == key)
         })
     });
     match found {
@@ -313,11 +394,17 @@ pub fn set(source: &str, key: &str, value: &str) -> String {
 fn quote(value: &str) -> String {
     let plain = !value.is_empty()
         && !value.contains("//")
-        && value.chars().all(|ch| !ch.is_whitespace() && ch != '"' && ch != '\\');
+        && value
+            .chars()
+            .all(|ch| !ch.is_whitespace() && ch != '"' && ch != '\\');
     if plain {
         return value.to_string();
     }
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\t', "\\t");
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\t', "\\t");
     format!("\"{escaped}\"")
 }
 

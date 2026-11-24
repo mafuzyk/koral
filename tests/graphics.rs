@@ -1,6 +1,6 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use koral::graphics::{Area, Delete, Graphics, MAX_IMAGE, Outcome, Request};
+use koral::graphics::{Area, Delete, Graphics, MAX_IMAGE, MAX_TRANSFER, Outcome, Request};
 
 fn apc(keys: &str, payload: &[u8]) -> Vec<u8> {
     format!("G{keys};{}", STANDARD.encode(payload)).into_bytes()
@@ -22,7 +22,9 @@ fn png_bytes(width: u32, height: u32) -> Vec<u8> {
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header().unwrap();
-    writer.write_image_data(&vec![200; (width * height * 3) as usize]).unwrap();
+    writer
+        .write_image_data(&vec![200; (width * height * 3) as usize])
+        .unwrap();
     writer.finish().unwrap();
     bytes
 }
@@ -74,7 +76,9 @@ fn png_is_decoded_without_being_told_its_size() {
 fn a_png_header_declaring_a_huge_image_is_refused_before_its_buffer_is_allocated() {
     // 20000x20000 is 1.2 GB of RGB, far past MAX_IMAGE, and the header alone says so.
     let mut g = graphics();
-    let reply = send(&mut g, "a=t,f=100,i=1", &png_declaring(20_000, 20_000)).reply.unwrap();
+    let reply = send(&mut g, "a=t,f=100,i=1", &png_declaring(20_000, 20_000))
+        .reply
+        .unwrap();
     assert!(reply.contains("EFBIG"), "{reply:?}");
     assert!(g.image(1).is_none());
 }
@@ -105,15 +109,23 @@ fn a_transmission_with_an_id_is_acknowledged() {
 #[test]
 fn quiet_one_hides_success_but_not_errors() {
     let mut g = graphics();
-    assert_eq!(send(&mut g, "a=t,f=24,s=1,v=1,i=5,q=1", &[1, 2, 3]).reply, None);
-    let reply = send(&mut g, "a=t,f=24,s=9,v=9,i=5,q=1", &[1, 2, 3]).reply.unwrap();
+    assert_eq!(
+        send(&mut g, "a=t,f=24,s=1,v=1,i=5,q=1", &[1, 2, 3]).reply,
+        None
+    );
+    let reply = send(&mut g, "a=t,f=24,s=9,v=9,i=5,q=1", &[1, 2, 3])
+        .reply
+        .unwrap();
     assert!(reply.starts_with("\x1b_Gi=5;E"), "{reply:?}");
 }
 
 #[test]
 fn quiet_two_hides_errors_too() {
     let mut g = graphics();
-    assert_eq!(send(&mut g, "a=t,f=24,s=9,v=9,i=5,q=2", &[1, 2, 3]).reply, None);
+    assert_eq!(
+        send(&mut g, "a=t,f=24,s=9,v=9,i=5,q=2", &[1, 2, 3]).reply,
+        None
+    );
 }
 
 #[test]
@@ -140,7 +152,13 @@ fn file_transmission_is_refused_so_a_program_cannot_read_local_files() {
 fn a_shared_memory_transmission_is_refused_with_its_error() {
     let mut g = graphics();
     let name = STANDARD.encode(b"/icat-BWVCZONVJ6XL2");
-    let reply = send(&mut g, "a=T,f=100,t=s,s=240,v=120,S=401,i=7", name.as_bytes()).reply.unwrap();
+    let reply = send(
+        &mut g,
+        "a=T,f=100,t=s,s=240,v=120,S=401,i=7",
+        name.as_bytes(),
+    )
+    .reply
+    .unwrap();
     assert!(reply.contains("ENOTSUPPORTED"), "{reply:?}");
     assert!(g.image(7).is_none());
 }
@@ -152,7 +170,9 @@ fn a_query_over_an_unsupported_medium_reports_it() {
     for medium in ["f", "t", "s"] {
         let mut g = graphics();
         let keys = format!("a=q,f=24,s=1,v=1,t={medium},i=3");
-        let reply = send(&mut g, &keys, b"/dev/shm/kitty-tty-graphics-protocol-1").reply.unwrap();
+        let reply = send(&mut g, &keys, b"/dev/shm/kitty-tty-graphics-protocol-1")
+            .reply
+            .unwrap();
         assert!(reply.contains("ENOTSUPPORTED"), "{reply:?}");
     }
 }
@@ -169,7 +189,10 @@ fn an_error_without_an_id_stays_silent() {
     // A reply is routed by image id, and icat also asks for silence with q=2: a client that sends
     // neither has nothing to read, so the refusal can only reach it when it sends an id.
     let mut g = graphics();
-    assert_eq!(send(&mut g, "a=T,f=100,t=s,s=1,v=1", b"/dev/shm/x").reply, None);
+    assert_eq!(
+        send(&mut g, "a=T,f=100,t=s,s=1,v=1", b"/dev/shm/x").reply,
+        None
+    );
 }
 
 #[test]
@@ -178,7 +201,10 @@ fn a_size_past_the_limit_is_refused() {
     let mut g = graphics();
     let keys = format!("a=t,f=32,s={side},v={side},i=1");
     let reply = send(&mut g, &keys, &[0; 4]).reply.unwrap();
-    assert!(reply.contains("EFBIG") || reply.contains("EINVAL"), "{reply:?}");
+    assert!(
+        reply.contains("EFBIG") || reply.contains("EINVAL"),
+        "{reply:?}"
+    );
     assert!(g.image(1).is_none());
 }
 
@@ -197,11 +223,23 @@ fn old_images_leave_when_the_store_is_full() {
 
 /// 4000x4000 RGBA is 64 MB, a fifth of the store: six of them do not fit.
 fn transmit_a_fifth(graphics: &mut Graphics, id: u32) {
-    send(graphics, &format!("a=t,f=32,s=4000,v=4000,i={id},q=2"), &vec![0; 4000 * 4000 * 4]);
+    send(
+        graphics,
+        &format!("a=t,f=32,s=4000,v=4000,i={id},q=2"),
+        &vec![0; 4000 * 4000 * 4],
+    );
 }
 
 fn shown(image: u32) -> Request {
-    Request { image, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1], z: 0 }
+    Request {
+        image,
+        number: 0,
+        columns: 1,
+        rows: 1,
+        keep_cursor: true,
+        crop: [0, 0, 1, 1],
+        z: 0,
+    }
 }
 
 #[test]
@@ -212,7 +250,10 @@ fn an_image_on_screen_survives_a_burst_of_previews() {
     for id in 2..=6 {
         transmit_a_fifth(&mut g, id);
     }
-    assert!(g.image(1).is_some(), "the image a placement shows was evicted");
+    assert!(
+        g.image(1).is_some(),
+        "the image a placement shows was evicted"
+    );
     assert!(g.placement(anchor).is_some());
     assert!(g.image(2).is_none(), "the oldest preview stayed");
     assert!(g.image(6).is_some());
@@ -240,7 +281,10 @@ fn used_matches_the_images_that_remain() {
     for id in 1..=6 {
         transmit_a_fifth(&mut g, id);
     }
-    let total: usize = (1..=6).filter_map(|id| g.image(id)).map(|image| image.rgba.len()).sum();
+    let total: usize = (1..=6)
+        .filter_map(|id| g.image(id))
+        .map(|image| image.rgba.len())
+        .sum();
     assert_eq!(g.used(), total);
     assert!(total <= 5 * MAX_IMAGE, "{total} bytes kept");
 }
@@ -252,7 +296,15 @@ fn transmit_and_place_asks_for_a_placement_in_cells() {
     let request = outcome.place.unwrap();
     assert_eq!(
         request,
-        Request { image: 2, number: 0, columns: 3, rows: 2, keep_cursor: false, crop: [0, 0, 25, 30], z: 0 }
+        Request {
+            image: 2,
+            number: 0,
+            columns: 3,
+            rows: 2,
+            keep_cursor: false,
+            crop: [0, 0, 25, 30],
+            z: 0
+        }
     );
 }
 
@@ -260,10 +312,20 @@ fn transmit_and_place_asks_for_a_placement_in_cells() {
 fn explicit_cells_and_the_cursor_key_win() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=2", &[0; 3]);
-    let request = send(&mut g, "a=p,i=2,p=9,c=40,r=12,C=1", &[]).place.unwrap();
+    let request = send(&mut g, "a=p,i=2,p=9,c=40,r=12,C=1", &[])
+        .place
+        .unwrap();
     assert_eq!(
         request,
-        Request { image: 2, number: 9, columns: 40, rows: 12, keep_cursor: true, crop: [0, 0, 1, 1], z: 0 }
+        Request {
+            image: 2,
+            number: 9,
+            columns: 40,
+            rows: 12,
+            keep_cursor: true,
+            crop: [0, 0, 1, 1],
+            z: 0
+        }
     );
 }
 
@@ -271,7 +333,9 @@ fn explicit_cells_and_the_cursor_key_win() {
 fn a_placement_keeps_the_part_of_the_image_it_asked_for() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=4,v=4,i=2", &[0; 4 * 4 * 3]);
-    let request = send(&mut g, "a=p,i=2,x=1,y=2,w=2,h=1,c=1,r=1,C=1", &[]).place.unwrap();
+    let request = send(&mut g, "a=p,i=2,x=1,y=2,w=2,h=1,c=1,r=1,C=1", &[])
+        .place
+        .unwrap();
     assert_eq!(request.crop, [1, 2, 2, 1]);
 }
 
@@ -279,8 +343,17 @@ fn a_placement_keeps_the_part_of_the_image_it_asked_for() {
 fn a_crop_ends_at_the_edge_of_the_image() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=4,v=4,i=2", &[0; 4 * 4 * 3]);
-    assert_eq!(send(&mut g, "a=p,i=2,x=3,y=1", &[]).place.unwrap().crop, [3, 1, 1, 3]);
-    assert_eq!(send(&mut g, "a=p,i=2,x=9,y=9,w=9,h=9", &[]).place.unwrap().crop, [3, 3, 1, 1]);
+    assert_eq!(
+        send(&mut g, "a=p,i=2,x=3,y=1", &[]).place.unwrap().crop,
+        [3, 1, 1, 3]
+    );
+    assert_eq!(
+        send(&mut g, "a=p,i=2,x=9,y=9,w=9,h=9", &[])
+            .place
+            .unwrap()
+            .crop,
+        [3, 3, 1, 1]
+    );
 }
 
 #[test]
@@ -310,8 +383,15 @@ fn a_transmission_without_an_id_still_places() {
 fn a_placement_with_a_number_replaces_the_old_one() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
-    let request =
-        Request { image: 1, number: 3, columns: 1, rows: 1, keep_cursor: false, crop: [0, 0, 1, 1], z: 0 };
+    let request = Request {
+        image: 1,
+        number: 3,
+        columns: 1,
+        rows: 1,
+        keep_cursor: false,
+        crop: [0, 0, 1, 1],
+        z: 0,
+    };
     let first = g.place(request, &[]).expect("a placement");
     let second = g.place(request, &[]).expect("a placement");
     assert_ne!(first, second);
@@ -323,8 +403,15 @@ fn a_placement_with_a_number_replaces_the_old_one() {
 fn placing_again_on_the_same_cell_reuses_its_anchor() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
-    let request =
-        Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1], z: 0 };
+    let request = Request {
+        image: 1,
+        number: 0,
+        columns: 1,
+        rows: 1,
+        keep_cursor: true,
+        crop: [0, 0, 1, 1],
+        z: 0,
+    };
     let first = g.place(request, &[]).expect("a placement");
     assert_eq!(g.place(request, &[first]), Some(first));
 }
@@ -334,7 +421,18 @@ fn deleting_everything_removes_placements_and_keeps_images() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
     let anchor = g
-        .place(Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1], z: 0 }, &[])
+        .place(
+            Request {
+                image: 1,
+                number: 0,
+                columns: 1,
+                rows: 1,
+                keep_cursor: true,
+                crop: [0, 0, 1, 1],
+                z: 0,
+            },
+            &[],
+        )
         .expect("a placement");
     send(&mut g, "a=d,d=a", &[]);
     assert!(g.placement(anchor).is_none());
@@ -354,9 +452,33 @@ fn deleting_by_id_leaves_the_others() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
     send(&mut g, "a=t,f=24,s=1,v=1,i=2", &[0; 3]);
-    let one = g.place(Request { image: 1, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1], z: 0 }, &[])
+    let one = g
+        .place(
+            Request {
+                image: 1,
+                number: 0,
+                columns: 1,
+                rows: 1,
+                keep_cursor: true,
+                crop: [0, 0, 1, 1],
+                z: 0,
+            },
+            &[],
+        )
         .expect("a placement");
-    let two = g.place(Request { image: 2, number: 0, columns: 1, rows: 1, keep_cursor: true, crop: [0, 0, 1, 1], z: 0 }, &[])
+    let two = g
+        .place(
+            Request {
+                image: 2,
+                number: 0,
+                columns: 1,
+                rows: 1,
+                keep_cursor: true,
+                crop: [0, 0, 1, 1],
+                z: 0,
+            },
+            &[],
+        )
         .expect("a placement");
     send(&mut g, "a=d,d=I,i=1", &[]);
     assert!(g.placement(one).is_none() && g.image(1).is_none());
@@ -366,7 +488,13 @@ fn deleting_by_id_leaves_the_others() {
 #[test]
 fn malformed_commands_change_nothing() {
     let mut g = graphics();
-    for body in [&b"G"[..], b"Gnonsense", b"G=;", b"Ga=t,s=abc;!!!", b"G\xff\xfe"] {
+    for body in [
+        &b"G"[..],
+        b"Gnonsense",
+        b"G=;",
+        b"Ga=t,s=abc;!!!",
+        b"G\xff\xfe",
+    ] {
         let _ = g.handle(body);
     }
     assert!(g.image(0).is_none());
@@ -396,8 +524,24 @@ fn one_image_shows_in_two_places() {
 fn a_placement_id_tells_two_placements_of_one_image_apart() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
-    let one = g.place(Request { number: 4, ..shown(1) }, &[]).expect("a placement");
-    let two = g.place(Request { number: 5, ..shown(1) }, &[]).expect("a placement");
+    let one = g
+        .place(
+            Request {
+                number: 4,
+                ..shown(1)
+            },
+            &[],
+        )
+        .expect("a placement");
+    let two = g
+        .place(
+            Request {
+                number: 5,
+                ..shown(1)
+            },
+            &[],
+        )
+        .expect("a placement");
     assert!(g.placement(one).is_some() && g.placement(two).is_some());
 }
 
@@ -406,8 +550,24 @@ fn a_placement_id_tells_two_placements_of_one_image_apart() {
 fn the_same_placement_id_replaces_the_earlier_one() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
-    let one = g.place(Request { number: 4, ..shown(1) }, &[]).expect("a placement");
-    let two = g.place(Request { number: 4, ..shown(1) }, &[]).expect("a placement");
+    let one = g
+        .place(
+            Request {
+                number: 4,
+                ..shown(1)
+            },
+            &[],
+        )
+        .expect("a placement");
+    let two = g
+        .place(
+            Request {
+                number: 4,
+                ..shown(1)
+            },
+            &[],
+        )
+        .expect("a placement");
     assert_eq!(g.placement(one), None);
     assert!(g.placement(two).is_some());
 }
@@ -446,7 +606,9 @@ fn repainting_an_id_at_the_same_size_keeps_its_placement() {
 fn a_placement_carries_the_z_index_that_stacks_it() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=2", &[0; 3]);
-    let request = send(&mut g, "a=p,i=2,z=-1073741823,C=1", &[]).place.expect("a placement");
+    let request = send(&mut g, "a=p,i=2,z=-1073741823,C=1", &[])
+        .place
+        .expect("a placement");
     assert_eq!(request.z, -1073741823);
 }
 
@@ -454,8 +616,26 @@ fn a_placement_carries_the_z_index_that_stacks_it() {
 fn a_placement_with_no_cells_is_refused() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
-    assert_eq!(g.place(Request { columns: 0, ..shown(1) }, &[]), None);
-    assert_eq!(g.place(Request { rows: 0, ..shown(1) }, &[]), None);
+    assert_eq!(
+        g.place(
+            Request {
+                columns: 0,
+                ..shown(1)
+            },
+            &[]
+        ),
+        None
+    );
+    assert_eq!(
+        g.place(
+            Request {
+                rows: 0,
+                ..shown(1)
+            },
+            &[]
+        ),
+        None
+    );
     assert_eq!(g.tallest(), 0);
 }
 
@@ -472,10 +652,34 @@ fn a_delete_mode_this_terminal_cannot_resolve_answers() {
 #[test]
 fn a_delete_by_cell_asks_the_grid_for_that_cell() {
     let mut g = graphics();
-    let delete = send(&mut g, "a=d,d=p,x=3,y=4", &[]).delete.expect("a delete");
-    assert_eq!(delete, Delete { area: Area::Cell { column: 2, row: 3, z: None }, free: false });
-    let free = send(&mut g, "a=d,d=P,x=1,y=1", &[]).delete.expect("a delete");
-    assert_eq!(free, Delete { area: Area::Cell { column: 0, row: 0, z: None }, free: true });
+    let delete = send(&mut g, "a=d,d=p,x=3,y=4", &[])
+        .delete
+        .expect("a delete");
+    assert_eq!(
+        delete,
+        Delete {
+            area: Area::Cell {
+                column: 2,
+                row: 3,
+                z: None
+            },
+            free: false
+        }
+    );
+    let free = send(&mut g, "a=d,d=P,x=1,y=1", &[])
+        .delete
+        .expect("a delete");
+    assert_eq!(
+        free,
+        Delete {
+            area: Area::Cell {
+                column: 0,
+                row: 0,
+                z: None
+            },
+            free: true
+        }
+    );
 }
 
 #[test]
@@ -489,17 +693,55 @@ fn the_positional_delete_modes_stay_in_their_own_space() {
     assert_eq!(row.area, Area::Row(1));
     let z = send(&mut g, "a=d,d=Z,z=-3", &[]).delete.expect("a delete");
     assert_eq!(z.area, Area::Z(-3));
-    let cell_z = send(&mut g, "a=d,d=q,x=2,y=5,z=-3", &[]).delete.expect("a delete");
-    assert_eq!(cell_z.area, Area::Cell { column: 1, row: 4, z: Some(-3) });
+    let cell_z = send(&mut g, "a=d,d=q,x=2,y=5,z=-3", &[])
+        .delete
+        .expect("a delete");
+    assert_eq!(
+        cell_z.area,
+        Area::Cell {
+            column: 1,
+            row: 4,
+            z: Some(-3)
+        }
+    );
 }
 
 #[test]
 fn a_delete_by_placement_id_leaves_the_other_placements() {
     let mut g = graphics();
     send(&mut g, "a=t,f=24,s=1,v=1,i=1", &[0; 3]);
-    let one = g.place(Request { number: 4, ..shown(1) }, &[]).expect("a placement");
-    let two = g.place(Request { number: 5, ..shown(1) }, &[]).expect("a placement");
+    let one = g
+        .place(
+            Request {
+                number: 4,
+                ..shown(1)
+            },
+            &[],
+        )
+        .expect("a placement");
+    let two = g
+        .place(
+            Request {
+                number: 5,
+                ..shown(1)
+            },
+            &[],
+        )
+        .expect("a placement");
     send(&mut g, "a=d,d=i,i=1,p=4", &[]);
     assert!(g.placement(one).is_none());
     assert!(g.placement(two).is_some());
+}
+
+const _: () = assert!(MAX_TRANSFER <= 4 * MAX_IMAGE);
+
+#[test]
+fn graphics_limits_are_exposed_and_bounded() {
+    let mut graphics = Graphics::default();
+    let control = "a=t,f=32,s=1,v=1,i=1,q=2";
+    let mut body = control.as_bytes().to_vec();
+    body.push(b';');
+    body.extend(vec![b'A'; MAX_TRANSFER + 1]);
+    let _ = graphics.handle(&body);
+    assert!(graphics.used() <= MAX_IMAGE);
 }

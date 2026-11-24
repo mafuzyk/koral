@@ -23,7 +23,9 @@ fn search(query: &str) -> Search {
 }
 
 fn first(session: &Session<VoidListener>, query: &str) -> Option<Point> {
-    search(query).step(&session.term, Direction::Left).map(|found| *found.start())
+    search(query)
+        .step(&session.term, Direction::Left)
+        .map(|found| *found.start())
 }
 
 fn line(number: i32, column: usize) -> Point {
@@ -42,7 +44,9 @@ fn a_dot_matches_only_a_dot() {
 
 #[test]
 fn finds_a_word_in_the_scrollback() {
-    let text: String = (0..200).map(|index| format!("{}\r\n", if index == 3 { "needle" } else { "hay" })).collect();
+    let text: String = (0..200)
+        .map(|index| format!("{}\r\n", if index == 3 { "needle" } else { "hay" }))
+        .collect();
     assert_eq!(first(&session(&text), "needle"), Some(line(-193, 0)));
 }
 
@@ -50,7 +54,11 @@ fn finds_a_word_in_the_scrollback() {
 fn steps_go_up_and_wrap() {
     let session = session("one\r\ntwo one\r\n");
     let mut search = search("one");
-    let mut step = || search.step(&session.term, Direction::Left).map(|found| *found.start());
+    let mut step = || {
+        search
+            .step(&session.term, Direction::Left)
+            .map(|found| *found.start())
+    };
     assert_eq!(step(), Some(line(1, 4)));
     assert_eq!(step(), Some(line(0, 0)));
     assert_eq!(step(), Some(line(1, 4)));
@@ -108,7 +116,10 @@ fn an_empty_query_finds_nothing() {
 fn only_what_is_in_view_is_marked() {
     let session = session("one\r\ntwo\r\none\r\n");
     let found = search("one").visible(&session.term, Line(1), Line(2));
-    assert_eq!(found.iter().map(|hit| *hit.start()).collect::<Vec<_>>(), vec![line(2, 0)]);
+    assert_eq!(
+        found.iter().map(|hit| *hit.start()).collect::<Vec<_>>(),
+        vec![line(2, 0)]
+    );
 }
 
 #[test]

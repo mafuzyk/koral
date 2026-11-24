@@ -24,8 +24,34 @@ fn an_empty_file_gives_the_defaults() {
 }
 
 #[test]
+fn present_mode_defaults_to_auto_and_rejects_unknown_modes() {
+    use koral::config::PresentModePolicy;
+    assert_eq!(config("").present_mode, PresentModePolicy::Auto);
+    for (name, policy) in [
+        ("auto", PresentModePolicy::Auto),
+        ("fifo", PresentModePolicy::Fifo),
+        ("mailbox", PresentModePolicy::Mailbox),
+        ("immediate", PresentModePolicy::Immediate),
+    ] {
+        assert_eq!(config(&set("", "present_mode", name)).present_mode, policy);
+    }
+    assert!(!errors(&set("", "present_mode", "fastest")).is_empty());
+}
+
+#[test]
+fn system_title_bar_is_opt_in_and_round_trips() {
+    assert!(!config("").window_decorations);
+    let enabled = set("", "window_decorations", "on");
+    assert!(config(&enabled).window_decorations);
+    let disabled = set(&enabled, "window_decorations", "off");
+    assert!(!config(&disabled).window_decorations);
+}
+
+#[test]
 fn statements_set_their_values() {
-    let config = config("polyp font \"Fira Code\"\npolyp font_size 12\npolyp opacity 0.5\npolyp padding 4\npolyp shell fish\n");
+    let config = config(
+        "polyp font \"Fira Code\"\npolyp font_size 12\npolyp opacity 0.5\npolyp padding 4\npolyp shell fish\n",
+    );
     assert_eq!(config.font, "Fira Code");
     assert_eq!(config.font_size, 12.0);
     assert_eq!(config.opacity, 0.5);
@@ -35,7 +61,10 @@ fn statements_set_their_values() {
 
 #[test]
 fn comments_and_blank_lines_are_ignored() {
-    assert_eq!(errors("// settings\n\npolyp opacity 0.5 // see-through\n"), Vec::<String>::new());
+    assert_eq!(
+        errors("// settings\n\npolyp opacity 0.5 // see-through\n"),
+        Vec::<String>::new()
+    );
     assert_eq!(config("polyp opacity 0.5 // see-through\n").opacity, 0.5);
 }
 
@@ -77,22 +106,34 @@ fn an_empty_font_keeps_the_default() {
 #[test]
 fn set_changes_only_that_line() {
     let source = "// mine\npolyp opacity 0.5 // keep\n\npolyp font_size 12\n";
-    assert_eq!(set(source, "font_size", "14"), "// mine\npolyp opacity 0.5 // keep\n\npolyp font_size 14\n");
+    assert_eq!(
+        set(source, "font_size", "14"),
+        "// mine\npolyp opacity 0.5 // keep\n\npolyp font_size 14\n"
+    );
 }
 
 #[test]
 fn set_keeps_a_trailing_comment_on_the_changed_line() {
-    assert_eq!(set("polyp opacity 0.5 // keep\n", "opacity", "0.6"), "polyp opacity 0.6 // keep\n");
+    assert_eq!(
+        set("polyp opacity 0.5 // keep\n", "opacity", "0.6"),
+        "polyp opacity 0.6 // keep\n"
+    );
 }
 
 #[test]
 fn set_appends_a_missing_setting() {
-    assert_eq!(set("// mine\n", "opacity", "0.6"), "// mine\npolyp opacity 0.6\n");
+    assert_eq!(
+        set("// mine\n", "opacity", "0.6"),
+        "// mine\npolyp opacity 0.6\n"
+    );
 }
 
 #[test]
 fn set_adds_the_final_newline_a_file_was_missing() {
-    assert_eq!(set("// mine", "opacity", "0.6"), "// mine\npolyp opacity 0.6\n");
+    assert_eq!(
+        set("// mine", "opacity", "0.6"),
+        "// mine\npolyp opacity 0.6\n"
+    );
 }
 
 #[test]
@@ -104,7 +145,10 @@ fn set_quotes_values_with_spaces_or_quotes() {
 #[test]
 fn set_ignores_the_key_inside_comments() {
     let source = "// polyp opacity 0.1\n";
-    assert_eq!(set(source, "opacity", "0.6"), "// polyp opacity 0.1\npolyp opacity 0.6\n");
+    assert_eq!(
+        set(source, "opacity", "0.6"),
+        "// polyp opacity 0.1\npolyp opacity 0.6\n"
+    );
 }
 
 #[test]
@@ -154,7 +198,11 @@ fn the_log_keeps_one_timestamped_line_per_event() {
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 2);
     assert!(lines[0].starts_with('['), "{:?}", lines[0]);
-    assert!(lines[0].ends_with("config.sharky line 2: bad"), "{:?}", lines[0]);
+    assert!(
+        lines[0].ends_with("config.sharky line 2: bad"),
+        "{:?}",
+        lines[0]
+    );
     assert!(lines[1].ends_with("cannot start nope"), "{:?}", lines[1]);
 }
 
@@ -163,7 +211,10 @@ fn migrate_renames_the_old_file() {
     let dir = folder("old");
     std::fs::write(dir.join("config.koral"), "polyp font_size 14\n").unwrap();
     migrate(&dir).unwrap();
-    assert_eq!(std::fs::read_to_string(dir.join("config.sharky")).unwrap(), "polyp font_size 14\n");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("config.sharky")).unwrap(),
+        "polyp font_size 14\n"
+    );
     assert!(!dir.join("config.koral").exists());
 }
 
@@ -173,8 +224,14 @@ fn migrate_never_overwrites_the_new_file() {
     std::fs::write(dir.join("config.koral"), "polyp font_size 14\n").unwrap();
     std::fs::write(dir.join("config.sharky"), "polyp font_size 20\n").unwrap();
     migrate(&dir).unwrap();
-    assert_eq!(std::fs::read_to_string(dir.join("config.sharky")).unwrap(), "polyp font_size 20\n");
-    assert_eq!(std::fs::read_to_string(dir.join("config.koral")).unwrap(), "polyp font_size 14\n");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("config.sharky")).unwrap(),
+        "polyp font_size 20\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("config.koral")).unwrap(),
+        "polyp font_size 14\n"
+    );
 }
 
 #[test]
@@ -186,13 +243,19 @@ fn migrate_with_no_files_creates_nothing() {
 
 #[test]
 fn set_ignores_a_comment_marker_inside_quotes() {
-    assert_eq!(set("polyp font \"a // b\"\n", "font", "c"), "polyp font c\n");
+    assert_eq!(
+        set("polyp font \"a // b\"\n", "font", "c"),
+        "polyp font c\n"
+    );
 }
 
 #[test]
 fn a_bare_word_ends_at_a_comment_as_in_sharky() {
     assert_eq!(config("polyp font a//why\n").font, "a");
-    assert_eq!(set("polyp font a//why\n", "font", "c"), "polyp font c //why\n");
+    assert_eq!(
+        set("polyp font a//why\n", "font", "c"),
+        "polyp font c //why\n"
+    );
 }
 
 #[test]

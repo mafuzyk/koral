@@ -22,7 +22,12 @@ pub fn at<L: EventListener>(term: &Term<L>, point: Point) -> Option<Link> {
     at_in(term, point, None, None)
 }
 
-pub fn at_in<L: EventListener>(term: &Term<L>, point: Point, cwd: Option<&str>, home: Option<&str>) -> Option<Link> {
+pub fn at_in<L: EventListener>(
+    term: &Term<L>,
+    point: Point,
+    cwd: Option<&str>,
+    home: Option<&str>,
+) -> Option<Link> {
     hyperlink(term, point)
         .or_else(|| plain(term, point))
         .or_else(|| local_path(term, point, cwd, home))
@@ -45,16 +50,22 @@ fn hyperlink<L: EventListener>(term: &Term<L>, point: Point) -> Option<Link> {
     };
     let start = walk(&|at| at.sub(term, Boundary::Grid, 1));
     let end = walk(&|at| at.add(term, Boundary::Grid, 1));
-    Some(Link { uri: link.uri().to_string(), range: start..=end })
+    Some(Link {
+        uri: link.uri().to_string(),
+        range: start..=end,
+    })
 }
 
 fn plain<L: EventListener>(term: &Term<L>, point: Point) -> Option<Link> {
     let mut regex = RegexSearch::new(URL).ok()?;
     let (first, last) = (term.line_search_left(point), term.line_search_right(point));
-    let found = RegexIter::new(first, last, Direction::Right, term, &mut regex).find(|found| found.contains(&point))?;
+    let found = RegexIter::new(first, last, Direction::Right, term, &mut regex)
+        .find(|found| found.contains(&point))?;
     let grid = term.grid();
     let (start, mut end) = (*found.start(), *found.end());
-    while end > start && (TRAILING.contains(grid[end].c) || (grid[end].c == ')' && unclosed(term, start, end))) {
+    while end > start
+        && (TRAILING.contains(grid[end].c) || (grid[end].c == ')' && unclosed(term, start, end)))
+    {
         end = end.sub(term, Boundary::Grid, 1);
     }
     if point > end {
@@ -72,7 +83,10 @@ fn plain<L: EventListener>(term: &Term<L>, point: Point) -> Option<Link> {
         }
         at = at.add(term, Boundary::Grid, 1);
     }
-    Some(Link { uri, range: start..=end })
+    Some(Link {
+        uri,
+        range: start..=end,
+    })
 }
 
 /// Whether the range ends with a closing round bracket that opens nothing.
@@ -98,7 +112,12 @@ fn is_path_delim(ch: char) -> bool {
     ch == '\0' || ch.is_whitespace() || "<>\"'()[]{}".contains(ch)
 }
 
-fn local_path<L: EventListener>(term: &Term<L>, point: Point, cwd: Option<&str>, home: Option<&str>) -> Option<Link> {
+fn local_path<L: EventListener>(
+    term: &Term<L>,
+    point: Point,
+    cwd: Option<&str>,
+    home: Option<&str>,
+) -> Option<Link> {
     let grid = term.grid();
     if is_path_delim(grid[point].c) {
         return None;
@@ -171,11 +190,18 @@ fn local_path<L: EventListener>(term: &Term<L>, point: Point, cwd: Option<&str>,
         return None;
     }
     let target = std::fs::canonicalize(&resolved).unwrap_or(resolved);
-    Some(Link { uri: format!("file://{}", target.display()), range: start..=path_end })
+    Some(Link {
+        uri: format!("file://{}", target.display()),
+        range: start..=path_end,
+    })
 }
 
 pub fn allowed(uri: &str) -> bool {
-    uri.split_once(':').is_some_and(|(scheme, _)| SCHEMES.iter().any(|allowed| scheme.eq_ignore_ascii_case(allowed)))
+    uri.split_once(':').is_some_and(|(scheme, _)| {
+        SCHEMES
+            .iter()
+            .any(|allowed| scheme.eq_ignore_ascii_case(allowed))
+    })
 }
 
 pub fn open(uri: &str) {

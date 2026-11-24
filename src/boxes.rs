@@ -23,11 +23,29 @@ const ARMS: [&[u8; 4]; 128] = [
 ];
 
 /// The quads for a character Koral draws itself. None means the font draws it.
-pub fn quads(ch: char, x: f32, y: f32, width: f32, height: f32, thickness: f32, color: [f32; 4]) -> Option<Vec<Quad>> {
-    let area = Area { left: x.round(), top: y.round(), right: (x + width).round(), bottom: (y + height).round() };
+pub fn quads(
+    ch: char,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    thickness: f32,
+    color: [f32; 4],
+) -> Option<Vec<Quad>> {
+    let area = Area {
+        left: x.round(),
+        top: y.round(),
+        right: (x + width).round(),
+        bottom: (y + height).round(),
+    };
     match ch as u32 {
         0x256D..=0x2570 => Some(arc(ch as u32, area, thickness.round().max(1.0), color)),
-        0x2500..=0x257F => lines(ch as usize - 0x2500, area, thickness.round().max(1.0), color),
+        0x2500..=0x257F => lines(
+            ch as usize - 0x2500,
+            area,
+            thickness.round().max(1.0),
+            color,
+        ),
         0x2580..=0x259F => Some(blocks(ch as u32, area, x, y, width, height, color)),
         _ => None,
     }
@@ -46,11 +64,30 @@ fn lines(index: usize, area: Area, thickness: f32, color: [f32; 4]) -> Option<Ve
     if [left, right, up, down] == [0; 4] {
         return None;
     }
-    let (x, y) = (((area.left + area.right) / 2.0).floor(), ((area.top + area.bottom) / 2.0).floor());
-    let across = strokes([left, right], [up, down], [area.left, area.right], [x, y], thickness);
-    let along = strokes([up, down], [left, right], [area.top, area.bottom], [y, x], thickness);
-    let wide = across.into_iter().map(|[start, end, top, bottom]| Quad::new(start, top, end - start, bottom - top, color));
-    let tall = along.into_iter().map(|[start, end, left, right]| Quad::new(left, start, right - left, end - start, color));
+    let (x, y) = (
+        ((area.left + area.right) / 2.0).floor(),
+        ((area.top + area.bottom) / 2.0).floor(),
+    );
+    let across = strokes(
+        [left, right],
+        [up, down],
+        [area.left, area.right],
+        [x, y],
+        thickness,
+    );
+    let along = strokes(
+        [up, down],
+        [left, right],
+        [area.top, area.bottom],
+        [y, x],
+        thickness,
+    );
+    let wide = across
+        .into_iter()
+        .map(|[start, end, top, bottom]| Quad::new(start, top, end - start, bottom - top, color));
+    let tall = along
+        .into_iter()
+        .map(|[start, end, left, right]| Quad::new(left, start, right - left, end - start, color));
     Some(wide.chain(tall).collect())
 }
 
@@ -68,13 +105,34 @@ fn arc(ch: u32, area: Area, thickness: f32, color: [f32; 4]) -> Vec<Quad> {
     let center_y = if down { y + radius } else { y - radius };
 
     let size = radius + half;
-    let (box_x, box_y) = (if right { x - half } else { center_x }, if down { y - half } else { center_y });
-    let curve = Quad { shape: Shape::Arc { x: center_x, y: center_y, radius }, ..Quad::new(box_x, box_y, size, size, color) };
-    let (start, end) = if right { (center_x, area.right) } else { (area.left, center_x) };
-    let (top, bottom) = if down { (center_y, area.bottom) } else { (area.top, center_y) };
+    let (box_x, box_y) = (
+        if right { x - half } else { center_x },
+        if down { y - half } else { center_y },
+    );
+    let curve = Quad {
+        shape: Shape::Arc {
+            x: center_x,
+            y: center_y,
+            radius,
+        },
+        ..Quad::new(box_x, box_y, size, size, color)
+    };
+    let (start, end) = if right {
+        (center_x, area.right)
+    } else {
+        (area.left, center_x)
+    };
+    let (top, bottom) = if down {
+        (center_y, area.bottom)
+    } else {
+        (area.top, center_y)
+    };
     let wide = Quad::new(start, y - half, end - start, thickness, color);
     let tall = Quad::new(x - half, top, thickness, bottom - top, color);
-    [curve, wide, tall].into_iter().filter(|quad| quad.width > 0.0 && quad.height > 0.0).collect()
+    [curve, wide, tall]
+        .into_iter()
+        .filter(|quad| quad.width > 0.0 && quad.height > 0.0)
+        .collect()
 }
 
 /// The whole pixels a line of this weight covers around `center`.
@@ -86,7 +144,13 @@ fn edges(center: f32, weight: u8, thickness: f32) -> (f32, f32) {
 
 /// Strokes along one axis as start, end and the two edges across it. `sides` are the arms that
 /// cross it, which decide where each stroke stops so that corners close and doubles nest.
-fn strokes(arms: [u8; 2], sides: [u8; 2], span: [f32; 2], center: [f32; 2], thickness: f32) -> Vec<[f32; 4]> {
+fn strokes(
+    arms: [u8; 2],
+    sides: [u8; 2],
+    span: [f32; 2],
+    center: [f32; 2],
+    thickness: f32,
+) -> Vec<[f32; 4]> {
     if arms[0] == arms[1] && matches!(arms[0], 1 | 2) {
         let (low, high) = edges(center[1], arms[0], thickness);
         return vec![[span[0], span[1], low, high]];
@@ -98,11 +162,18 @@ fn strokes(arms: [u8; 2], sides: [u8; 2], span: [f32; 2], center: [f32; 2], thic
             continue;
         }
         let mut push = |inner: f32, low: f32, high: f32| {
-            strokes.push(if before { [span[0], inner, low, high] } else { [inner, span[1], low, high] });
+            strokes.push(if before {
+                [span[0], inner, low, high]
+            } else {
+                [inner, span[1], low, high]
+            });
         };
         let (low, high) = edges(center[1], weight, thickness);
         if weight == 3 {
-            for (line, (top, bottom)) in [(low, low + thickness), (high - thickness, high)].into_iter().enumerate() {
+            for (line, (top, bottom)) in [(low, low + thickness), (high - thickness, high)]
+                .into_iter()
+                .enumerate()
+            {
                 let (near, far) = (sides[line], sides[1 - line]);
                 let inner = match (before, near != 0) {
                     (true, true) => reach(near).0,
@@ -121,7 +192,15 @@ fn strokes(arms: [u8; 2], sides: [u8; 2], span: [f32; 2], center: [f32; 2], thic
     strokes
 }
 
-fn blocks(ch: u32, area: Area, x: f32, y: f32, width: f32, height: f32, color: [f32; 4]) -> Vec<Quad> {
+fn blocks(
+    ch: u32,
+    area: Area,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    color: [f32; 4],
+) -> Vec<Quad> {
     // Edges in eighths of the cell, so a fraction lands on the same pixel in every cell.
     let rect = |left: u32, top: u32, right: u32, bottom: u32, color: [f32; 4]| {
         let across = |eighth: u32| match eighth {
@@ -134,9 +213,23 @@ fn blocks(ch: u32, area: Area, x: f32, y: f32, width: f32, height: f32, color: [
             8 => area.bottom,
             _ => (y + height * eighth as f32 / 8.0).round(),
         };
-        Quad::new(across(left), down(top), across(right) - across(left), down(bottom) - down(top), color)
+        Quad::new(
+            across(left),
+            down(top),
+            across(right) - across(left),
+            down(bottom) - down(top),
+            color,
+        )
     };
-    let shade = |alpha: f32| vec![rect(0, 0, 8, 8, [color[0], color[1], color[2], color[3] * alpha])];
+    let shade = |alpha: f32| {
+        vec![rect(
+            0,
+            0,
+            8,
+            8,
+            [color[0], color[1], color[2], color[3] * alpha],
+        )]
+    };
     match ch {
         0x2580 => vec![rect(0, 0, 8, 4, color)],
         0x2581..=0x2588 => vec![rect(0, 0x2588 - ch, 8, 8, color)],

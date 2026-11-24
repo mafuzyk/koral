@@ -17,6 +17,7 @@ arboard = { version = "3.7.0", default-features = false, features = ["wayland-da
 base64 = "0.22"
 flate2 = "1.1.10"
 glyphon = "0.12"
+memchr = "2"
 png = "0.18.1"
 polling = "3.11.0"
 pollster = "1.0.1"

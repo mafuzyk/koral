@@ -40,40 +40,82 @@ pub struct Field {
 }
 
 const ITALIC_CHOICES: &[&str] = &["oblique", "italic"];
+const PERMISSION_CHOICES: &[&str] = &["allow", "ask", "deny"];
 
-pub const FIELDS: [Field; 12] = [
-    Field { section: Section::Appearance, key: "theme", label: "Theme", kind: Kind::Theme },
-    Field { section: Section::Appearance, key: "matugen", label: "Colours from matugen", kind: Kind::Toggle },
+pub const FIELDS: [Field; 15] = [
+    Field {
+        section: Section::Appearance,
+        key: "theme",
+        label: "Theme",
+        kind: Kind::Theme,
+    },
+    Field {
+        section: Section::Appearance,
+        key: "matugen",
+        label: "Colours from matugen",
+        kind: Kind::Toggle,
+    },
+    Field {
+        section: Section::Appearance,
+        key: "window_decorations",
+        label: "System title bar",
+        kind: Kind::Toggle,
+    },
     Field {
         section: Section::Appearance,
         key: "opacity",
         label: "Opacity",
-        kind: Kind::Number { min: 0.1, max: 1.0, step: 0.05 },
+        kind: Kind::Number {
+            min: 0.1,
+            max: 1.0,
+            step: 0.05,
+        },
     },
     Field {
         section: Section::Appearance,
         key: "padding",
         label: "Padding",
-        kind: Kind::Number { min: 0.0, max: 64.0, step: 2.0 },
+        kind: Kind::Number {
+            min: 0.0,
+            max: 64.0,
+            step: 2.0,
+        },
     },
-    Field { section: Section::Typography, key: "font", label: "Font", kind: Kind::Font },
+    Field {
+        section: Section::Typography,
+        key: "font",
+        label: "Font",
+        kind: Kind::Font,
+    },
     Field {
         section: Section::Typography,
         key: "font_size",
         label: "Font size",
-        kind: Kind::Number { min: 6.0, max: 72.0, step: 0.5 },
+        kind: Kind::Number {
+            min: 6.0,
+            max: 72.0,
+            step: 0.5,
+        },
     },
     Field {
         section: Section::Typography,
         key: "font_weight",
         label: "Regular weight",
-        kind: Kind::Number { min: 100.0, max: 900.0, step: 100.0 },
+        kind: Kind::Number {
+            min: 100.0,
+            max: 900.0,
+            step: 100.0,
+        },
     },
     Field {
         section: Section::Typography,
         key: "bold_weight",
         label: "Bold weight",
-        kind: Kind::Number { min: 100.0, max: 900.0, step: 100.0 },
+        kind: Kind::Number {
+            min: 100.0,
+            max: 900.0,
+            step: 100.0,
+        },
     },
     Field {
         section: Section::Typography,
@@ -81,14 +123,40 @@ pub const FIELDS: [Field; 12] = [
         label: "Italic style",
         kind: Kind::Choice(ITALIC_CHOICES),
     },
-    Field { section: Section::Terminal, key: "shell", label: "Shell for new tabs", kind: Kind::Text },
+    Field {
+        section: Section::Terminal,
+        key: "shell",
+        label: "Shell for new tabs",
+        kind: Kind::Text,
+    },
     Field {
         section: Section::Terminal,
         key: "scrollback",
         label: "Scrollback lines",
-        kind: Kind::Number { min: 0.0, max: 1_000_000.0, step: 1000.0 },
+        kind: Kind::Number {
+            min: 0.0,
+            max: 1_000_000.0,
+            step: 1000.0,
+        },
     },
-    Field { section: Section::Terminal, key: "clipboard_read", label: "Clipboard read (OSC 52)", kind: Kind::Toggle },
+    Field {
+        section: Section::Terminal,
+        key: "clipboard_read",
+        label: "Clipboard read (OSC 52)",
+        kind: Kind::Toggle,
+    },
+    Field {
+        section: Section::Terminal,
+        key: "clipboard_write",
+        label: "Clipboard write (OSC 52)",
+        kind: Kind::Choice(PERMISSION_CHOICES),
+    },
+    Field {
+        section: Section::Terminal,
+        key: "notifications",
+        label: "Notifications (OSC 777/9)",
+        kind: Kind::Choice(PERMISSION_CHOICES),
+    },
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,7 +212,11 @@ pub struct Picker {
 
 impl Default for Picker {
     fn default() -> Self {
-        Self { kind: PickerKind::Font, query: String::new(), selected: 0 }
+        Self {
+            kind: PickerKind::Font,
+            query: String::new(),
+            selected: 0,
+        }
     }
 }
 
@@ -159,11 +231,17 @@ pub struct Settings {
 
 impl Settings {
     pub fn new(fonts: Vec<String>) -> Self {
-        Self { fonts, ..Self::default() }
+        Self {
+            fonts,
+            ..Self::default()
+        }
     }
 
     pub fn preview_theme(&self) -> Option<&'static str> {
-        let picker = self.picker.as_ref().filter(|p| p.kind == PickerKind::Theme)?;
+        let picker = self
+            .picker
+            .as_ref()
+            .filter(|p| p.kind == PickerKind::Theme)?;
         self.found_themes().get(picker.selected).map(|info| info.id)
     }
 
@@ -177,12 +255,16 @@ impl Settings {
         let kind = FIELDS[self.selected].kind;
         match kind {
             Kind::Toggle => match command {
-                Command::Less | Command::More | Command::Confirm => return flip(self.selected, config),
+                Command::Less | Command::More | Command::Confirm => {
+                    return flip(self.selected, config);
+                }
                 _ => {}
             },
             Kind::Choice(choices) => match command {
                 Command::Less => return cycle_choice(self.selected, -1, choices, config),
-                Command::More | Command::Confirm => return cycle_choice(self.selected, 1, choices, config),
+                Command::More | Command::Confirm => {
+                    return cycle_choice(self.selected, 1, choices, config);
+                }
                 _ => {}
             },
             Kind::Theme => match command {
@@ -190,8 +272,15 @@ impl Settings {
                 Command::More => return cycle_theme(1, config),
                 Command::Confirm => {
                     let current = config.theme.as_deref().unwrap_or("sharky");
-                    let selected = BUILTINS.iter().position(|info| info.id == current).unwrap_or(0);
-                    self.picker = Some(Picker { kind: PickerKind::Theme, query: String::new(), selected });
+                    let selected = BUILTINS
+                        .iter()
+                        .position(|info| info.id == current)
+                        .unwrap_or(0);
+                    self.picker = Some(Picker {
+                        kind: PickerKind::Theme,
+                        query: String::new(),
+                        selected,
+                    });
                     return Outcome::Nothing;
                 }
                 _ => {}
@@ -207,8 +296,16 @@ impl Settings {
                 self.editing = Some(value(self.selected, config));
             }
             Command::Confirm if kind == Kind::Font => {
-                let selected = self.fonts.iter().position(|name| *name == config.font).unwrap_or(0);
-                self.picker = Some(Picker { kind: PickerKind::Font, query: String::new(), selected });
+                let selected = self
+                    .fonts
+                    .iter()
+                    .position(|name| *name == config.font)
+                    .unwrap_or(0);
+                self.picker = Some(Picker {
+                    kind: PickerKind::Font,
+                    query: String::new(),
+                    selected,
+                });
             }
             Command::Cancel => return Outcome::Close,
             _ => {}
@@ -273,7 +370,11 @@ impl Settings {
             return Vec::new();
         };
         let query = picker.query.to_lowercase();
-        self.fonts.iter().map(String::as_str).filter(|name| name.to_lowercase().contains(&query)).collect()
+        self.fonts
+            .iter()
+            .map(String::as_str)
+            .filter(|name| name.to_lowercase().contains(&query))
+            .collect()
     }
 
     /// Matching built-in themes when the theme picker is open.
@@ -285,7 +386,9 @@ impl Settings {
         BUILTINS
             .iter()
             .copied()
-            .filter(|info| info.id.to_lowercase().contains(&query) || info.name.to_lowercase().contains(&query))
+            .filter(|info| {
+                info.id.to_lowercase().contains(&query) || info.name.to_lowercase().contains(&query)
+            })
             .collect()
     }
 
@@ -312,7 +415,10 @@ impl Settings {
         let picker = self.picker.as_ref()?;
         match picker.kind {
             PickerKind::Font => self.found().get(picker.selected).map(|s| (*s).to_string()),
-            PickerKind::Theme => self.found_themes().get(picker.selected).map(|info| info.id.to_string()),
+            PickerKind::Theme => self
+                .found_themes()
+                .get(picker.selected)
+                .map(|info| info.id.to_string()),
         }
     }
 
@@ -321,10 +427,17 @@ impl Settings {
             return;
         }
         let rows = form_rows();
-        let Some(pos) = rows.iter().position(|r| matches!(r, FormRow::Field(i) if *i == self.selected)) else {
+        let Some(pos) = rows
+            .iter()
+            .position(|r| matches!(r, FormRow::Field(i) if *i == self.selected))
+        else {
             return;
         };
-        let start = if pos > 0 && matches!(rows[pos - 1], FormRow::Header(_)) { pos - 1 } else { pos };
+        let start = if pos > 0 && matches!(rows[pos - 1], FormRow::Header(_)) {
+            pos - 1
+        } else {
+            pos
+        };
         if start < self.scroll {
             self.scroll = start;
         } else if pos >= self.scroll + capacity {
@@ -348,7 +461,11 @@ impl Settings {
 }
 
 fn flip(field: usize, config: &Config) -> Outcome {
-    let next = if value(field, config) == "on" { "off" } else { "on" };
+    let next = if value(field, config) == "on" {
+        "off"
+    } else {
+        "on"
+    };
     Outcome::Change(FIELDS[field].key, next.to_string())
 }
 
@@ -369,7 +486,12 @@ fn cycle_theme(dir: isize, config: &Config) -> Outcome {
 }
 
 fn step(field: usize, direction: f32, config: &Config) -> Outcome {
-    let Field { key, kind: Kind::Number { min, max, step }, .. } = FIELDS[field] else {
+    let Field {
+        key,
+        kind: Kind::Number { min, max, step },
+        ..
+    } = FIELDS[field]
+    else {
         return Outcome::Nothing;
     };
     let current: f32 = value(field, config).parse().unwrap_or(min);
@@ -398,6 +520,12 @@ pub fn value(field: usize, config: &Config) -> String {
     match FIELDS[field].key {
         "theme" => config.theme.clone().unwrap_or_else(|| "sharky".to_string()),
         "matugen" => if config.matugen { "on" } else { "off" }.to_string(),
+        "window_decorations" => if config.window_decorations {
+            "on"
+        } else {
+            "off"
+        }
+        .to_string(),
         "opacity" => config.opacity.to_string(),
         "padding" => config.padding.to_string(),
         "font" => config.font.clone(),
@@ -408,6 +536,8 @@ pub fn value(field: usize, config: &Config) -> String {
         "shell" => config.shell.clone().unwrap_or_default(),
         "scrollback" => config.scrollback.to_string(),
         "clipboard_read" => if config.clipboard_read { "on" } else { "off" }.to_string(),
+        "clipboard_write" => config.clipboard_write.as_str().to_string(),
+        "notifications" => config.notifications.as_str().to_string(),
         _ => String::new(),
     }
 }
@@ -426,7 +556,9 @@ pub fn visible(selected: usize, count: usize, capacity: usize) -> std::ops::Rang
     if capacity == 0 {
         return 0..0;
     }
-    let first = selected.saturating_sub(capacity / 2).min(count.saturating_sub(capacity));
+    let first = selected
+        .saturating_sub(capacity / 2)
+        .min(count.saturating_sub(capacity));
     first..(first + capacity).min(count)
 }
 
@@ -451,7 +583,12 @@ impl SettingsView {
         let container_x = ((width - max_w) / 2.0).max(pad * 0.5);
         let container_y = strip + pad * 0.75;
         let container_h = (height - container_y - pad * 0.75).max(120.0);
-        let container = Rect { x: container_x, y: container_y, width: max_w, height: container_h };
+        let container = Rect {
+            x: container_x,
+            y: container_y,
+            width: max_w,
+            height: container_h,
+        };
 
         let row_height = (cell_height + 9.0 * scale).round().max(18.0);
         let header_y = container.y;
@@ -468,11 +605,29 @@ impl SettingsView {
             let right_x = container.x + left_w + col_gap;
             let right_w = (container.x + max_w - right_x).max(120.0);
             (
-                Rect { x: container.x, y: list_y, width: left_w, height: list_h },
-                Some(Rect { x: right_x, y: list_y, width: right_w, height: list_h }),
+                Rect {
+                    x: container.x,
+                    y: list_y,
+                    width: left_w,
+                    height: list_h,
+                },
+                Some(Rect {
+                    x: right_x,
+                    y: list_y,
+                    width: right_w,
+                    height: list_h,
+                }),
             )
         } else {
-            (Rect { x: container.x, y: list_y, width: max_w, height: list_h }, None)
+            (
+                Rect {
+                    x: container.x,
+                    y: list_y,
+                    width: max_w,
+                    height: list_h,
+                },
+                None,
+            )
         };
         let visible_rows = ((list_h / row_height) as usize).max(1);
         let arrow_width = (22.0 * scale).round();
@@ -504,7 +659,8 @@ impl SettingsView {
             Kind::Theme => 148.0 * self.scale,
             _ => return None,
         };
-        let less_x = (more_x - value_span - self.arrow_width).max(self.left.x + self.left.width * 0.42);
+        let less_x =
+            (more_x - value_span - self.arrow_width).max(self.left.x + self.left.width * 0.42);
         Some((less_x, more_x))
     }
 
@@ -532,7 +688,11 @@ pub fn tab_zone(view: SettingsView, x: f32, y: f32, settings: &Settings) -> Zone
         let Some(row) = visual.checked_sub(1) else {
             return Zone::Inside;
         };
-        return if row < view.picker_rows() { Zone::Row(row) } else { Zone::Inside };
+        return if row < view.picker_rows() {
+            Zone::Row(row)
+        } else {
+            Zone::Inside
+        };
     }
 
     let rows = form_rows();

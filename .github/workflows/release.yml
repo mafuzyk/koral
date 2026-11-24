@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   binary:
@@ -35,12 +36,30 @@ jobs:
         run: cargo test --release --locked
       - name: Build
         run: cargo build --release --locked
+      - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
       - name: Package
         run: |
           ./target/release/koral --version
           cp target/release/koral assets/koral.desktop assets/koral.svg .
           tar -czf koral-x86_64-linux.tar.gz koral koral.desktop koral.svg LICENSE
+          sha256sum koral-x86_64-linux.tar.gz > SHA256SUMS
+      - name: Sign
+        run: |
+          cosign sign-blob --yes \
+            --output-signature koral-x86_64-linux.tar.gz.sig \
+            --output-certificate koral-x86_64-linux.tar.gz.pem \
+            koral-x86_64-linux.tar.gz
+          cosign verify-blob \
+            --signature koral-x86_64-linux.tar.gz.sig \
+            --certificate koral-x86_64-linux.tar.gz.pem \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@.*" \
+            koral-x86_64-linux.tar.gz
       - name: Publish
         run: |
-          gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --generate-notes --title "koral ${TAG#v}"
-          gh release upload "$TAG" koral-x86_64-linux.tar.gz
+          case "$TAG" in
+            *-alpha*|*-beta*|*-rc*) prerelease=(--prerelease) ;;
+            *) prerelease=() ;;
+          esac
+          gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --generate-notes --title "koral ${TAG#v}" "${prerelease[@]}"
+          gh release upload "$TAG" koral-x86_64-linux.tar.gz SHA256SUMS koral-x86_64-linux.tar.gz.sig koral-x86_64-linux.tar.gz.pem

@@ -2,6 +2,15 @@ use std::io::Write;
 use std::sync::OnceLock;
 use std::time::Instant;
 
+pub fn startup(stage: &str) {
+    static START: OnceLock<Option<Instant>> = OnceLock::new();
+    if let Some(start) =
+        START.get_or_init(|| std::env::var_os("KORAL_STARTUP_LOG").map(|_| Instant::now()))
+    {
+        eprintln!("startup: {stage} {}", start.elapsed().as_micros());
+    }
+}
+
 /// A frame past this is a stutter worth a line: a 60 Hz refresh gives 16 ms.
 const SLOW: f32 = 8.0;
 
@@ -78,7 +87,11 @@ fn log() -> Option<&'static std::fs::File> {
     static LOG: OnceLock<Option<std::fs::File>> = OnceLock::new();
     LOG.get_or_init(|| {
         let path = std::env::var_os("KORAL_FRAME_LOG")?;
-        std::fs::OpenOptions::new().append(true).create(true).open(path).ok()
+        std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(path)
+            .ok()
     })
     .as_ref()
 }
@@ -118,7 +131,11 @@ pub fn note(cost: &Cost) {
         worst.colors,
         u8::from(worst.non_ascii),
         worst.again,
-        if worst.face.is_empty() { "?" } else { worst.face.as_str() },
+        if worst.face.is_empty() {
+            "?"
+        } else {
+            worst.face.as_str()
+        },
         u8::from(worst.fallback),
         worst.codes
     );
@@ -127,5 +144,9 @@ pub fn note(cost: &Cost) {
 /// The warm-up runs once, off the frame: one line says it happened, what it cost and what it touched.
 pub fn warmed(millis: f32, faces: &[String], sample: &str) {
     let Some(mut file) = log() else { return };
-    let _ = writeln!(file, "warm {millis:.1}ms faces={} sample=\"{sample}\"", faces.join(","));
+    let _ = writeln!(
+        file,
+        "warm {millis:.1}ms faces={} sample=\"{sample}\"",
+        faces.join(",")
+    );
 }

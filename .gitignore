@@ -5,3 +5,4 @@
 /packaging/pkg/
 /aur-koral/
 /docs/
+__pycache__/

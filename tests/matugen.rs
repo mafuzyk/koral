@@ -6,7 +6,11 @@ use koral::theme::{Theme, hex};
 const NEW: &str = "[templates.koral]\ninput_path = \"/c/koral/matugen.template\"\noutput_path = \"/c/koral/matugen.colors\"\n";
 
 fn added(source: &str) -> Option<String> {
-    add_template(source, "/c/koral/matugen.template".as_ref(), "/c/koral/matugen.colors".as_ref())
+    add_template(
+        source,
+        "/c/koral/matugen.template".as_ref(),
+        "/c/koral/matugen.colors".as_ref(),
+    )
 }
 
 #[test]
@@ -55,11 +59,21 @@ fn only_an_executable_matugen_on_the_path_counts() {
 
 #[test]
 fn the_template_sets_every_colour_of_the_theme() {
-    let colors = TEMPLATE.lines().map(|line| format!("{} #010203\n", line.split(' ').next().unwrap()));
+    let colors = TEMPLATE
+        .lines()
+        .map(|line| format!("{} #010203\n", line.split(' ').next().unwrap()));
     let theme = Theme::with_colors(&colors.collect::<String>());
     let color = hex("#010203");
     assert!(theme.ansi.iter().all(|ansi| Some(*ansi) == color));
-    for slot in [theme.background, theme.foreground, theme.cursor, theme.accent, theme.success, theme.failure, theme.muted] {
+    for slot in [
+        theme.background,
+        theme.foreground,
+        theme.cursor,
+        theme.accent,
+        theme.success,
+        theme.failure,
+        theme.muted,
+    ] {
         assert_eq!(Some(slot), color);
     }
 }

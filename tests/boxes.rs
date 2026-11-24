@@ -10,8 +10,14 @@ fn cell(ch: char) -> Option<Vec<Quad>> {
 fn reaches(quads: &[Quad]) -> (f32, f32, f32, f32) {
     let left = quads.iter().map(|quad| quad.x).fold(f32::MAX, f32::min);
     let top = quads.iter().map(|quad| quad.y).fold(f32::MAX, f32::min);
-    let right = quads.iter().map(|quad| quad.x + quad.width).fold(0.0, f32::max);
-    let bottom = quads.iter().map(|quad| quad.y + quad.height).fold(0.0, f32::max);
+    let right = quads
+        .iter()
+        .map(|quad| quad.x + quad.width)
+        .fold(0.0, f32::max);
+    let bottom = quads
+        .iter()
+        .map(|quad| quad.y + quad.height)
+        .fold(0.0, f32::max);
     (left, top, right, bottom)
 }
 
@@ -19,7 +25,10 @@ fn reaches(quads: &[Quad]) -> (f32, f32, f32, f32) {
 fn a_vertical_line_spans_the_cell() {
     let quads = cell('│').unwrap();
     assert_eq!(quads.len(), 1);
-    assert_eq!((quads[0].y, quads[0].height, quads[0].width), (0.0, 20.0, 2.0));
+    assert_eq!(
+        (quads[0].y, quads[0].height, quads[0].width),
+        (0.0, 20.0, 2.0)
+    );
     assert_eq!(quads[0].x, 4.0);
 }
 
@@ -27,7 +36,10 @@ fn a_vertical_line_spans_the_cell() {
 fn a_horizontal_line_spans_the_cell() {
     let quads = cell('─').unwrap();
     assert_eq!(quads.len(), 1);
-    assert_eq!((quads[0].x, quads[0].width, quads[0].height), (0.0, 10.0, 2.0));
+    assert_eq!(
+        (quads[0].x, quads[0].width, quads[0].height),
+        (0.0, 10.0, 2.0)
+    );
 }
 
 #[test]
@@ -44,7 +56,10 @@ fn a_heavy_line_is_twice_as_thick() {
 fn a_corner_has_no_notch() {
     let quads = cell('┌').unwrap();
     assert_eq!(reaches(&quads), (4.0, 9.0, 10.0, 20.0));
-    assert_eq!(quads.iter().map(|quad| quad.y).fold(f32::MAX, f32::min), 9.0);
+    assert_eq!(
+        quads.iter().map(|quad| quad.y).fold(f32::MAX, f32::min),
+        9.0
+    );
     assert!(quads.iter().any(|quad| quad.x == 4.0 && quad.y == 9.0));
 }
 
@@ -126,14 +141,25 @@ fn an_arc_reaches_the_edges_it_points_at() {
 #[test]
 fn an_arc_curves_around_the_inside_of_its_corner() {
     let quads = cell('╭').unwrap();
-    assert!(quads.iter().any(|quad| quad.shape == Shape::Arc { x: 10.0, y: 15.0, radius: 5.0 }));
+    assert!(quads.iter().any(|quad| quad.shape
+        == Shape::Arc {
+            x: 10.0,
+            y: 15.0,
+            radius: 5.0
+        }));
 }
 
 #[test]
 fn an_arc_meets_a_line_in_the_next_cell() {
     let line = cell('─').unwrap();
     let curve = cell('╰').unwrap();
-    assert_eq!(curve.iter().map(|quad| quad.y + quad.height).fold(0.0, f32::max), line[0].y + line[0].height);
+    assert_eq!(
+        curve
+            .iter()
+            .map(|quad| quad.y + quad.height)
+            .fold(0.0, f32::max),
+        line[0].y + line[0].height
+    );
 }
 
 #[test]

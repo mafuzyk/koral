@@ -120,12 +120,18 @@ fn at_prompt(cwd: &str) -> BlockStore {
 
 #[test]
 fn title_is_the_directory_name_at_a_prompt() {
-    assert_eq!(title(&at_prompt("/home/mafu/koral"), None, Some("/home/mafu")), "koral");
+    assert_eq!(
+        title(&at_prompt("/home/mafu/koral"), None, Some("/home/mafu")),
+        "koral"
+    );
 }
 
 #[test]
 fn title_is_a_tilde_at_home() {
-    assert_eq!(title(&at_prompt("/home/mafu"), None, Some("/home/mafu")), "~");
+    assert_eq!(
+        title(&at_prompt("/home/mafu"), None, Some("/home/mafu")),
+        "~"
+    );
 }
 
 #[test]
@@ -202,12 +208,22 @@ fn running(command: &str) -> BlockStore {
 
 #[test]
 fn a_running_program_names_the_tab() {
-    assert_eq!(title(&running("nvim"), Some("notes.md - nvim"), None), "notes.md - nvim");
+    assert_eq!(
+        title(&running("nvim"), Some("notes.md - nvim"), None),
+        "notes.md - nvim"
+    );
 }
 
 #[test]
 fn the_prompt_ignores_a_stale_title() {
-    assert_eq!(title(&at_prompt("/home/mafu/koral"), Some("notes.md - nvim"), None), "koral");
+    assert_eq!(
+        title(
+            &at_prompt("/home/mafu/koral"),
+            Some("notes.md - nvim"),
+            None
+        ),
+        "koral"
+    );
 }
 
 #[test]
@@ -233,20 +249,44 @@ fn clean_title_cuts_a_long_title() {
 
 #[test]
 fn a_bell_in_the_tab_in_view_does_nothing() {
-    assert_eq!(ring(true, true), Ring { mark: false, urgent: false });
+    assert_eq!(
+        ring(true, true),
+        Ring {
+            mark: false,
+            urgent: false
+        }
+    );
 }
 
 #[test]
 fn a_bell_in_another_tab_marks_it() {
-    assert_eq!(ring(false, true), Ring { mark: true, urgent: false });
+    assert_eq!(
+        ring(false, true),
+        Ring {
+            mark: true,
+            urgent: false
+        }
+    );
 }
 
 #[test]
 fn a_bell_behind_another_window_asks_for_attention() {
-    assert_eq!(ring(true, false), Ring { mark: false, urgent: true });
+    assert_eq!(
+        ring(true, false),
+        Ring {
+            mark: false,
+            urgent: true
+        }
+    );
 }
 
 #[test]
 fn a_bell_in_a_hidden_tab_does_both() {
-    assert_eq!(ring(false, false), Ring { mark: true, urgent: true });
+    assert_eq!(
+        ring(false, false),
+        Ring {
+            mark: true,
+            urgent: true
+        }
+    );
 }

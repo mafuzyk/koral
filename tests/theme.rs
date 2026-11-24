@@ -31,10 +31,19 @@ fn explicit_colours_pass_through() {
 #[test]
 fn named_colours_come_from_the_theme() {
     let theme = Theme::default();
-    assert_eq!(resolve(Color::Named(NamedColor::Background)), theme.background);
-    assert_eq!(resolve(Color::Named(NamedColor::Foreground)), theme.foreground);
+    assert_eq!(
+        resolve(Color::Named(NamedColor::Background)),
+        theme.background
+    );
+    assert_eq!(
+        resolve(Color::Named(NamedColor::Foreground)),
+        theme.foreground
+    );
     assert_eq!(resolve(Color::Named(NamedColor::Red)), theme.ansi[1]);
-    assert_eq!(resolve(Color::Named(NamedColor::BrightCyan)), theme.ansi[14]);
+    assert_eq!(
+        resolve(Color::Named(NamedColor::BrightCyan)),
+        theme.ansi[14]
+    );
 }
 
 #[test]
@@ -69,7 +78,11 @@ fn the_palette_keeps_text_readable_on_the_background() {
     let luminance = |c: Rgb| {
         let channel = |v: u8| {
             let v = f32::from(v) / 255.0;
-            if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+            if v <= 0.03928 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
         };
         0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
     };
@@ -96,7 +109,8 @@ fn a_damaged_colour_file_keeps_the_built_in_colours() {
 
 #[test]
 fn sharky_names_colour_a_theme_with_no_terminal_keys() {
-    let theme = Theme::with_sharky("coral abyss #010203\ncoral sea #0A0B0C\n", "theme.sharky").unwrap();
+    let theme =
+        Theme::with_sharky("coral abyss #010203\ncoral sea #0A0B0C\n", "theme.sharky").unwrap();
     assert_eq!(theme.background, rgb(1, 2, 3));
     assert_eq!(theme.accent, rgb(10, 11, 12));
     assert_eq!(theme.cursor, rgb(10, 11, 12));
@@ -105,7 +119,12 @@ fn sharky_names_colour_a_theme_with_no_terminal_keys() {
 #[test]
 fn terminal_keys_beat_sharky_names() {
     let source = "coral abyss #010203\ncoral ink #0A0B0C\nwave terminal.background @ink\n";
-    assert_eq!(Theme::with_sharky(source, "theme.sharky").unwrap().background, rgb(10, 11, 12));
+    assert_eq!(
+        Theme::with_sharky(source, "theme.sharky")
+            .unwrap()
+            .background,
+        rgb(10, 11, 12)
+    );
 }
 
 #[test]
@@ -116,7 +135,11 @@ fn terminal_keys_take_a_literal_colour() {
 
 #[test]
 fn keys_for_the_prompt_leave_the_terminal_alone() {
-    let theme = Theme::with_sharky("coral kelp #010203\nwave prompt.cwd @kelp\n", "theme.sharky").unwrap();
+    let theme = Theme::with_sharky(
+        "coral kelp #010203\nwave prompt.cwd @kelp\n",
+        "theme.sharky",
+    )
+    .unwrap();
     assert_eq!(theme.success, rgb(1, 2, 3));
     assert_eq!(theme.foreground, Theme::default().foreground);
 }
@@ -136,7 +159,11 @@ fn builtin_themes_resolve_and_have_readable_contrast() {
     let luminance = |c: Rgb| {
         let channel = |v: u8| {
             let v = f32::from(v) / 255.0;
-            if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+            if v <= 0.03928 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
         };
         0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
     };
@@ -152,6 +179,9 @@ fn builtin_themes_resolve_and_have_readable_contrast() {
     }
     assert!(Theme::builtin("unknown-theme").is_none());
     assert!(!is_builtin("unknown-theme"));
-    assert_eq!(Theme::resolve_named(Some("dracula")), Theme::builtin("dracula").unwrap());
+    assert_eq!(
+        Theme::resolve_named(Some("dracula")),
+        Theme::builtin("dracula").unwrap()
+    );
     assert_eq!(mix(rgb(0, 0, 0), rgb(100, 200, 50), 0.5), rgb(50, 100, 25));
 }

@@ -11,7 +11,7 @@ pub const MAX_IMAGE: usize = 64 * 1024 * 1024;
 const MAX_STORE: usize = 320 * 1024 * 1024;
 // A decode holds the output buffer and the RGBA copy at once, and neither may outgrow the store.
 const _: () = assert!(2 * MAX_IMAGE <= MAX_STORE);
-const MAX_TRANSFER: usize = 128 * 1024 * 1024;
+pub const MAX_TRANSFER: usize = 128 * 1024 * 1024;
 const MAX_CELLS: u32 = 1024;
 const ANCHOR_RANGE: u32 = 0x7FFE;
 const FIRST_AUTOMATIC_ID: u32 = 0x8000_0000;
@@ -37,7 +37,11 @@ pub enum Area {
     /// The cell the cursor is on.
     Cursor,
     /// One cell, and the z-index it must have when the client named one.
-    Cell { column: u32, row: u32, z: Option<i32> },
+    Cell {
+        column: u32,
+        row: u32,
+        z: Option<i32>,
+    },
     Column(u32),
     Row(u32),
     Z(i32),
@@ -169,15 +173,24 @@ impl Graphics {
     pub fn handle(&mut self, body: &[u8]) -> Outcome {
         if let Some(rest) = body.strip_prefix(b"G") {
             let split = rest.iter().position(|byte| *byte == b';');
-            let (control, payload) = split.map_or((rest, &rest[rest.len()..]), |at| (&rest[..at], &rest[at + 1..]));
+            let (control, payload) = split.map_or((rest, &rest[rest.len()..]), |at| {
+                (&rest[..at], &rest[at + 1..])
+            });
             trace(control, payload.len());
         }
         let Some((sent, payload)) = parse(body) else {
             return Outcome::default();
         };
-        let mut transfer = self.transfer.take().unwrap_or(Transfer { keys: sent, data: Vec::new(), too_big: false });
+        let mut transfer = self.transfer.take().unwrap_or(Transfer {
+            keys: sent,
+            data: Vec::new(),
+            too_big: false,
+        });
 
-        let payload = payload.strip_suffix(b"==").or(payload.strip_suffix(b"=")).unwrap_or(payload);
+        let payload = payload
+            .strip_suffix(b"==")
+            .or(payload.strip_suffix(b"="))
+            .unwrap_or(payload);
         if transfer.data.len() + payload.len() > MAX_TRANSFER {
             transfer.too_big = true;
             transfer.data = Vec::new();
@@ -197,19 +210,39 @@ impl Graphics {
         // Reading paths or shared memory would let any printed file read this machine, so a medium
         // that carries data must be answered with an error instead of being dropped.
         if matches!(keys.action, b't' | b'T' | b'q') && keys.medium != b'd' {
-            return Outcome { reply: reply(keys, Err("ENOTSUPPORTED:only direct transmission")), place: None, delete: None };
+            return Outcome {
+                reply: reply(keys, Err("ENOTSUPPORTED:only direct transmission")),
+                place: None,
+                delete: None,
+            };
         }
         match keys.action {
             b'd' => self.delete(keys),
             b'p' => match self.request(keys, keys.image) {
                 Some(request) if keys.virtual_placement => {
                     self.place_virtual(request);
-                    Outcome { reply: reply(keys, Ok(())), place: None, delete: None }
+                    Outcome {
+                        reply: reply(keys, Ok(())),
+                        place: None,
+                        delete: None,
+                    }
                 }
-                Some(request) => Outcome { reply: reply(keys, Ok(())), place: Some(request), delete: None },
-                None => Outcome { reply: reply(keys, Err("ENOENT:no such image")), place: None, delete: None },
+                Some(request) => Outcome {
+                    reply: reply(keys, Ok(())),
+                    place: Some(request),
+                    delete: None,
+                },
+                None => Outcome {
+                    reply: reply(keys, Err("ENOENT:no such image")),
+                    place: None,
+                    delete: None,
+                },
             },
-            b'q' => Outcome { reply: reply(keys, decode(transfer).map(|_| ())), place: None, delete: None },
+            b'q' => Outcome {
+                reply: reply(keys, decode(transfer).map(|_| ())),
+                place: None,
+                delete: None,
+            },
             b't' | b'T' => match decode(transfer) {
                 Ok(decoded) => {
                     let id = self.store(keys.image, decoded);
@@ -226,11 +259,23 @@ impl Graphics {
                     } else {
                         None
                     };
-                    Outcome { reply: reply(keys, Ok(())), place, delete: None }
+                    Outcome {
+                        reply: reply(keys, Ok(())),
+                        place,
+                        delete: None,
+                    }
                 }
-                Err(error) => Outcome { reply: reply(keys, Err(error)), place: None, delete: None },
+                Err(error) => Outcome {
+                    reply: reply(keys, Err(error)),
+                    place: None,
+                    delete: None,
+                },
             },
-            _ => Outcome { reply: reply(keys, Err("EINVAL:unknown action")), place: None, delete: None },
+            _ => Outcome {
+                reply: reply(keys, Err("EINVAL:unknown action")),
+                place: None,
+                delete: None,
+            },
         }
     }
 
@@ -244,7 +289,10 @@ impl Graphics {
         // A repaint of the same size keeps its placements: video frames and clients that refresh
         // one spot rely on the anchor staying on its cell. A different size makes the stored cell
         // rectangle meaningless, so the placements that used it go.
-        let was = self.images.get(&id).map(|image| (image.width, image.height));
+        let was = self
+            .images
+            .get(&id)
+            .map(|image| (image.width, image.height));
         self.forget(id);
         if was.is_some_and(|size| size != (decoded.width, decoded.height)) {
             self.placements.retain(|_, placement| placement.image != id);
@@ -254,21 +302,45 @@ impl Graphics {
         self.used += decoded.rgba.len();
         self.order.push_back(id);
         let generation = GENERATION.fetch_add(1, Ordering::Relaxed);
-        let Decoded { width, height, rgba } = decoded;
-        self.images.insert(id, Arc::new(Image { generation, width, height, rgba }));
+        let Decoded {
+            width,
+            height,
+            rgba,
+        } = decoded;
+        self.images.insert(
+            id,
+            Arc::new(Image {
+                generation,
+                width,
+                height,
+                rgba,
+            }),
+        );
 
         while self.used > MAX_STORE {
             // A preview nothing shows goes before an image a placement still keeps on screen; only
             // when every image has one does the oldest transmission go.
             let placed = |id: &u32| {
-                self.placements.values().any(|placement| placement.image == *id)
-                    || self.virtuals.values().any(|placement| placement.image == *id)
+                self.placements
+                    .values()
+                    .any(|placement| placement.image == *id)
+                    || self
+                        .virtuals
+                        .values()
+                        .any(|placement| placement.image == *id)
             };
-            let victim = self.order.iter().find(|id| !placed(id)).copied().or_else(|| self.order.front().copied());
+            let victim = self
+                .order
+                .iter()
+                .find(|id| !placed(id))
+                .copied()
+                .or_else(|| self.order.front().copied());
             let Some(victim) = victim else { break };
             self.forget(victim);
-            self.placements.retain(|_, placement| placement.image != victim);
-            self.virtuals.retain(|_, placement| placement.image != victim);
+            self.placements
+                .retain(|_, placement| placement.image != victim);
+            self.virtuals
+                .retain(|_, placement| placement.image != victim);
         }
         id
     }
@@ -286,7 +358,12 @@ impl Graphics {
         let [x, y, width, height] = keys.crop;
         let (x, y) = (x.min(image.width - 1), y.min(image.height - 1));
         let part = |size: u32, left: u32| if size == 0 { left } else { size.min(left) };
-        let crop = [x, y, part(width, image.width - x), part(height, image.height - y)];
+        let crop = [
+            x,
+            y,
+            part(width, image.width - x),
+            part(height, image.height - y),
+        ];
         let (width, height) = (u64::from(crop[2]), u64::from(crop[3]));
         let (columns, rows) = (u64::from(keys.columns), u64::from(keys.rows));
 
@@ -316,22 +393,54 @@ impl Graphics {
     /// cell: a video repainting one spot must not pile anchors onto it. A rectangle with
     /// no cells is refused: it would hold a cell and draw nothing.
     pub fn place(&mut self, request: Request, here: &[u32]) -> Option<u32> {
-        let Request { image, number, columns, rows, crop, z, .. } = request;
+        let Request {
+            image,
+            number,
+            columns,
+            rows,
+            crop,
+            z,
+            ..
+        } = request;
         if columns == 0 || rows == 0 {
             return None;
         }
         let same = |placement: &Placement| placement.image == image && placement.number == number;
-        let placement = Placement { image, number, columns, rows, crop, z };
+        let placement = Placement {
+            image,
+            number,
+            columns,
+            rows,
+            crop,
+            z,
+        };
 
         // mpv sends each frame with no id, so nothing else ties a frame to the one before it.
         let frame = |id: u32| id >= FIRST_AUTOMATIC_ID;
         let replaces = |placement: &Placement| {
             let (old, size) = (placement.image, (placement.columns, placement.rows));
-            same(placement) || (frame(image) && frame(old) && number == placement.number && size == (columns, rows))
+            same(placement)
+                || (frame(image)
+                    && frame(old)
+                    && number == placement.number
+                    && size == (columns, rows))
         };
-        if let Some(anchor) = here.iter().find(|anchor| self.placements.get(anchor).is_some_and(replaces)).copied() {
-            let old = self.placements.insert(anchor, placement).map_or(image, |placement| placement.image);
-            if old != image && frame(old) && !self.placements.values().any(|placement| placement.image == old) {
+        if let Some(anchor) = here
+            .iter()
+            .find(|anchor| self.placements.get(anchor).is_some_and(replaces))
+            .copied()
+        {
+            let old = self
+                .placements
+                .insert(anchor, placement)
+                .map_or(image, |placement| placement.image);
+            if old != image
+                && frame(old)
+                && !self
+                    .placements
+                    .values()
+                    .any(|placement| placement.image == old)
+            {
                 self.forget(old);
             }
             return Some(anchor);
@@ -357,13 +466,19 @@ impl Graphics {
             crop: request.crop,
             z: request.z,
         };
-        self.virtuals.insert((request.image, request.number), placement);
+        self.virtuals
+            .insert((request.image, request.number), placement);
     }
 
     pub fn virtual_placement(&self, image: u32, number: u32) -> Option<&Placement> {
         self.virtuals.get(&(image, number)).or_else(|| {
             (number == 0)
-                .then(|| self.virtuals.iter().find(|((img, _), _)| *img == image).map(|(_, p)| p))
+                .then(|| {
+                    self.virtuals
+                        .iter()
+                        .find(|((img, _), _)| *img == image)
+                        .map(|(_, p)| p)
+                })
                 .flatten()
         })
     }
@@ -425,22 +540,34 @@ impl Graphics {
                 return Outcome::default();
             }
             b'i' => {
-                self.placements.retain(|_, placement| placement.image != keys.image || !chosen(placement));
-                self.virtuals.retain(|_, placement| placement.image != keys.image || !chosen(placement));
+                self.placements
+                    .retain(|_, placement| placement.image != keys.image || !chosen(placement));
+                self.virtuals
+                    .retain(|_, placement| placement.image != keys.image || !chosen(placement));
                 self.release(keys.image, free);
                 return Outcome::default();
             }
             b'r' => {
-                self.placements.retain(|_, placement| !(x..=y).contains(&placement.image));
-                self.virtuals.retain(|_, placement| !(x..=y).contains(&placement.image));
+                self.placements
+                    .retain(|_, placement| !(x..=y).contains(&placement.image));
+                self.virtuals
+                    .retain(|_, placement| !(x..=y).contains(&placement.image));
                 for id in x..=y {
                     self.release(id, free);
                 }
                 return Outcome::default();
             }
             b'c' => Area::Cursor,
-            b'p' => Area::Cell { column: cell(x), row: cell(y), z: None },
-            b'q' => Area::Cell { column: cell(x), row: cell(y), z: Some(keys.z) },
+            b'p' => Area::Cell {
+                column: cell(x),
+                row: cell(y),
+                z: None,
+            },
+            b'q' => Area::Cell {
+                column: cell(x),
+                row: cell(y),
+                z: Some(keys.z),
+            },
             b'x' => Area::Column(cell(x)),
             b'y' => Area::Row(cell(y)),
             b'z' => {
@@ -458,16 +585,32 @@ impl Graphics {
                 }
                 Area::Z(keys.z)
             }
-            _ => return Outcome { reply: reply(keys, Err("ENOTSUPPORTED:delete mode")), place: None, delete: None },
+            _ => {
+                return Outcome {
+                    reply: reply(keys, Err("ENOTSUPPORTED:delete mode")),
+                    place: None,
+                    delete: None,
+                };
+            }
         };
-        Outcome { reply: None, place: None, delete: Some(Delete { area, free }) }
+        Outcome {
+            reply: None,
+            place: None,
+            delete: Some(Delete { area, free }),
+        }
     }
 
     /// Frees an image once nothing shows it, which is what the capital delete modes do.
     fn release(&mut self, id: u32, free: bool) {
         if free
-            && !self.placements.values().any(|placement| placement.image == id)
-            && !self.virtuals.values().any(|placement| placement.image == id)
+            && !self
+                .placements
+                .values()
+                .any(|placement| placement.image == id)
+            && !self
+                .virtuals
+                .values()
+                .any(|placement| placement.image == id)
         {
             self.forget(id);
         }
@@ -507,7 +650,10 @@ impl Graphics {
 /// shaped line with its codepoints and face; plus one `warm ...` line when the startup font warm-up
 /// runs. Unset, it costs nothing. A diagnostic aid for reporting stutter, not a user setting.
 fn trace(control: &[u8], length: usize) {
-    note(&format!("{} payload={length}", String::from_utf8_lossy(control)));
+    note(&format!(
+        "{} payload={length}",
+        String::from_utf8_lossy(control)
+    ));
 }
 
 /// One line in the same log, for the geometry the protocol commands work out to.
@@ -515,7 +661,11 @@ fn note(line: &str) {
     static LOG: OnceLock<Option<std::fs::File>> = OnceLock::new();
     let Some(file) = LOG.get_or_init(|| {
         let path = std::env::var_os("KORAL_GRAPHICS_LOG")?;
-        std::fs::OpenOptions::new().append(true).create(true).open(path).ok()
+        std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(path)
+            .ok()
     }) else {
         return;
     };
@@ -525,7 +675,10 @@ fn note(line: &str) {
 
 fn parse(body: &[u8]) -> Option<(Keys, &[u8])> {
     let body = body.strip_prefix(b"G")?;
-    let split = body.iter().position(|byte| *byte == b';').unwrap_or(body.len());
+    let split = body
+        .iter()
+        .position(|byte| *byte == b';')
+        .unwrap_or(body.len());
     let (control, payload) = body.split_at(split);
 
     let mut keys = Keys::default();
@@ -569,7 +722,11 @@ fn reply(keys: Keys, result: Result<(), &str>) -> Option<String> {
     if silent || keys.image == 0 {
         return None;
     }
-    Some(format!("\x1b_Gi={};{}\x1b\\", keys.image, result.err().unwrap_or("OK")))
+    Some(format!(
+        "\x1b_Gi={};{}\x1b\\",
+        keys.image,
+        result.err().unwrap_or("OK")
+    ))
 }
 
 fn decode(transfer: &Transfer) -> Result<Decoded, &'static str> {
@@ -577,7 +734,9 @@ fn decode(transfer: &Transfer) -> Result<Decoded, &'static str> {
     if transfer.too_big {
         return Err("EFBIG:image too large");
     }
-    let raw = STANDARD_NO_PAD.decode(&transfer.data).map_err(|_| "EINVAL:bad base64")?;
+    let raw = STANDARD_NO_PAD
+        .decode(&transfer.data)
+        .map_err(|_| "EINVAL:bad base64")?;
     let raw = if keys.compressed { inflate(&raw)? } else { raw };
     match keys.format {
         24 | 32 => pixels(keys, &raw),
@@ -614,9 +773,17 @@ fn pixels(keys: Keys, raw: &[u8]) -> Result<Decoded, &'static str> {
     let rgba = if stride == 4 {
         raw.to_vec()
     } else {
-        raw.as_chunks::<3>().0.iter().flat_map(|[r, g, b]| [*r, *g, *b, 255]).collect()
+        raw.as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|[r, g, b]| [*r, *g, *b, 255])
+            .collect()
     };
-    Ok(Decoded { width, height, rgba })
+    Ok(Decoded {
+        width,
+        height,
+        rgba,
+    })
 }
 
 fn decode_png(raw: &[u8]) -> Result<Decoded, &'static str> {
@@ -631,7 +798,9 @@ fn decode_png(raw: &[u8]) -> Result<Decoded, &'static str> {
         return Err("EFBIG:image too large");
     }
     let mut buffer = vec![0; size];
-    let info = reader.next_frame(&mut buffer).map_err(|_| "EINVAL:bad png")?;
+    let info = reader
+        .next_frame(&mut buffer)
+        .map_err(|_| "EINVAL:bad png")?;
     let (width, height) = (info.width, info.height);
     if u64::from(width) * u64::from(height) * 4 > MAX_IMAGE as u64 {
         return Err("EFBIG:image too large");
@@ -640,10 +809,27 @@ fn decode_png(raw: &[u8]) -> Result<Decoded, &'static str> {
     let data = &buffer[..info.buffer_size()];
     let rgba = match info.color_type {
         png::ColorType::Rgba => data.to_vec(),
-        png::ColorType::Rgb => data.as_chunks::<3>().0.iter().flat_map(|[r, g, b]| [*r, *g, *b, 255]).collect(),
-        png::ColorType::GrayscaleAlpha => data.as_chunks::<2>().0.iter().flat_map(|[v, a]| [*v, *v, *v, *a]).collect(),
-        png::ColorType::Grayscale => data.iter().flat_map(|gray| [*gray, *gray, *gray, 255]).collect(),
+        png::ColorType::Rgb => data
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|[r, g, b]| [*r, *g, *b, 255])
+            .collect(),
+        png::ColorType::GrayscaleAlpha => data
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|[v, a]| [*v, *v, *v, *a])
+            .collect(),
+        png::ColorType::Grayscale => data
+            .iter()
+            .flat_map(|gray| [*gray, *gray, *gray, 255])
+            .collect(),
         png::ColorType::Indexed => return Err("EINVAL:bad png"),
     };
-    Ok(Decoded { width, height, rgba })
+    Ok(Decoded {
+        width,
+        height,
+        rgba,
+    })
 }

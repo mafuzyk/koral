@@ -131,6 +131,66 @@ fn nothing_starts_folded_and_toggling_is_the_only_way_in() {
 }
 
 #[test]
+fn in_prompt_tracks_the_prompt_phase() {
+    let mut store = BlockStore::default();
+    let now = Instant::now();
+    assert!(!store.in_prompt());
+
+    store.apply(Mark::PromptStart, now);
+    assert!(store.in_prompt());
+
+    store.apply(Mark::PromptEnd, now);
+    store.apply(cmd("ls"), now);
+    assert!(!store.in_prompt());
+
+    store.apply(Mark::CommandEnd(Some(0)), now);
+    assert!(!store.in_prompt());
+}
+
+#[test]
+fn observe_counts_line_feeds_only_while_the_prompt_is_open() {
+    let mut store = BlockStore::default();
+    let now = Instant::now();
+    store.apply(Mark::PromptStart, now);
+    store.observe(b"one\ntwo\n");
+    let id = store.apply(Mark::PromptEnd, now).unwrap();
+    assert_eq!(store.get(id).unwrap().prompt_breaks, 2);
+
+    store.observe(b"three\nfour\nfive\n");
+    assert_eq!(store.get(id).unwrap().prompt_breaks, 2);
+
+    store.apply(cmd("cat"), now);
+    store.observe(b"six\nseven\n");
+    assert_eq!(store.get(id).unwrap().prompt_breaks, 2);
+}
+
+#[test]
+fn observe_never_scans_bytes_outside_the_prompt_phase() {
+    let mut store = BlockStore::default();
+    let now = Instant::now();
+    store.observe(b"idle\n");
+    store.apply(Mark::PromptStart, now);
+    store.apply(Mark::PromptEnd, now);
+    store.apply(cmd("cat"), now);
+
+    let payload = vec![b'\n'; 64 * 1024];
+    store.observe(&payload);
+    store.apply(Mark::CommandEnd(Some(0)), now);
+    store.observe(&payload);
+
+    assert_eq!(
+        store.bytes_scanned(),
+        0,
+        "no scanning outside Phase::Prompt"
+    );
+
+    store.apply(Mark::PromptStart, now);
+    let before = store.bytes_scanned();
+    store.observe(&payload);
+    assert_eq!(store.bytes_scanned(), before + payload.len());
+}
+
+#[test]
 fn activity_follows_the_latest_command() {
     let mut store = BlockStore::default();
     let now = Instant::now();

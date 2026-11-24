@@ -1,7 +1,12 @@
 use koral::splits::{Axis, CloseResult, Dir, SplitTree};
 use koral::tabs::Rect;
 
-const AREA: Rect = Rect { x: 0.0, y: 0.0, width: 1002.0, height: 602.0 };
+const AREA: Rect = Rect {
+    x: 0.0,
+    y: 0.0,
+    width: 1002.0,
+    height: 602.0,
+};
 
 #[test]
 fn single_pane_layout_fills_area() {
@@ -23,7 +28,15 @@ fn splitting_activates_new_pane_and_divides_space() {
     assert_eq!(panes.len(), 2);
     assert_eq!(dividers.len(), 1);
     assert_eq!(panes[0].1.width, 500.0);
-    assert_eq!(dividers[0].rect, Rect { x: 500.0, y: 0.0, width: 2.0, height: 602.0 });
+    assert_eq!(
+        dividers[0].rect,
+        Rect {
+            x: 500.0,
+            y: 0.0,
+            width: 2.0,
+            height: 602.0
+        }
+    );
     assert_eq!(panes[1].1.x, 502.0);
     assert_eq!(panes[1].1.width, 500.0);
 }
@@ -76,10 +89,18 @@ fn resizing_and_divider_hit_test_stay_clamped() {
     let (panes, _) = tree.layout(AREA, 2.0);
     assert_eq!(panes[0].1.width, 850.0);
 
-    let div = tree.divider_at(AREA, 2.0, 4.0, 851.0, 100.0).expect("divider hit");
+    let div = tree
+        .divider_at(AREA, 2.0, 4.0, 851.0, 100.0)
+        .expect("divider hit");
     assert!(tree.set_ratio(&div.path, 0.25));
     let (panes, _) = tree.layout(AREA, 2.0);
     assert_eq!(panes[0].1.width, 250.0);
-    assert_eq!(tree.pane_at(AREA, 2.0, 10.0, 10.0).map(|(id, _)| id), Some(1));
-    assert_eq!(tree.pane_at(AREA, 2.0, 400.0, 10.0).map(|(id, _)| id), Some(2));
+    assert_eq!(
+        tree.pane_at(AREA, 2.0, 10.0, 10.0).map(|(id, _)| id),
+        Some(1)
+    );
+    assert_eq!(
+        tree.pane_at(AREA, 2.0, 400.0, 10.0).map(|(id, _)| id),
+        Some(2)
+    );
 }

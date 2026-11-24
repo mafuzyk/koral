@@ -32,6 +32,9 @@ pub struct Session<L> {
     columns: usize,
     /// Whether the program is on the alternate screen, which takes its images with it.
     alt_screen: bool,
+    /// Bumped for grid edits and screen switches that the row projection cannot infer from
+    /// block revisions alone.
+    grid_revision: u64,
 }
 
 impl<L: EventListener> Session<L> {
@@ -40,6 +43,7 @@ impl<L: EventListener> Session<L> {
             alt_screen: term.mode().contains(TermMode::ALT_SCREEN),
             columns: term.grid().columns(),
             term,
+            grid_revision: 0,
             blocks: BlockStore::default(),
             graphics: Graphics::default(),
             replies: Vec::new(),
@@ -51,80 +55,122 @@ impl<L: EventListener> Session<L> {
     }
 
     pub fn feed(&mut self, bytes: &[u8], now: Instant) {
-        let Self { term, blocks, graphics, replies, notices, parser, scanner, prompt_start, columns, alt_screen } =
-            self;
+        self.feed_batch(&[bytes], now);
+    }
+
+    /// Increases whenever grid content, dimensions or the visible screen change.
+    pub fn grid_revision(&self) -> u64 {
+        self.grid_revision
+    }
+
+    /// Call after a direct grid resize or other row-shaping edit from outside the PTY reader.
+    pub fn grid_changed(&mut self) {
+        self.grid_revision = self.grid_revision.wrapping_add(1);
+    }
+
+    /// Processes a whole drained burst while the caller holds one lock across it.
+    /// Chunks keep their stream order, so scanner state carries across them.
+    pub fn feed_batch(&mut self, chunks: &[&[u8]], now: Instant) {
+        let Self {
+            term,
+            blocks,
+            graphics,
+            replies,
+            notices,
+            parser,
+            scanner,
+            prompt_start,
+            columns,
+            alt_screen,
+            grid_revision,
+        } = self;
         let width = term.grid().columns();
         // shortcut: the row counts are read again on the next read, so a frame drawn
         // straight after a resize can still use the wrapping the prompt had before it.
         if width != *columns {
             *columns = width;
+            *grid_revision = grid_revision.wrapping_add(1);
             reflow(term, blocks);
         }
-        scanner.feed(bytes, &mut |piece| match piece {
-            Piece::Bytes(bytes) => {
-                parser.advance(term, bytes);
-                blocks.observe(bytes);
-                if graphics.has_placements() && bytes.iter().any(|byte| matches!(*byte, b'J' | b'c')) {
-                    prune_placements(term, graphics);
+        for bytes in chunks {
+            scanner.feed(bytes, &mut |piece| match piece {
+                Piece::Bytes(bytes) => {
+                    parser.advance(term, bytes);
+                    if !bytes.is_empty() {
+                        *grid_revision = grid_revision.wrapping_add(1);
+                    }
+                    blocks.observe(bytes);
+                    if graphics.has_placements()
+                        && bytes.iter().any(|byte| matches!(*byte, b'J' | b'c'))
+                    {
+                        prune_placements(term, graphics);
+                    }
                 }
-            }
-            Piece::Graphics(body) => {
-                if graphics.has_placements() {
-                    prune_placements(term, graphics);
-                }
-                let outcome = graphics.handle(body);
-                replies.extend(outcome.reply);
-                // Only a placement or a positional delete reads the grid; transfers, chunked
-                // payloads, queries and id deletes settle without it and may span many reads.
-                let needs_grid = outcome.place.is_some() || outcome.delete.is_some();
-                if needs_grid {
-                    with_flushed_sync(parser, term, |parser, term| {
-                        // The replay can leave the alternate screen: its images go before this one lands,
-                        // or the end-of-feed cleanup would take the image that just arrived.
+                Piece::Graphics(body) => {
+                    if graphics.has_placements() {
+                        prune_placements(term, graphics);
+                    }
+                    let outcome = graphics.handle(body);
+                    replies.extend(outcome.reply);
+                    // Only a placement or a positional delete reads the grid; transfers, chunked
+                    // payloads, queries and id deletes settle without it and may span many reads.
+                    let needs_grid = outcome.place.is_some() || outcome.delete.is_some();
+                    if needs_grid {
+                        *grid_revision = grid_revision.wrapping_add(1);
+                        with_flushed_sync(parser, term, |parser, term| {
+                            // The replay can leave the alternate screen: its images go before this one lands,
+                            // or the end-of-feed cleanup would take the image that just arrived.
+                            settle_alt(term, graphics, alt_screen);
+                            if let Some(delete) = outcome.delete {
+                                let anchors = targets(term, graphics, delete.area);
+                                graphics.drop(&anchors, delete.free);
+                            }
+                            if let Some(request) = outcome.place {
+                                place(term, parser, graphics, request);
+                            }
+                        });
+                    } else {
                         settle_alt(term, graphics, alt_screen);
-                        if let Some(delete) = outcome.delete {
-                            let anchors = targets(term, graphics, delete.area);
-                            graphics.drop(&anchors, delete.free);
+                    }
+                }
+                Piece::Status(query) => {
+                    let reply = with_flushed_sync(parser, term, |_, term| {
+                        status_reply(query, term.grid().cursor.template.flags)
+                    });
+                    replies.push(reply);
+                }
+                Piece::Mark(Mark::Notify { title, body }) => {
+                    notices.push(Notice {
+                        title: clean(&title, TITLE_LIMIT),
+                        body: clean(&body, BODY_LIMIT),
+                    });
+                }
+                Piece::Mark(mark) => {
+                    *grid_revision = grid_revision.wrapping_add(1);
+                    with_flushed_sync(parser, term, |_, term| {
+                        // A program on the alternate screen must not open a block, but the
+                        // shell's command end arrives there too when a program dies badly.
+                        if term.mode().contains(TermMode::ALT_SCREEN)
+                            && !matches!(mark, Mark::CommandEnd(_) | Mark::Cwd(_))
+                        {
+                            return;
                         }
-                        if let Some(request) = outcome.place {
-                            place(term, parser, graphics, request);
+                        if mark == Mark::PromptStart {
+                            let cursor = &term.grid().cursor;
+                            // A prompt printed at the last column wraps before its first character.
+                            *prompt_start = Some(Line(
+                                cursor.point.line.0 + i32::from(cursor.input_needs_wrap),
+                            ));
+                        }
+                        if let Some(id) = blocks.apply(mark, now) {
+                            let line = anchor(term, id, *prompt_start);
+                            let feeds = blocks.get(id).map_or(0, |block| block.prompt_breaks);
+                            blocks.set_prompt_lines(id, prompt_rows(term, line, feeds));
                         }
                     });
-                } else {
-                    settle_alt(term, graphics, alt_screen);
                 }
-            }
-            Piece::Status(query) => {
-                let reply = with_flushed_sync(parser, term, |_, term| {
-                    status_reply(query, term.grid().cursor.template.flags)
-                });
-                replies.push(reply);
-            }
-            Piece::Mark(Mark::Notify { title, body }) => {
-                notices.push(Notice { title: clean(&title, TITLE_LIMIT), body: clean(&body, BODY_LIMIT) });
-            }
-            Piece::Mark(mark) => {
-                with_flushed_sync(parser, term, |_, term| {
-                    // A program on the alternate screen must not open a block, but the
-                    // shell's command end arrives there too when a program dies badly.
-                    if term.mode().contains(TermMode::ALT_SCREEN)
-                        && !matches!(mark, Mark::CommandEnd(_) | Mark::Cwd(_))
-                    {
-                        return;
-                    }
-                    if mark == Mark::PromptStart {
-                        let cursor = &term.grid().cursor;
-                        // A prompt printed at the last column wraps before its first character.
-                        *prompt_start = Some(Line(cursor.point.line.0 + i32::from(cursor.input_needs_wrap)));
-                    }
-                    if let Some(id) = blocks.apply(mark, now) {
-                        let line = anchor(term, id, *prompt_start);
-                        let feeds = blocks.get(id).map_or(0, |block| block.prompt_breaks);
-                        blocks.set_prompt_lines(id, prompt_rows(term, line, feeds));
-                    }
-                });
-            }
-        });
+            });
+        }
         settle_alt(term, graphics, alt_screen);
     }
 }
@@ -196,8 +242,11 @@ fn status_reply(query: &[u8], flags: Flags) -> String {
     if query != b"m" {
         return "\x1bP0$r\x1b\\".to_string();
     }
-    let styles: String =
-        STYLES.iter().filter(|(flag, _)| flags.contains(*flag)).map(|(_, code)| format!(";{code}")).collect();
+    let styles: String = STYLES
+        .iter()
+        .filter(|(flag, _)| flags.contains(*flag))
+        .map(|(_, code)| format!(";{code}"))
+        .collect();
     format!("\x1bP1$r0{styles}m\x1b\\")
 }
 
@@ -256,9 +305,13 @@ fn reflow<L: EventListener>(term: &Term<L>, blocks: &mut BlockStore) {
     for number in grid.topmost_line().0..=grid.bottommost_line().0 {
         let line = Line(number);
         let anchored = grid[line][Column(0)].zerowidth().and_then(|extra| {
-            extra.iter().filter_map(|ch| (*ch as u32).checked_sub(base)).find(|id| blocks.get(*id).is_some())
+            extra
+                .iter()
+                .filter_map(|ch| (*ch as u32).checked_sub(base))
+                .find(|id| blocks.get(*id).is_some())
         });
-        let Some((id, feeds)) = anchored.and_then(|id| Some((id, blocks.get(id)?.prompt_breaks))) else {
+        let Some((id, feeds)) = anchored.and_then(|id| Some((id, blocks.get(id)?.prompt_breaks)))
+        else {
             continue;
         };
         blocks.set_prompt_lines(id, prompt_rows(term, line, feeds));
@@ -287,7 +340,8 @@ fn targets<L: EventListener>(term: &Term<L>, graphics: &Graphics, area: Area) ->
                 let (first_row, last_row) = (line - top, line - top + placement.rows as i32 - 1);
                 let (first_column, last_column) = (column, column + placement.columns as i32 - 1);
                 let holds = |row: i32, column: i32| {
-                    (first_row..=last_row).contains(&row) && (first_column..=last_column).contains(&column)
+                    (first_row..=last_row).contains(&row)
+                        && (first_column..=last_column).contains(&column)
                 };
                 let named = match area {
                     Area::Cursor => holds(cursor.line.0, cursor.column.0 as i32),
@@ -308,12 +362,19 @@ fn targets<L: EventListener>(term: &Term<L>, graphics: &Graphics, area: Area) ->
 }
 
 /// An image rides on its top-left cell the way a block rides on its first line.
-fn place<L: EventListener>(term: &mut Term<L>, parser: &mut Processor, graphics: &mut Graphics, request: Request) {
+fn place<L: EventListener>(
+    term: &mut Term<L>,
+    parser: &mut Processor,
+    graphics: &mut Graphics,
+    request: Request,
+) {
     // The cell the cursor reached: a client that centres an image moves the cursor there itself.
     let point = term.grid().cursor.point;
     let here: Vec<u32> = term.grid()[point.line][point.column]
         .zerowidth()
-        .map_or(Vec::new(), |extra| extra.iter().filter_map(|ch| picture_anchor(*ch)).collect());
+        .map_or(Vec::new(), |extra| {
+            extra.iter().filter_map(|ch| picture_anchor(*ch)).collect()
+        });
     let Some(anchor) = graphics.place(request, &here) else {
         return;
     };
@@ -331,7 +392,10 @@ fn place<L: EventListener>(term: &mut Term<L>, parser: &mut Processor, graphics:
     };
     if request.rows > 1 {
         let foot = &mut term.grid_mut()[last][point.column];
-        if !foot.zerowidth().is_some_and(|extra| extra.contains(&picture_foot())) {
+        if !foot
+            .zerowidth()
+            .is_some_and(|extra| extra.contains(&picture_foot()))
+        {
             foot.push_zerowidth(picture_foot());
         }
     }

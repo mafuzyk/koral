@@ -5,16 +5,31 @@ use koral::config::{Args, Launch, parse_args};
 
 #[test]
 fn version_flag_prints_the_crate_version() {
-    let output = Command::new(env!("CARGO_BIN_EXE_koral")).arg("--version").env_remove("WAYLAND_DISPLAY").output().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_koral"))
+        .arg("--version")
+        .env_remove("WAYLAND_DISPLAY")
+        .output()
+        .unwrap();
     assert!(output.status.success());
-    assert_eq!(String::from_utf8_lossy(&output.stdout), format!("koral {}\n", env!("CARGO_PKG_VERSION")));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("koral {}\n", env!("CARGO_PKG_VERSION"))
+    );
 }
 
 #[test]
 fn help_flags_print_the_usage_without_opening_a_window() {
     for flag in ["--help", "-h"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_koral")).arg(flag).env_remove("WAYLAND_DISPLAY").output().unwrap();
-        assert!(output.status.success(), "{flag} exited with {:?}", output.status);
+        let output = Command::new(env!("CARGO_BIN_EXE_koral"))
+            .arg(flag)
+            .env_remove("WAYLAND_DISPLAY")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{flag} exited with {:?}",
+            output.status
+        );
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("Usage: koral"), "{flag}: {stdout}");
         assert!(stdout.contains("--version"), "{flag}: {stdout}");
@@ -23,8 +38,11 @@ fn help_flags_print_the_usage_without_opening_a_window() {
 
 #[test]
 fn an_unknown_argument_is_reported_and_fails() {
-    let output =
-        Command::new(env!("CARGO_BIN_EXE_koral")).arg("--nope").env_remove("WAYLAND_DISPLAY").output().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_koral"))
+        .arg("--nope")
+        .env_remove("WAYLAND_DISPLAY")
+        .output()
+        .unwrap();
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("unknown argument '--nope'"), "{stderr}");
@@ -38,7 +56,17 @@ fn parses_launch_options_and_command() {
     assert_eq!(parse_args(["-h"]), Ok(Launch::Help));
     assert_eq!(parse_args(["--help"]), Ok(Launch::Help));
 
-    let parsed = parse_args(["--cwd", "/tmp/work", "--title", "MyTerm", "--class", "dev.koral", "-e", "btop", "--utf-8"]);
+    let parsed = parse_args([
+        "--cwd",
+        "/tmp/work",
+        "--title",
+        "MyTerm",
+        "--class",
+        "dev.koral",
+        "-e",
+        "btop",
+        "--utf-8",
+    ]);
     assert_eq!(
         parsed,
         Ok(Launch::Run(Args {
@@ -49,7 +77,15 @@ fn parses_launch_options_and_command() {
         }))
     );
 
-    let equals = parse_args(["--working-directory=/var/log", "--app-id=float-term", "--title=Top", "--", "sh", "-c", "hi"]);
+    let equals = parse_args([
+        "--working-directory=/var/log",
+        "--app-id=float-term",
+        "--title=Top",
+        "--",
+        "sh",
+        "-c",
+        "hi",
+    ]);
     assert_eq!(
         equals,
         Ok(Launch::Run(Args {
@@ -60,11 +96,23 @@ fn parses_launch_options_and_command() {
         }))
     );
 
-    for bad in [vec!["--cwd"], vec!["--title"], vec!["--class"], vec!["-e"], vec!["--command"], vec!["--"], vec!["--unknown"]] {
+    for bad in [
+        vec!["--cwd"],
+        vec!["--title"],
+        vec!["--class"],
+        vec!["-e"],
+        vec!["--command"],
+        vec!["--"],
+        vec!["--unknown"],
+    ] {
         assert!(parse_args(bad).is_err());
     }
     assert_eq!(
         parse_args(["ctl", "--socket", "/tmp/k.sock", "list"]),
-        Ok(Launch::Control(vec!["--socket".into(), "/tmp/k.sock".into(), "list".into()]))
+        Ok(Launch::Control(vec![
+            "--socket".into(),
+            "/tmp/k.sock".into(),
+            "list".into()
+        ]))
     );
 }

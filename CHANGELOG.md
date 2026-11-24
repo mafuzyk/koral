@@ -1,0 +1,120 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
+project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Dates use
+`YYYY-MM-DD`; an unreleased section carries the `Unreleased` marker instead of a date.
+
+## [2.0.0-alpha.1] - Unreleased
+
+Foundation for the `2.0.0` update. This section describes local changes only. No
+alpha tag or competitive performance results are implied.
+
+### Added
+
+- **Appearance → System title bar** requests native window decorations, including the system
+  close button. Off by default. Config key: `window_decorations` (`on` or `off`).
+- Pull-request CI configuration, security and contribution guides, and issue and PR templates.
+- Fuzz targets for marks, graphics, IPC decoding, and config parsing. The stateful graphics
+  target passed an instrumented smoke run: 1,703,276 executions in 61 seconds without a crash.
+- Regression coverage for mixed render-cache hits and misses, scanner boundaries, and PTY
+  staging limits.
+
+### Changed
+
+- `polyp present_mode auto|fifo|mailbox|immediate` selects the presentation mode at startup.
+  `auto` defaults to FIFO, and unsupported requests fall back to FIFO.
+- Clipboard writes and notifications use independent policies. Consent is visible in Settings,
+  uses Ctrl+Shift+Enter to allow and Escape to deny, and leaves ordinary Enter available to the PTY.
+- The benchmark isolates clean profiles, pins the executable, and rejects latency samples
+  without confirmation of the expected input from inside the PTY.
+- Each terminal owns its row projection. Rendering, scrolling, search, and block actions
+  reuse it, and closing the terminal drops its cache.
+
+### Fixed
+
+- Confirmed and allowed notifications share the same delivery spacing.
+- The stream scanner preserves bytes and new sequence starts at chunk and size boundaries.
+- Reaching the PTY staging limit no longer ends an ongoing output burst.
+
+## [1.2.1] - 2026-11-21
+
+Maintenance release on the stable `1.2.x` line.
+
+### Changed
+
+- Bumped `sharky-config` to `v4.0.0-alpha.2` and refreshed the lockfile and the
+  `koral-bin` Nix package checksum.
+- Refreshed the README with the current v1.2.1 showcase and benchmark table.
+
+## [1.2.0] - 2026-11-21
+
+### Added
+
+- Native split panes, configurable keybindings, the `koral ctl` IPC interface, and a live
+  Settings tab.
+- Fourteen built-in themes with surface mixing.
+- Launch flags (`--cwd`, `--title`, `--class`, `-e`), inotify config reload, a search match
+  counter, local path links, and a scrollback indicator.
+- Fallback glyph alignment for missing or proportional fonts.
+
+### Fixed
+
+- Preserve image anchors on line erase, flush synchronized updates, and add Unicode
+  placeholder support for Kitty graphics.
+- Discard a suboptimal surface texture before reconfiguring the swap chain.
+
+### Changed
+
+- Simplified a nested let-chain in `main.rs`.
+
+## [1.1.2] - 2026-11-18
+
+Maintenance release; see `git log v1.1.1..v1.1.2` for the exact changes.
+
+## [1.1.1] - 2026-11-18
+
+### Changed
+
+- Loaded fallback font faces before the first frame needed them.
+- Split text shaping from preparation in the frame log and evicted old shaped lines instead
+  of clearing the cache.
+- Logged slow frames with per-phase costs.
+- Bound each frame's pipeline state in every picture band.
+
+### Fixed
+
+- Kept or restored graphics behavior around stacked z placements, positional deletes,
+  alternate-screen transitions, and synchronized updates.
+- Reported mouse motion so a grabbed program can drag.
+
+## [1.1.0] - 2026-11-18
+
+### Added
+
+- Nix package for the prebuilt release binary (`koral-bin`, the default flake package).
+- Desktop entry, icon, and Nix wrapper for runtime dependencies.
+
+### Changed
+
+- Substituted a missing configured font with a Nerd Font.
+- Evicted image placements without a client image ID before on-screen ones.
+- Answered unsupported graphics actions and transmission modes.
+- Drew pictures at the size requested by the protocol.
+
+## [1.0.3] - 2026-11-01
+
+Maintenance release; see `git log v1.0.2..v1.0.3` for the exact changes.
+
+## [1.0.2] - 2026-11-01
+
+Maintenance release; see `git log v1.0.1..v1.0.2` for the exact changes.
+
+## [1.0.1] - 2026-11-01
+
+Maintenance release; see `git log v1.0.0..v1.0.1` for the exact changes.
+
+## [1.0.0] - 2026-11-01
+
+Initial tagged release. See `git log v0.1.0..v1.0.0` for the full history.

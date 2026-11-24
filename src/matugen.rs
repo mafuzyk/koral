@@ -31,8 +31,13 @@ pub fn theme(enabled: bool) -> Theme {
 }
 
 pub fn resolve_theme(enabled: bool, name: Option<&str>) -> Theme {
-    let colors = colors_path().filter(|_| enabled).and_then(|path| std::fs::read_to_string(path).ok());
-    colors.map_or_else(|| Theme::resolve_named(name), |colors| Theme::with_colors(&colors))
+    let colors = colors_path()
+        .filter(|_| enabled)
+        .and_then(|path| std::fs::read_to_string(path).ok());
+    colors.map_or_else(
+        || Theme::resolve_named(name),
+        |colors| Theme::with_colors(&colors),
+    )
 }
 
 /// Matugen's config text with Koral's template in it, or None when it is already there.
@@ -47,7 +52,9 @@ pub fn add_template(source: &str, template: &Path, output: &Path) -> Option<Stri
         }
         updated.push('\n');
     }
-    updated.push_str(&format!("[templates.koral]\ninput_path = {template:?}\noutput_path = {output:?}\n"));
+    updated.push_str(&format!(
+        "[templates.koral]\ninput_path = {template:?}\noutput_path = {output:?}\n"
+    ));
     Some(updated)
 }
 
@@ -59,7 +66,8 @@ pub fn on_path(path: Option<&std::ffi::OsStr>) -> bool {
         return false;
     };
     std::env::split_paths(path).any(|dir| {
-        std::fs::metadata(dir.join("matugen")).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        std::fs::metadata(dir.join("matugen"))
+            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
     })
 }
 
@@ -70,8 +78,10 @@ pub fn install() -> Result<(), String> {
     }
     let home = config::home().ok_or("Not saved: no config folder")?;
     // Dotfile managers link this file: writing through the link keeps it theirs.
-    let matugen = std::fs::canonicalize(home.join("matugen/config.toml")).map_err(|_| "No matugen config found")?;
-    let source = std::fs::read_to_string(&matugen).map_err(|error| format!("Cannot read matugen config: {error}"))?;
+    let matugen = std::fs::canonicalize(home.join("matugen/config.toml"))
+        .map_err(|_| "No matugen config found")?;
+    let source = std::fs::read_to_string(&matugen)
+        .map_err(|error| format!("Cannot read matugen config: {error}"))?;
 
     let template = home.join("koral/matugen.template");
     let write = |error: std::io::Error| format!("Not saved: {error}");
@@ -91,7 +101,10 @@ fn modified() -> [Option<SystemTime>; 3] {
     ]
 }
 
-pub fn diff_stamps(before: &[Option<SystemTime>; 3], after: &[Option<SystemTime>; 3]) -> (bool, bool) {
+pub fn diff_stamps(
+    before: &[Option<SystemTime>; 3],
+    after: &[Option<SystemTime>; 3],
+) -> (bool, bool) {
     let colors = before[0] != after[0] || before[1] != after[1];
     let config = before[2] != after[2];
     (colors, config)

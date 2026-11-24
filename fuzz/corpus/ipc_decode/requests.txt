@@ -1,0 +1,16 @@
+send-text	hello
+new-tab	--cwd	/home/user	--title	demo
+split	right	--cwd	/home/user
+close-pane
+close-tab
+focus	left
+resize	down
+set-title	title
+set-theme	catppuccin
+open-settings
+reload
+list
+send-text	a\nb\tc\\d\0e
+send-text	\xff\xfe
+new-tab	-e	echo	hi
+new-tab	--bogus	flag

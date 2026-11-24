@@ -6,8 +6,8 @@ use std::time::Instant;
 
 use alacritty_terminal::vte::ansi::Rgb;
 use glyphon::{
-    Attrs, Buffer, Cache, Color, ColorMode, Family, FontSystem, Metrics, Resolution, Shaping, Style,
-    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
+    Attrs, Buffer, Cache, Color, ColorMode, Family, FontSystem, Metrics, Resolution, Shaping,
+    Style, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
 };
 use winit::window::Window;
 
@@ -40,13 +40,24 @@ pub struct LineCache<V> {
 
 impl<V> Default for LineCache<V> {
     fn default() -> Self {
-        Self { entries: HashMap::new(), order: VecDeque::new(), seen: None, fresh: 0, again: 0, evicted: 0 }
+        Self {
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+            seen: None,
+            fresh: 0,
+            again: 0,
+            evicted: 0,
+        }
     }
 }
 
 impl<V> LineCache<V> {
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 
     pub fn get(&self, key: &u64) -> Option<&V> {
@@ -71,7 +82,11 @@ impl<V> LineCache<V> {
     /// The entry for every key, shaping the ones it lacks with `shape`. Returns how many it shaped:
     /// a key is shaped once however often it repeats in the frame.
     pub fn prepare(&mut self, keys: &[u64], mut shape: impl FnMut(&u64, usize) -> V) -> usize {
-        debug_assert_eq!(self.order.len(), self.entries.len(), "the order holds every key once");
+        debug_assert_eq!(
+            self.order.len(),
+            self.entries.len(),
+            "the order holds every key once"
+        );
         (self.fresh, self.again, self.evicted) = (0, 0, 0);
         let logged = lag::enabled();
         let mut shaped = 0;
@@ -108,7 +123,9 @@ impl<V> LineCache<V> {
             if self.entries.len() <= EVICT_TO {
                 break;
             }
-            let Some(key) = self.order.pop_front() else { break };
+            let Some(key) = self.order.pop_front() else {
+                break;
+            };
             if shown.contains(&key) {
                 self.order.push_back(key);
                 continue;
@@ -219,7 +236,14 @@ pub struct Quad {
 
 impl Quad {
     pub fn new(x: f32, y: f32, width: f32, height: f32, color: [f32; 4]) -> Self {
-        Self { x, y, width, height, color, shape: Shape::Plain }
+        Self {
+            x,
+            y,
+            width,
+            height,
+            color,
+            shape: Shape::Plain,
+        }
     }
 
     fn floats(&self) -> [f32; 12] {
@@ -232,18 +256,42 @@ impl Quad {
             Shape::Gear { radius } => (0.0, 0.0, radius, 4.0),
             Shape::Arc { x, y, radius } => (x, y, radius, 5.0),
         };
-        [self.x, self.y, self.width, self.height, r, g, b, a, cx, cy, radius, mode]
+        [
+            self.x,
+            self.y,
+            self.width,
+            self.height,
+            r,
+            g,
+            b,
+            a,
+            cx,
+            cy,
+            radius,
+            mode,
+        ]
     }
 }
 
 pub fn surface_format(formats: &[wgpu::TextureFormat]) -> wgpu::TextureFormat {
     // Theme colours are sRGB values: a float surface would read them as linear and wash them out.
-    let plain = [wgpu::TextureFormat::Bgra8Unorm, wgpu::TextureFormat::Rgba8Unorm];
-    plain.into_iter().find(|format| formats.contains(format)).unwrap_or(formats[0])
+    let plain = [
+        wgpu::TextureFormat::Bgra8Unorm,
+        wgpu::TextureFormat::Rgba8Unorm,
+    ];
+    plain
+        .into_iter()
+        .find(|format| formats.contains(format))
+        .unwrap_or(formats[0])
 }
 
 pub fn rgba(color: Rgb, alpha: f32) -> [f32; 4] {
-    [f32::from(color.r) / 255.0, f32::from(color.g) / 255.0, f32::from(color.b) / 255.0, alpha]
+    [
+        f32::from(color.r) / 255.0,
+        f32::from(color.g) / 255.0,
+        f32::from(color.b) / 255.0,
+        alpha,
+    ]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -256,7 +304,12 @@ pub struct Span {
 
 impl Span {
     pub fn plain(text: impl Into<String>, color: Rgb) -> Self {
-        Self { text: text.into(), color: (color.r, color.g, color.b), bold: false, italic: false }
+        Self {
+            text: text.into(),
+            color: (color.r, color.g, color.b),
+            bold: false,
+            italic: false,
+        }
     }
 }
 
@@ -309,8 +362,16 @@ pub const UNDER_BACKGROUND: i32 = i32::MIN / 2;
 /// then over everything, each band by z-index, image id and placement id, as kitty orders them.
 pub fn layers(list: &[Picture]) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
     let band = |below: bool| -> Vec<usize> {
-        let keep = |z: i32| if below { z < UNDER_BACKGROUND } else { z >= UNDER_BACKGROUND && z < 0 };
-        let mut found: Vec<usize> = (0..list.len()).filter(|index| keep(list[*index].z)).collect();
+        let keep = |z: i32| {
+            if below {
+                z < UNDER_BACKGROUND
+            } else {
+                (UNDER_BACKGROUND..0).contains(&z)
+            }
+        };
+        let mut found: Vec<usize> = (0..list.len())
+            .filter(|index| keep(list[*index].z))
+            .collect();
         let order = |list: &[Picture], index: &usize| {
             let picture = &list[*index];
             (picture.z, picture.id, picture.number)
@@ -318,7 +379,9 @@ pub fn layers(list: &[Picture]) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
         found.sort_by_key(|index| order(list, index));
         found
     };
-    let mut above: Vec<usize> = (0..list.len()).filter(|index| list[*index].z >= 0).collect();
+    let mut above: Vec<usize> = (0..list.len())
+        .filter(|index| list[*index].z >= 0)
+        .collect();
     let order = |list: &[Picture], index: &usize| {
         let picture = &list[*index];
         (picture.z, picture.id, picture.number)
@@ -371,11 +434,40 @@ pub struct Renderer {
     window: Arc<Window>,
 }
 
+fn choose_present_mode(
+    policy: crate::config::PresentModePolicy,
+    supported: &[wgpu::PresentMode],
+) -> wgpu::PresentMode {
+    use crate::config::PresentModePolicy::*;
+    use wgpu::PresentMode;
+    let requested = match policy {
+        Auto | Fifo => PresentMode::Fifo,
+        Mailbox => PresentMode::Mailbox,
+        Immediate => PresentMode::Immediate,
+    };
+    if supported.contains(&requested) {
+        requested
+    } else {
+        // WebGPU guarantees FIFO on compatible surfaces.
+        PresentMode::Fifo
+    }
+}
+
 impl Renderer {
-    pub async fn new(window: Arc<Window>, instance: wgpu::Instance, face: &Face, points: f32, mut font_system: FontSystem) -> Self {
+    pub async fn new(
+        window: Arc<Window>,
+        instance: wgpu::Instance,
+        face: &Face,
+        points: f32,
+        mut font_system: FontSystem,
+        present_mode: crate::config::PresentModePolicy,
+    ) -> Self {
         let size = window.inner_size();
         let scale = window.scale_factor() as f32;
-        let surface = instance.create_surface(window.clone()).expect("create surface");
+        let surface = instance
+            .create_surface(window.clone())
+            .expect("create surface");
+        crate::lag::startup("surface_created");
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 compatible_surface: Some(&surface),
@@ -383,27 +475,46 @@ impl Renderer {
             })
             .await
             .expect("no graphics adapter");
-        let (device, queue) =
-            adapter.request_device(&wgpu::DeviceDescriptor::default()).await.expect("request device");
+        crate::lag::startup("adapter_ready");
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .expect("request device");
+        crate::lag::startup("device_ready");
 
         let capabilities = surface.get_capabilities(&adapter);
         let format = surface_format(&capabilities.formats);
-        let alpha_mode = [wgpu::CompositeAlphaMode::PreMultiplied, wgpu::CompositeAlphaMode::PostMultiplied]
-            .into_iter()
-            .find(|mode| capabilities.alpha_modes.contains(mode))
-            .unwrap_or(capabilities.alpha_modes[0]);
+        let alpha_mode = [
+            wgpu::CompositeAlphaMode::PreMultiplied,
+            wgpu::CompositeAlphaMode::PostMultiplied,
+        ]
+        .into_iter()
+        .find(|mode| capabilities.alpha_modes.contains(mode))
+        .unwrap_or(capabilities.alpha_modes[0]);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width.max(1),
             height: size.height.max(1),
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode: choose_present_mode(present_mode, &capabilities.present_modes),
             alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
+        if std::env::var_os("KORAL_PRESENT_LOG").is_some() {
+            let info = adapter.get_info();
+            eprintln!(
+                "present: adapter={:?} type={:?} backend={:?} requested={present_mode:?} supported={:?} selected={:?}",
+                info.name,
+                info.device_type,
+                info.backend,
+                capabilities.present_modes,
+                config.present_mode,
+            );
+        }
         surface.configure(&device, &config);
+        crate::lag::startup("surface_configured");
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("quads"),
@@ -431,7 +542,10 @@ impl Renderer {
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() }],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals.as_entire_binding(),
+            }],
         });
         let picture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
@@ -455,8 +569,13 @@ impl Renderer {
             ],
         });
         let pipeline = pipeline(&device, &shader, format, &[Some(&layout)], "fs_main");
-        let picture_pipeline =
-            self::pipeline(&device, &shader, format, &[Some(&layout), Some(&picture_layout)], "fs_picture");
+        let picture_pipeline = self::pipeline(
+            &device,
+            &shader,
+            format,
+            &[Some(&layout), Some(&picture_layout)],
+            "fs_picture",
+        );
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
@@ -527,8 +646,19 @@ impl Renderer {
     pub fn set_fonts(&mut self, fonts: FontSystem) {
         self.font_system = fonts;
         self.swash = SwashCache::new();
-        self.atlas = TextAtlas::with_color_mode(&self.device, &self.queue, &self.cache, self.config.format, ColorMode::Web);
-        self.text = TextRenderer::new(&mut self.atlas, &self.device, wgpu::MultisampleState::default(), None);
+        self.atlas = TextAtlas::with_color_mode(
+            &self.device,
+            &self.queue,
+            &self.cache,
+            self.config.format,
+            ColorMode::Web,
+        );
+        self.text = TextRenderer::new(
+            &mut self.atlas,
+            &self.device,
+            wgpu::MultisampleState::default(),
+            None,
+        );
         self.face = fonts::usable(&self.wanted, self.font_system.db());
         self.remeasure();
     }
@@ -554,7 +684,11 @@ impl Renderer {
     }
 
     fn upload(&mut self, image: &Arc<Image>) {
-        let size = wgpu::Extent3d { width: image.width, height: image.height, depth_or_array_layers: 1 };
+        let size = wgpu::Extent3d {
+            width: image.width,
+            height: image.height,
+            depth_or_array_layers: 1,
+        };
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("picture"),
             size,
@@ -569,7 +703,11 @@ impl Renderer {
         self.queue.write_texture(
             texture.as_image_copy(),
             &image.rgba,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(image.width * 4), rows_per_image: None },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(image.width * 4),
+                rows_per_image: None,
+            },
             size,
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -577,15 +715,30 @@ impl Renderer {
             label: None,
             layout: &self.picture_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
             ],
         });
-        self.textures.insert(image.generation, (Arc::downgrade(image), bind_group));
+        self.textures
+            .insert(image.generation, (Arc::downgrade(image), bind_group));
     }
 
     /// Fills `cost` with the phases of the frame, for `lag::note`.
-    pub fn draw(&mut self, quads: &[Quad], pictures: &Pictures, lines: &[TextLine], clip: Clip, clear: [f32; 4], cost: &mut lag::Cost) {
+    pub fn draw(
+        &mut self,
+        quads: &[Quad],
+        pictures: &Pictures,
+        lines: &[TextLine],
+        clip: Clip,
+        clear: [f32; 4],
+        cost: &mut lag::Cost,
+    ) {
         let text_from = Instant::now();
         cost.lines = lines.len();
         let keys: Vec<u64> = lines.iter().map(line_key).collect();
@@ -619,41 +772,65 @@ impl Renderer {
                 worst.fallback = families.iter().any(|family| *family != face.family);
                 worst.face = families.join(",");
             }
-            (cost.fresh, cost.again, cost.evicted) = (self.lines.fresh(), self.lines.again(), self.lines.evicted());
+            (cost.fresh, cost.again, cost.evicted) =
+                (self.lines.fresh(), self.lines.again(), self.lines.evicted());
             // What the prepare walks: the more glyphs, the more rasterizing and instances it has to do.
             cost.glyphs = keys
                 .iter()
                 .filter_map(|key| self.lines.get(key))
-                .map(|buffer| buffer.layout_runs().map(|run| run.glyphs.len()).sum::<usize>())
+                .map(|buffer| {
+                    buffer
+                        .layout_runs()
+                        .map(|run| run.glyphs.len())
+                        .sum::<usize>()
+                })
                 .sum();
             cost.worst = worst;
         }
 
         let (width, height) = (self.config.width, self.config.height);
-        self.viewport.update(&self.queue, Resolution { width, height });
-        let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
+        self.viewport
+            .update(&self.queue, Resolution { width, height });
+        let bounds = TextBounds {
+            left: 0,
+            top: 0,
+            right: width as i32,
+            bottom: height as i32,
+        };
         let cached = &self.lines;
-        let areas = keys.iter().zip(lines).enumerate().map(|(index, (key, line))| {
-            let mut rect_bounds = bounds;
-            if let Some([cx, cy, cw, ch]) = line.clip {
-                rect_bounds.left = rect_bounds.left.max(cx.floor() as i32);
-                rect_bounds.top = rect_bounds.top.max(cy.floor() as i32);
-                rect_bounds.right = rect_bounds.right.min((cx + cw).ceil() as i32).max(rect_bounds.left);
-                rect_bounds.bottom = rect_bounds.bottom.min((cy + ch).ceil() as i32).max(rect_bounds.top);
-            }
-            if index < clip.count && (clip.top..clip.bottom).contains(&line.y) {
-                rect_bounds.right = rect_bounds.right.min(clip.x as i32).max(rect_bounds.left);
-            }
-            TextArea {
-                buffer: cached.get(key).expect("prepare holds every line of the frame"),
-                left: line.x,
-                top: line.y,
-                scale: 1.0,
-                bounds: rect_bounds,
-                default_color: Color::rgb(255, 255, 255),
-                custom_glyphs: &[],
-            }
-        });
+        let areas = keys
+            .iter()
+            .zip(lines)
+            .enumerate()
+            .map(|(index, (key, line))| {
+                let mut rect_bounds = bounds;
+                if let Some([cx, cy, cw, ch]) = line.clip {
+                    rect_bounds.left = rect_bounds.left.max(cx.floor() as i32);
+                    rect_bounds.top = rect_bounds.top.max(cy.floor() as i32);
+                    rect_bounds.right = rect_bounds
+                        .right
+                        .min((cx + cw).ceil() as i32)
+                        .max(rect_bounds.left);
+                    rect_bounds.bottom = rect_bounds
+                        .bottom
+                        .min((cy + ch).ceil() as i32)
+                        .max(rect_bounds.top);
+                }
+                if index < clip.count && (clip.top..clip.bottom).contains(&line.y) {
+                    rect_bounds.right = rect_bounds.right.min(clip.x as i32).max(rect_bounds.left);
+                }
+                TextArea {
+                    buffer: cached
+                        .get(key)
+                        .expect("prepare holds every line of the frame"),
+                    left: line.x,
+                    top: line.y,
+                    scale: 1.0,
+                    bounds: rect_bounds,
+                    default_color: Color::rgb(255, 255, 255),
+                    custom_glyphs: &[],
+                }
+            });
         let prepare_from = Instant::now();
         let prepared = self.text.prepare(
             &self.device,
@@ -694,7 +871,10 @@ impl Renderer {
                 return;
             }
             wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface = self.instance.create_surface(self.window.clone()).expect("recreate surface");
+                self.surface = self
+                    .instance
+                    .create_surface(self.window.clone())
+                    .expect("recreate surface");
                 self.surface.configure(&self.device, &self.config);
                 self.window.request_redraw();
                 return;
@@ -718,7 +898,8 @@ impl Renderer {
             .filter(|picture| picture.image.width.max(picture.image.height) <= limit)
             .cloned()
             .collect();
-        self.textures.retain(|_, (image, _)| image.strong_count() > 0);
+        self.textures
+            .retain(|_, (image, _)| image.strong_count() > 0);
         for picture in &drawn {
             if !self.textures.contains_key(&picture.image.generation) {
                 self.upload(&picture.image);
@@ -730,7 +911,9 @@ impl Renderer {
         cost.pictures = lag::millis(pictures_from);
 
         let present_from = Instant::now();
-        let boxes = drawn.iter().map(|p| Quad::new(p.x, p.y, p.width, p.height, p.crop));
+        let boxes = drawn
+            .iter()
+            .map(|p| Quad::new(p.x, p.y, p.width, p.height, p.crop));
         let instances: Vec<u8> = quads
             .iter()
             .copied()
@@ -743,8 +926,12 @@ impl Renderer {
         }
         self.queue.write_buffer(&self.quads, 0, &instances);
 
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
             let [r, g, b, a] = clear;
             let (r, g, b, a) = (f64::from(r), f64::from(g), f64::from(b), f64::from(a));
@@ -755,7 +942,12 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: r * a, g: g * a, b: b * a, a }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: r * a,
+                            g: g * a,
+                            b: b * a,
+                            a,
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -803,7 +995,9 @@ impl Renderer {
             pass.draw(0..4, 0..over);
             layer(&mut pass, &under);
             pass.draw(0..4, over..count);
-            self.text.render(&self.atlas, &self.viewport, &mut pass).expect("render text");
+            self.text
+                .render(&self.atlas, &self.viewport, &mut pass)
+                .expect("render text");
             layer(&mut pass, &above);
         }
         self.queue.submit(Some(encoder.finish()));
@@ -875,7 +1069,10 @@ fn quad_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
 
 fn metrics(points: f32, scale: f32, small: bool) -> Metrics {
     let pixels = points * 96.0 / 72.0 * scale;
-    Metrics::new(pixels * if small { SMALL } else { 1.0 }, (pixels * LINE_HEIGHT).round())
+    Metrics::new(
+        pixels * if small { SMALL } else { 1.0 },
+        (pixels * LINE_HEIGHT).round(),
+    )
 }
 
 pub fn attrs(face: &Face, bold: bool, italic: bool) -> Attrs<'_> {
@@ -884,7 +1081,9 @@ pub fn attrs(face: &Face, bold: bool, italic: bool) -> Attrs<'_> {
         (true, false) => face.bold,
         (false, _) => face.weight,
     };
-    let attrs = Attrs::new().family(Family::Name(&face.family)).weight(Weight(weight));
+    let attrs = Attrs::new()
+        .family(Family::Name(&face.family))
+        .weight(Weight(weight));
     match (italic, face.oblique) {
         (false, _) => attrs,
         (true, true) => attrs.style(Style::Oblique),
@@ -897,15 +1096,30 @@ fn measure(font_system: &mut FontSystem, face: &Face, points: f32, scale: f32) -
     let mut buffer = Buffer::new(font_system, metrics);
     buffer.set_text("M", &attrs(face, false, false), Shaping::Advanced, None);
     buffer.shape_until_scroll(font_system, false);
-    let width = buffer.layout_runs().next().map_or(metrics.font_size * 0.5, |run| run.line_w);
-    Cell { width, height: metrics.line_height }
+    let width = buffer
+        .layout_runs()
+        .next()
+        .map_or(metrics.font_size * 0.5, |run| run.line_w);
+    Cell {
+        width,
+        height: metrics.line_height,
+    }
 }
 
-fn shape(font_system: &mut FontSystem, line: &TextLine, face: &Face, points: f32, scale: f32) -> Buffer {
+fn shape(
+    font_system: &mut FontSystem,
+    line: &TextLine,
+    face: &Face,
+    points: f32,
+    scale: f32,
+) -> Buffer {
     let mut buffer = Buffer::new(font_system, metrics(points, scale, line.small));
     let spans = line.spans.iter().map(|span| {
         let (r, g, b) = span.color;
-        (span.text.as_str(), attrs(face, span.bold, span.italic).color(Color::rgb(r, g, b)))
+        (
+            span.text.as_str(),
+            attrs(face, span.bold, span.italic).color(Color::rgb(r, g, b)),
+        )
     });
     buffer.set_rich_text(spans, &attrs(face, false, false), Shaping::Advanced, None);
     buffer.shape_until_scroll(font_system, false);
@@ -924,15 +1138,45 @@ fn describe(line: &TextLine, micros: u64) -> lag::LineCost {
     let mut colors: Vec<(u8, u8, u8)> = line.spans.iter().map(|span| span.color).collect();
     colors.sort_unstable();
     colors.dedup();
-    let codes: Vec<String> =
-        line.spans.iter().flat_map(|span| span.text.chars()).take(lag::CODES).map(|ch| format!("{:x}", ch as u32)).collect();
+    let codes: Vec<String> = line
+        .spans
+        .iter()
+        .flat_map(|span| span.text.chars())
+        .take(lag::CODES)
+        .map(|ch| format!("{:x}", ch as u32))
+        .collect();
     lag::LineCost {
         micros,
-        chars: line.spans.iter().map(|span| span.text.chars().count()).sum(),
+        chars: line
+            .spans
+            .iter()
+            .map(|span| span.text.chars().count())
+            .sum(),
         spans: line.spans.len(),
         colors: colors.len(),
         non_ascii: line.spans.iter().any(|span| !span.text.is_ascii()),
         codes: codes.join(" "),
         ..lag::LineCost::default()
+    }
+}
+
+#[cfg(test)]
+mod present_mode_tests {
+    use super::choose_present_mode;
+    use crate::config::PresentModePolicy as Policy;
+    use wgpu::PresentMode as Mode;
+
+    #[test]
+    fn auto_stays_fifo_and_explicit_modes_require_support() {
+        let all = [Mode::Fifo, Mode::Mailbox, Mode::Immediate];
+        assert_eq!(choose_present_mode(Policy::Auto, &all), Mode::Fifo);
+        assert_eq!(choose_present_mode(Policy::Fifo, &all), Mode::Fifo);
+        for (policy, expected) in [
+            (Policy::Mailbox, Mode::Mailbox),
+            (Policy::Immediate, Mode::Immediate),
+        ] {
+            assert_eq!(choose_present_mode(policy, &all), expected);
+            assert_eq!(choose_present_mode(policy, &[Mode::Fifo]), Mode::Fifo);
+        }
     }
 }

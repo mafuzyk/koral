@@ -11,7 +11,10 @@ pub struct Tabs<T> {
 
 impl<T> Tabs<T> {
     pub fn new(first: T) -> Self {
-        Self { items: vec![first], active: 0 }
+        Self {
+            items: vec![first],
+            active: 0,
+        }
     }
     pub fn len(&self) -> usize {
         self.items.len()
@@ -88,7 +91,10 @@ pub fn title(blocks: &BlockStore, program: Option<&str>, home: Option<&str>) -> 
         return program.unwrap_or("koral").to_string();
     };
     if blocks.activity() == Activity::Running {
-        let command = latest.command.as_deref().and_then(|command| command.lines().next());
+        let command = latest
+            .command
+            .as_deref()
+            .and_then(|command| command.lines().next());
         if let Some(name) = program.or(command) {
             return name.to_string();
         }
@@ -96,13 +102,22 @@ pub fn title(blocks: &BlockStore, program: Option<&str>, home: Option<&str>) -> 
     match latest.cwd.as_deref() {
         None => "koral".to_string(),
         Some(cwd) if Some(cwd) == home => "~".to_string(),
-        Some(cwd) => cwd.rsplit('/').next().filter(|name| !name.is_empty()).unwrap_or("/").to_string(),
+        Some(cwd) => cwd
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.is_empty())
+            .unwrap_or("/")
+            .to_string(),
     }
 }
 
 /// A title a program asked for, safe to show. None when nothing printable is left.
 pub fn clean_title(text: &str) -> Option<String> {
-    let title: String = text.chars().filter(|ch| !ch.is_control()).take(TITLE_LIMIT).collect();
+    let title: String = text
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(TITLE_LIMIT)
+        .collect();
     (!title.trim().is_empty()).then_some(title)
 }
 
@@ -113,7 +128,10 @@ pub struct Ring {
 }
 
 pub fn ring(active: bool, focused: bool) -> Ring {
-    Ring { mark: !active, urgent: !focused }
+    Ring {
+        mark: !active,
+        urgent: !focused,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -148,14 +166,33 @@ impl Rect {
 
 // shortcut: tabs keep shrinking past legibility, add scrolling if that ever hurts.
 pub fn layout(count: usize, width: f32, height: f32) -> Bar {
-    let settings = Rect { x: width - height, y: 0.0, width: height, height };
+    let settings = Rect {
+        x: width - height,
+        y: 0.0,
+        width: height,
+        height,
+    };
     let room = (width - LEFT_INSET - height * 2.0).max(0.0);
     let tab = (room / count.max(1) as f32).min(MAX_TAB);
     let tabs: Vec<Rect> = (0..count)
-        .map(|index| Rect { x: LEFT_INSET + index as f32 * tab, y: 0.0, width: tab, height })
+        .map(|index| Rect {
+            x: LEFT_INSET + index as f32 * tab,
+            y: 0.0,
+            width: tab,
+            height,
+        })
         .collect();
-    let new_tab = Rect { x: LEFT_INSET + count as f32 * tab, y: 0.0, width: height, height };
-    Bar { tabs, new_tab, settings }
+    let new_tab = Rect {
+        x: LEFT_INSET + count as f32 * tab,
+        y: 0.0,
+        width: height,
+        height,
+    };
+    Bar {
+        tabs,
+        new_tab,
+        settings,
+    }
 }
 
 pub fn hit(bar: &Bar, x: f32, y: f32) -> Hit {
@@ -169,7 +206,11 @@ pub fn hit(bar: &Bar, x: f32, y: f32) -> Hit {
         Some(index) => {
             let tab = bar.tabs[index];
             // A narrow tab keeps its middle clickable: the zone never takes more than a third.
-            if x >= tab.x + tab.width - CLOSE_ZONE.min(tab.width / 3.0) { Hit::Close(index) } else { Hit::Tab(index) }
+            if x >= tab.x + tab.width - CLOSE_ZONE.min(tab.width / 3.0) {
+                Hit::Close(index)
+            } else {
+                Hit::Tab(index)
+            }
         }
         None => Hit::Empty,
     }

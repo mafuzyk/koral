@@ -18,7 +18,10 @@ fn shows_then_hides_then_shows() {
 #[test]
 fn the_next_change_is_on_the_half_period() {
     let start = Instant::now();
-    assert_eq!(Blink::new(start).next(after(start, 600)), Some(after(start, 1060)));
+    assert_eq!(
+        Blink::new(start).next(after(start, 600)),
+        Some(after(start, 1060))
+    );
 }
 
 #[test]

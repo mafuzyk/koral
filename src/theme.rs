@@ -2,7 +2,11 @@ use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{Color, Rgb};
 
 const fn rgb(value: u32) -> Rgb {
-    Rgb { r: (value >> 16) as u8, g: (value >> 8) as u8, b: value as u8 }
+    Rgb {
+        r: (value >> 16) as u8,
+        g: (value >> 8) as u8,
+        b: value as u8,
+    }
 }
 
 /// A `#RRGGBB` colour, the only form `theme.sharky` allows.
@@ -42,20 +46,62 @@ pub struct ThemeInfo {
 }
 
 pub const BUILTINS: &[ThemeInfo] = &[
-    ThemeInfo { id: "koral", name: "Koral" },
-    ThemeInfo { id: "sharky", name: "Sharky (theme.sharky)" },
-    ThemeInfo { id: "terminal", name: "Terminal (Classic)" },
-    ThemeInfo { id: "dracula", name: "Dracula" },
-    ThemeInfo { id: "catppuccin-mocha", name: "Catppuccin Mocha" },
-    ThemeInfo { id: "catppuccin-macchiato", name: "Catppuccin Macchiato" },
-    ThemeInfo { id: "catppuccin-frappe", name: "Catppuccin Frappé" },
-    ThemeInfo { id: "catppuccin-latte", name: "Catppuccin Latte" },
-    ThemeInfo { id: "tokyo-night", name: "Tokyo Night" },
-    ThemeInfo { id: "gruvbox-dark", name: "Gruvbox Dark" },
-    ThemeInfo { id: "nord", name: "Nord" },
-    ThemeInfo { id: "rose-pine", name: "Rosé Pine" },
-    ThemeInfo { id: "one-dark", name: "One Dark" },
-    ThemeInfo { id: "solarized-dark", name: "Solarized Dark" },
+    ThemeInfo {
+        id: "koral",
+        name: "Koral",
+    },
+    ThemeInfo {
+        id: "sharky",
+        name: "Sharky (theme.sharky)",
+    },
+    ThemeInfo {
+        id: "terminal",
+        name: "Terminal (Classic)",
+    },
+    ThemeInfo {
+        id: "dracula",
+        name: "Dracula",
+    },
+    ThemeInfo {
+        id: "catppuccin-mocha",
+        name: "Catppuccin Mocha",
+    },
+    ThemeInfo {
+        id: "catppuccin-macchiato",
+        name: "Catppuccin Macchiato",
+    },
+    ThemeInfo {
+        id: "catppuccin-frappe",
+        name: "Catppuccin Frappé",
+    },
+    ThemeInfo {
+        id: "catppuccin-latte",
+        name: "Catppuccin Latte",
+    },
+    ThemeInfo {
+        id: "tokyo-night",
+        name: "Tokyo Night",
+    },
+    ThemeInfo {
+        id: "gruvbox-dark",
+        name: "Gruvbox Dark",
+    },
+    ThemeInfo {
+        id: "nord",
+        name: "Nord",
+    },
+    ThemeInfo {
+        id: "rose-pine",
+        name: "Rosé Pine",
+    },
+    ThemeInfo {
+        id: "one-dark",
+        name: "One Dark",
+    },
+    ThemeInfo {
+        id: "solarized-dark",
+        name: "Solarized Dark",
+    },
 ];
 
 const fn preset(ui: [u32; 7], ansi: [u32; 16]) -> Theme {
@@ -93,14 +139,21 @@ pub fn is_builtin(id: &str) -> bool {
 }
 
 pub fn theme_name(id: &str) -> Option<&'static str> {
-    BUILTINS.iter().find(|info| info.id == id).map(|info| info.name)
+    BUILTINS
+        .iter()
+        .find(|info| info.id == id)
+        .map(|info| info.name)
 }
 
 /// Blends `a` toward `b` by `t` (`0.0..=1.0`), safe for both dark and light themes.
 pub fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
     let t = t.clamp(0.0, 1.0);
     let ch = |x: u8, y: u8| (f32::from(x) * (1.0 - t) + f32::from(y) * t).round() as u8;
-    Rgb { r: ch(a.r, b.r), g: ch(a.g, b.g), b: ch(a.b, b.b) }
+    Rgb {
+        r: ch(a.r, b.r),
+        g: ch(a.g, b.g),
+        b: ch(a.b, b.b),
+    }
 }
 
 // The colours of the example `theme.sharky`, for a machine without one.
@@ -174,7 +227,10 @@ impl Theme {
         let config = sharky_config::parse_theme(source, file).map_err(|error| error.to_string())?;
         let mut theme = Self::default();
         for (name, slot) in SHARKY_NAMES {
-            if let (Some(color), Some(slot)) = (config.colors.get(name).and_then(|text| hex(text)), theme.slot(slot)) {
+            if let (Some(color), Some(slot)) = (
+                config.colors.get(name).and_then(|text| hex(text)),
+                theme.slot(slot),
+            ) {
                 *slot = color;
             }
         }
@@ -183,7 +239,9 @@ impl Theme {
                 Some(name) => config.colors.get(name).map(String::as_str),
                 None => Some(value.as_str()),
             };
-            let slot = key.strip_prefix("terminal.").and_then(|name| theme.slot(name));
+            let slot = key
+                .strip_prefix("terminal.")
+                .and_then(|name| theme.slot(name));
             if let (Some(color), Some(slot)) = (color.and_then(hex), slot) {
                 *slot = color;
             }
@@ -194,7 +252,9 @@ impl Theme {
     /// The user's `theme.sharky`. A bad theme is reported and must not stop the terminal.
     pub fn sharky() -> Self {
         let path = crate::config::home().map(|home| home.join("sharky/theme.sharky"));
-        let source = path.as_ref().and_then(|path| std::fs::read_to_string(path).ok());
+        let source = path
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok());
         let Some((path, source)) = path.zip(source) else {
             return Self::default();
         };
@@ -209,84 +269,108 @@ impl Theme {
             "koral" => Self::default(),
             "sharky" => Self::sharky(),
             "terminal" => preset(
-                [0x101010, 0xE5E5E5, 0xE5E5E5, 0x3B8EEA, 0x23D18B, 0xF14C4C, 0x767676],
+                [
+                    0x101010, 0xE5E5E5, 0xE5E5E5, 0x3B8EEA, 0x23D18B, 0xF14C4C, 0x767676,
+                ],
                 [
                     0x000000, 0xCD3131, 0x0DBC79, 0xE5E510, 0x2472C8, 0xBC3FBC, 0x11A8CD, 0xE5E5E5,
                     0x666666, 0xF14C4C, 0x23D18B, 0xF5F543, 0x3B8EEA, 0xD670D6, 0x29B8DB, 0xFFFFFF,
                 ],
             ),
             "dracula" => preset(
-                [0x282A36, 0xF8F8F2, 0xF8F8F2, 0xBD93F9, 0x50FA7B, 0xFF5555, 0x6272A4],
+                [
+                    0x282A36, 0xF8F8F2, 0xF8F8F2, 0xBD93F9, 0x50FA7B, 0xFF5555, 0x6272A4,
+                ],
                 [
                     0x21222C, 0xFF5555, 0x50FA7B, 0xF1FA8C, 0xBD93F9, 0xFF79C6, 0x8BE9FD, 0xF8F8F2,
                     0x6272A4, 0xFF6E6E, 0x69FF94, 0xFFFFA5, 0xD6ACFF, 0xFF92DF, 0xA4FFFF, 0xFFFFFF,
                 ],
             ),
             "catppuccin-mocha" => preset(
-                [0x1E1E2E, 0xCDD6F4, 0xF5E0DC, 0xCBA6F7, 0xA6E3A1, 0xF38BA8, 0x6C7086],
+                [
+                    0x1E1E2E, 0xCDD6F4, 0xF5E0DC, 0xCBA6F7, 0xA6E3A1, 0xF38BA8, 0x6C7086,
+                ],
                 [
                     0x45475A, 0xF38BA8, 0xA6E3A1, 0xF9E2AF, 0x89B4FA, 0xF5C2E7, 0x94E2D5, 0xBAC2DE,
                     0x585B70, 0xF38BA8, 0xA6E3A1, 0xF9E2AF, 0x89B4FA, 0xF5C2E7, 0x94E2D5, 0xA6ADC8,
                 ],
             ),
             "catppuccin-macchiato" => preset(
-                [0x24273A, 0xCAD3F5, 0xF4DBD6, 0xC6A0F6, 0xA6DA95, 0xED8796, 0x6E738D],
+                [
+                    0x24273A, 0xCAD3F5, 0xF4DBD6, 0xC6A0F6, 0xA6DA95, 0xED8796, 0x6E738D,
+                ],
                 [
                     0x494D64, 0xED8796, 0xA6DA95, 0xEED49F, 0x8AADF4, 0xF5BDE6, 0x8BD5CA, 0xB8C0E0,
                     0x5B6078, 0xED8796, 0xA6DA95, 0xEED49F, 0x8AADF4, 0xF5BDE6, 0x8BD5CA, 0xA5ADCB,
                 ],
             ),
             "catppuccin-frappe" => preset(
-                [0x303446, 0xC6D0F5, 0xF2D5CF, 0xCA9EE6, 0xA6D189, 0xE78284, 0x737994],
+                [
+                    0x303446, 0xC6D0F5, 0xF2D5CF, 0xCA9EE6, 0xA6D189, 0xE78284, 0x737994,
+                ],
                 [
                     0x51576D, 0xE78284, 0xA6D189, 0xE5C890, 0x8CAAEE, 0xF4B8E4, 0x81C8BE, 0xB5BFE2,
                     0x626880, 0xE78284, 0xA6D189, 0xE5C890, 0x8CAAEE, 0xF4B8E4, 0x81C8BE, 0xA5ADCE,
                 ],
             ),
             "catppuccin-latte" => preset(
-                [0xEFF1F5, 0x4C4F69, 0xDC8A78, 0x1E66F5, 0x40A02B, 0xD20F39, 0x6C6F85],
+                [
+                    0xEFF1F5, 0x4C4F69, 0xDC8A78, 0x1E66F5, 0x40A02B, 0xD20F39, 0x6C6F85,
+                ],
                 [
                     0x5C5F77, 0xD20F39, 0x40A02B, 0xDF8E1D, 0x1E66F5, 0xEA76CB, 0x179299, 0xACB0BE,
                     0x6C6F85, 0xDE293E, 0x49AF31, 0xEEA02D, 0x456EFF, 0xFE85D8, 0x2D9FA8, 0xBCC0CC,
                 ],
             ),
             "tokyo-night" => preset(
-                [0x1A1B26, 0xC0CAF5, 0xC0CAF5, 0x7AA2F7, 0x9ECE6A, 0xF7768E, 0x565F89],
+                [
+                    0x1A1B26, 0xC0CAF5, 0xC0CAF5, 0x7AA2F7, 0x9ECE6A, 0xF7768E, 0x565F89,
+                ],
                 [
                     0x15161E, 0xF7768E, 0x9ECE6A, 0xE0AF68, 0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xA9B1D6,
                     0x414868, 0xF7768E, 0x9ECE6A, 0xE0AF68, 0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xC0CAF5,
                 ],
             ),
             "gruvbox-dark" => preset(
-                [0x282828, 0xEBDBB2, 0xEBDBB2, 0xFE8019, 0xB8BB26, 0xFB4934, 0x928374],
+                [
+                    0x282828, 0xEBDBB2, 0xEBDBB2, 0xFE8019, 0xB8BB26, 0xFB4934, 0x928374,
+                ],
                 [
                     0x282828, 0xCC241D, 0x98971A, 0xD79921, 0x458588, 0xB16286, 0x689D6A, 0xA89984,
                     0x928374, 0xFB4934, 0xB8BB26, 0xFABD2F, 0x83A598, 0xD3869B, 0x8EC07C, 0xEBDBB2,
                 ],
             ),
             "nord" => preset(
-                [0x2E3440, 0xD8DEE9, 0xD8DEE9, 0x88C0D0, 0xA3BE8C, 0xBF616A, 0x616E88],
+                [
+                    0x2E3440, 0xD8DEE9, 0xD8DEE9, 0x88C0D0, 0xA3BE8C, 0xBF616A, 0x616E88,
+                ],
                 [
                     0x3B4252, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x88C0D0, 0xE5E9F0,
                     0x4C566A, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x8FBCBB, 0xECEFF4,
                 ],
             ),
             "rose-pine" => preset(
-                [0x191724, 0xE0DEF4, 0x524F67, 0xC4A7E7, 0x9CCFD8, 0xEB6F92, 0x6E6A86],
+                [
+                    0x191724, 0xE0DEF4, 0x524F67, 0xC4A7E7, 0x9CCFD8, 0xEB6F92, 0x6E6A86,
+                ],
                 [
                     0x26233A, 0xEB6F92, 0x31748F, 0xF6C177, 0x9CCFD8, 0xC4A7E7, 0xEBBCBA, 0xE0DEF4,
                     0x6E6A86, 0xEB6F92, 0x31748F, 0xF6C177, 0x9CCFD8, 0xC4A7E7, 0xEBBCBA, 0xE0DEF4,
                 ],
             ),
             "one-dark" => preset(
-                [0x282C34, 0xABB2BF, 0x528BFF, 0x61AFEF, 0x98C379, 0xE06C75, 0x5C6370],
+                [
+                    0x282C34, 0xABB2BF, 0x528BFF, 0x61AFEF, 0x98C379, 0xE06C75, 0x5C6370,
+                ],
                 [
                     0x1E2127, 0xE06C75, 0x98C379, 0xD19A66, 0x61AFEF, 0xC678DD, 0x56B6C2, 0xABB2BF,
                     0x5C6370, 0xE06C75, 0x98C379, 0xE5C07B, 0x61AFEF, 0xC678DD, 0x56B6C2, 0xFFFFFF,
                 ],
             ),
             "solarized-dark" => preset(
-                [0x002B36, 0x93A1A1, 0x93A1A1, 0x268BD2, 0x859900, 0xDC322F, 0x657B83],
+                [
+                    0x002B36, 0x93A1A1, 0x93A1A1, 0x268BD2, 0x859900, 0xDC322F, 0x657B83,
+                ],
                 [
                     0x073642, 0xDC322F, 0x859900, 0xB58900, 0x268BD2, 0xD33682, 0x2AA198, 0xEEE8D5,
                     0x002B36, 0xCB4B16, 0x586E75, 0x657B83, 0x839496, 0x6C71C4, 0x93A1A1, 0xFDF6E3,
@@ -319,11 +403,19 @@ impl Theme {
             16..=231 => {
                 let index = index - 16;
                 let level = |step: usize| if step == 0 { 0 } else { (55 + step * 40) as u8 };
-                Rgb { r: level(index / 36), g: level(index / 6 % 6), b: level(index % 6) }
+                Rgb {
+                    r: level(index / 36),
+                    g: level(index / 6 % 6),
+                    b: level(index % 6),
+                }
             }
             232..=255 => {
                 let level = (8 + (index - 232) * 10) as u8;
-                Rgb { r: level, g: level, b: level }
+                Rgb {
+                    r: level,
+                    g: level,
+                    b: level,
+                }
             }
             256 | 267 => self.foreground,
             257 => self.background,
@@ -336,5 +428,9 @@ impl Theme {
 
 fn dim(color: Rgb) -> Rgb {
     let scale = |value: u8| (u16::from(value) * 2 / 3) as u8;
-    Rgb { r: scale(color.r), g: scale(color.g), b: scale(color.b) }
+    Rgb {
+        r: scale(color.r),
+        g: scale(color.g),
+        b: scale(color.b),
+    }
 }

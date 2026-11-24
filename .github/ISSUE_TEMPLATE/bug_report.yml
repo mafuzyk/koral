@@ -1,0 +1,110 @@
+name: Bug report
+description: Report reproducible incorrect behavior in Koral
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Fill in every field you can; environment details make GPU and
+        Wayland issues reproducible. Do not report security vulnerabilities here. Use
+        [private vulnerability reporting](https://github.com/mafuzyk/koral/security/advisories/new)
+        instead, as described in SECURITY.md.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the behavior and what you expected instead.
+      placeholder: Pressing ctrl+shift+f did not fold the command output...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Give the smallest sequence that shows the bug, including the command or escape sequence printed in the pane.
+      placeholder: |
+        1. Start `koral` with `sharky`.
+        2. Run `...`.
+        3. Observe ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Koral version
+      description: Paste the exact output of `koral --version`.
+      placeholder: koral 1.2.1
+    validations:
+      required: true
+  - type: dropdown
+    id: session
+    attributes:
+      label: Session type
+      description: Which display protocol is the Koral window using?
+      options:
+        - Wayland
+        - X11
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: compositor
+    attributes:
+      label: Compositor / window manager
+      description: Name and version, for example Hyprland 0.47 or sway 1.10.
+      placeholder: Hyprland 0.47
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU backend
+      description: GPU and driver or renderer used by wgpu, for example `lspci` vendor and Vulkan/OpenGL driver. Include the backend from Koral logs if known.
+      placeholder: AMD Cezanne (RADV), Vulkan
+    validations:
+      required: true
+  - type: input
+    id: term
+    attributes:
+      label: TERM
+      description: Paste the value of `$TERM` in the affected pane, including inside ssh if relevant.
+      placeholder: xterm-256color
+    validations:
+      required: true
+  - type: input
+    id: font
+    attributes:
+      label: Font family
+      description: Configured font family and any fallback reported by the Settings tab.
+      placeholder: IosevkaTerm Nerd Font Mono
+    validations:
+      required: true
+  - type: dropdown
+    id: shell
+    attributes:
+      label: Shell in the pane
+      options:
+        - sharky
+        - bash
+        - zsh
+        - fish
+        - other
+        - not applicable
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and diagnostics
+      description: Paste relevant stderr or log lines. If you used KORAL_GRAPHICS_LOG or KORAL_FRAME_LOG, remove sensitive payload details first.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues for a duplicate.
+          required: true
+        - label: I reproduced this with a current Koral build.
+          required: false

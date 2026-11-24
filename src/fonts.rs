@@ -55,7 +55,9 @@ impl Coverage {
                 let ok = if cp <= 32 {
                     true
                 } else if let Some(ch) = char::from_u32(cp) {
-                    font.glyph_index(ch).and_then(|id| font.glyph_hor_advance(id)) == Some(m_advance)
+                    font.glyph_index(ch)
+                        .and_then(|id| font.glyph_hor_advance(id))
+                        == Some(m_advance)
                 } else {
                     false
                 };
@@ -71,7 +73,11 @@ impl Coverage {
 
 pub fn cache_path() -> Option<PathBuf> {
     let cache = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from);
-    Some(cache.or_else(|| Some(crate::config::home()?.join(".cache")))?.join("koral/fonts"))
+    Some(
+        cache
+            .or_else(|| Some(crate::config::home()?.join(".cache")))?
+            .join("koral/fonts"),
+    )
 }
 
 pub fn files_text(family: &str, files: &[PathBuf]) -> String {
@@ -93,20 +99,34 @@ pub fn cached_files(text: &str, family: &str) -> Option<Vec<PathBuf>> {
 
 /// What the list was made for: another weight needs other files.
 pub fn key(face: &Face) -> String {
-    format!("{} {} {} {} {}", face.family, face.weight, face.bold, face.bold_italic, face.oblique)
+    format!(
+        "{} {} {} {} {}",
+        face.family, face.weight, face.bold, face.bold_italic, face.oblique
+    )
 }
 
 /// The files that hold the four styles Koral draws.
 fn face_files(db: &fontdb::Database, face: &Face) -> Vec<PathBuf> {
-    let italic = if face.oblique { fontdb::Style::Oblique } else { fontdb::Style::Italic };
+    let italic = if face.oblique {
+        fontdb::Style::Oblique
+    } else {
+        fontdb::Style::Italic
+    };
     let wanted = [
         (face.weight, fontdb::Style::Normal),
         (face.bold, fontdb::Style::Normal),
         (face.weight, italic),
         (face.bold_italic, italic),
     ];
-    let faces: Vec<_> = db.faces().filter(|info| info.families.iter().any(|(name, _)| *name == face.family)).collect();
-    let exact = wanted.iter().all(|style| faces.iter().any(|info| (info.weight.0, info.style) == *style));
+    let faces: Vec<_> = db
+        .faces()
+        .filter(|info| info.families.iter().any(|(name, _)| *name == face.family))
+        .collect();
+    let exact = wanted.iter().all(|style| {
+        faces
+            .iter()
+            .any(|info| (info.weight.0, info.style) == *style)
+    });
     let mut files: Vec<PathBuf> = faces
         .into_iter()
         .filter(|info| !exact || wanted.contains(&(info.weight.0, info.style)))
@@ -132,13 +152,18 @@ fn fixed_width(db: &fontdb::Database, id: fontdb::ID) -> bool {
 
 /// The families that patch a terminal font with icons at the private-use addresses.
 fn icon_like(family: &str) -> bool {
-    ["Nerd", "Symbols", "Awesome", "Powerline", "Emoji"].iter().any(|mark| family.contains(mark))
+    ["Nerd", "Symbols", "Awesome", "Powerline", "Emoji"]
+        .iter()
+        .any(|mark| family.contains(mark))
 }
 
 /// The icon font to draw with, the `Mono` patch first: it shapes every icon to one cell.
 fn icon_name(names: &[String]) -> Option<&String> {
     let mono = |name: &&String| icon_like(name.as_str()) && name.contains("Nerd Font Mono");
-    names.iter().find(mono).or_else(|| names.iter().find(|name| icon_like(name.as_str())))
+    names
+        .iter()
+        .find(mono)
+        .or_else(|| names.iter().find(|name| icon_like(name.as_str())))
 }
 
 /// The families Koral can draw, by the names `Family::Name` finds.
@@ -155,7 +180,9 @@ pub fn monospaced(db: &fontdb::Database) -> Vec<String> {
 
 /// The face to draw with: a font that is missing or proportional would break the grid.
 pub fn usable(face: &Face, db: &fontdb::Database) -> Face {
-    let installed = db.faces().any(|info| named(info, &face.family) && fixed_width(db, info.id));
+    let installed = db
+        .faces()
+        .any(|info| named(info, &face.family) && fixed_width(db, info.id));
     if installed {
         return nearest_weights(face, db);
     }
@@ -164,8 +191,17 @@ pub fn usable(face: &Face, db: &fontdb::Database) -> Face {
     // A terminal needs the private-use icons a Nerd Font draws; plain monospace has none.
     // Picking per codepoint is out of scope: the substitute font draws the icons instead.
     let icons = icon_name(&names);
-    match icons.or_else(|| names.iter().find(|name| *name == system)).or(names.first()) {
-        Some(family) => nearest_weights(&Face { family: family.clone(), ..face.clone() }, db),
+    match icons
+        .or_else(|| names.iter().find(|name| *name == system))
+        .or(names.first())
+    {
+        Some(family) => nearest_weights(
+            &Face {
+                family: family.clone(),
+                ..face.clone()
+            },
+            db,
+        ),
         None => face.clone(),
     }
 }
@@ -176,17 +212,27 @@ fn named(info: &fontdb::FaceInfo, family: &str) -> bool {
 
 /// Shaping passes over a family that lacks the exact weight, so ask only for weights it has.
 fn nearest_weights(face: &Face, db: &fontdb::Database) -> Face {
-    let faces: Vec<_> = db.faces().filter(|info| named(info, &face.family)).collect();
+    let faces: Vec<_> = db
+        .faces()
+        .filter(|info| named(info, &face.family))
+        .collect();
     let variable = |info: &&&fontdb::FaceInfo| {
-        let parsed = db.with_face_data(info.id, |data, index| Some(ttf_parser::Face::parse(data, index).ok()?.is_variable()));
+        let parsed = db.with_face_data(info.id, |data, index| {
+            Some(ttf_parser::Face::parse(data, index).ok()?.is_variable())
+        });
         parsed.flatten().unwrap_or(false)
     };
     if faces.iter().any(|info| variable(&info)) {
         return face.clone();
     }
     let nearest = |weight: u16, slanted: bool| {
-        let styled = faces.iter().filter(|info| (info.style != fontdb::Style::Normal) == slanted);
-        styled.map(|info| info.weight.0).min_by_key(|have| have.abs_diff(weight)).unwrap_or(weight)
+        let styled = faces
+            .iter()
+            .filter(|info| (info.style != fontdb::Style::Normal) == slanted);
+        styled
+            .map(|info| info.weight.0)
+            .min_by_key(|have| have.abs_diff(weight))
+            .unwrap_or(weight)
     };
     Face {
         weight: nearest(face.weight, false),
@@ -214,8 +260,13 @@ fn fontconfig_weight(weight: u16) -> &'static str {
 /// The files for the four styles, from lines of `file|weight|slant`.
 pub fn listed_files(output: &str, face: &Face) -> Vec<PathBuf> {
     let italic = if face.oblique { "110" } else { "100" };
-    let wanted = [(face.weight, "0"), (face.bold, "0"), (face.weight, italic), (face.bold_italic, italic)]
-        .map(|(weight, slant)| (fontconfig_weight(weight), slant));
+    let wanted = [
+        (face.weight, "0"),
+        (face.bold, "0"),
+        (face.weight, italic),
+        (face.bold_italic, italic),
+    ]
+    .map(|(weight, slant)| (fontconfig_weight(weight), slant));
     let lines: Vec<(&str, &str, &str)> = output
         .lines()
         .filter_map(|line| {
@@ -224,8 +275,14 @@ pub fn listed_files(output: &str, face: &Face) -> Vec<PathBuf> {
             Some((file, weight, slant))
         })
         .collect();
-    let exact = wanted.iter().all(|style| lines.iter().any(|(_, weight, slant)| (*weight, *slant) == *style));
-    let kept = lines.iter().filter(|(_, weight, slant)| !exact || weight.starts_with('[') || wanted.contains(&(*weight, *slant)));
+    let exact = wanted.iter().all(|style| {
+        lines
+            .iter()
+            .any(|(_, weight, slant)| (*weight, *slant) == *style)
+    });
+    let kept = lines.iter().filter(|(_, weight, slant)| {
+        !exact || weight.starts_with('[') || wanted.contains(&(*weight, *slant))
+    });
     kept.map(|(file, ..)| PathBuf::from(file)).collect()
 }
 
@@ -241,7 +298,48 @@ pub fn listed(face: &Face) -> Option<FontSystem> {
         .args(["--format=%{file}|%{weight}|%{slant}\\n", "--", &face.family])
         .output()
         .ok()?;
-    load(listed_files(&String::from_utf8_lossy(&output.stdout), face), face)
+    load(
+        listed_files(&String::from_utf8_lossy(&output.stdout), face),
+        face,
+    )
+}
+
+/// A small initial font database for the highest-priority icon fallback.
+/// If fontconfig cannot identify and load that family, keep the full startup path.
+pub fn listed_fallback(face: &Face) -> Option<FontSystem> {
+    let output = Command::new("fc-list")
+        .arg("--format=%{family[0]}|%{file}\n")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let output = std::str::from_utf8(&output.stdout).ok()?;
+    let entries: Vec<_> = output
+        .lines()
+        .filter_map(|line| line.split_once('|'))
+        .collect();
+    let family = entries
+        .iter()
+        .map(|(family, _)| *family)
+        .filter(|family| family.contains("Nerd Font Mono"))
+        .min()?;
+    let mut files: Vec<_> = entries
+        .iter()
+        .filter(|(name, _)| *name == family)
+        .map(|(_, file)| PathBuf::from(file))
+        .collect();
+    files.sort_unstable();
+    files.dedup();
+    let candidate = Face {
+        family: family.to_owned(),
+        ..face.clone()
+    };
+    let fonts = load(files, &candidate)?;
+    monospaced(fonts.db())
+        .iter()
+        .any(|name| name == family)
+        .then_some(fonts)
 }
 
 fn load(files: Vec<PathBuf>, face: &Face) -> Option<FontSystem> {
@@ -249,7 +347,9 @@ fn load(files: Vec<PathBuf>, face: &Face) -> Option<FontSystem> {
     for file in files {
         db.load_font_file(file).ok()?;
     }
-    let found = db.faces().any(|info| info.families.iter().any(|(name, _)| *name == face.family));
+    let found = db
+        .faces()
+        .any(|info| info.families.iter().any(|(name, _)| *name == face.family));
     found.then(|| FontSystem::new_with_locale_and_db(LOCALE.to_string(), db))
 }
 
@@ -266,7 +366,10 @@ pub fn families(font_system: &FontSystem, buffer: &Buffer) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
     for run in buffer.layout_runs() {
         for glyph in run.glyphs {
-            let family = font_system.db().face(glyph.font_id).and_then(|info| info.families.first().map(|(name, _)| name.clone()));
+            let family = font_system
+                .db()
+                .face(glyph.font_id)
+                .and_then(|info| info.families.first().map(|(name, _)| name.clone()));
             if let Some(family) = family
                 && !found.contains(&family)
             {
@@ -302,7 +405,10 @@ pub fn full(cache: Option<&Path>, face: &Face) -> FontSystem {
         && let Some(folder) = cache.parent()
         && std::fs::create_dir_all(folder).is_ok()
     {
-        let _ = std::fs::write(cache, files_text(&key(face), &face_files(system.db(), face)));
+        let _ = std::fs::write(
+            cache,
+            files_text(&key(face), &face_files(system.db(), face)),
+        );
     }
     system
 }

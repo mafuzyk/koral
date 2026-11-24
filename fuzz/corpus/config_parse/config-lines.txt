@@ -1,0 +1,11 @@
+polyp clipboard_write ask
+polyp notifications deny
+polyp clipboard_read true
+polyp clipboard_write allow
+polyp notifications ask
+polyp clipboard_write maybe
+polyp notifications 1
+polyp unknown value
+face family "Noto Sans"
+font size 14
+theme set catppuccin

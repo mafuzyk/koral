@@ -19,9 +19,16 @@ struct Fixture {
 
 impl Fixture {
     fn new(columns: usize, lines: usize) -> Self {
-        let config = Config { scrolling_history: 100, ..Config::default() };
+        let config = Config {
+            scrolling_history: 100,
+            ..Config::default()
+        };
         let term = Term::new(config, &TermSize::new(columns, lines), VoidListener);
-        Self { session: Session::new(term), lines, now: Instant::now() }
+        Self {
+            session: Session::new(term),
+            lines,
+            now: Instant::now(),
+        }
     }
 
     fn feed(&mut self, text: &str) {
@@ -36,7 +43,11 @@ impl Fixture {
     }
 
     fn drag(&mut self, from: (usize, usize), to: (usize, usize)) -> Option<String> {
-        let mut selection = Selection::new(SelectionType::Simple, self.point(from.0, from.1), Side::Left);
+        let mut selection = Selection::new(
+            SelectionType::Simple,
+            self.point(from.0, from.1),
+            Side::Left,
+        );
         selection.update(self.point(to.0, to.1), Side::Right);
         self.session.term.selection = Some(selection);
         self.session.term.selection_to_string()
@@ -47,7 +58,10 @@ impl Fixture {
 fn a_drag_selects_on_the_primary_screen() {
     let mut fixture = Fixture::new(20, 6);
     fixture.feed("hello\r\nworld\r\n");
-    assert_eq!(fixture.drag((0, 0), (1, 4)).as_deref(), Some("hello\nworld"));
+    assert_eq!(
+        fixture.drag((0, 0), (1, 4)).as_deref(),
+        Some("hello\nworld")
+    );
 }
 
 #[test]
@@ -55,5 +69,8 @@ fn a_drag_selects_on_the_alternate_screen() {
     let mut fixture = Fixture::new(20, 6);
     fixture.feed("\x1b[?1049h");
     fixture.feed("hello\r\nworld\r\n");
-    assert_eq!(fixture.drag((0, 0), (1, 4)).as_deref(), Some("hello\nworld"));
+    assert_eq!(
+        fixture.drag((0, 0), (1, 4)).as_deref(),
+        Some("hello\nworld")
+    );
 }

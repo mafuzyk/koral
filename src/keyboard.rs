@@ -37,7 +37,9 @@ pub fn encode(press: &KeyPress, mode: TermMode) -> Option<Vec<u8>> {
     }
 
     let code = code(press.unshifted, all_keys)?;
-    let chorded = press.mods.intersects(ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER);
+    let chorded = press
+        .mods
+        .intersects(ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER);
     let quiet = match press.unshifted {
         Key::Named(NamedKey::Escape) => false,
         Key::Named(NamedKey::Enter | NamedKey::Tab | NamedKey::Backspace) => {
@@ -50,7 +52,8 @@ pub fn encode(press: &KeyPress, mode: TermMode) -> Option<Vec<u8>> {
         return None;
     }
 
-    let mods = 1 + u8::from(press.mods.shift_key())
+    let mods = 1
+        + u8::from(press.mods.shift_key())
         + 2 * u8::from(press.mods.alt_key())
         + 4 * u8::from(press.mods.control_key())
         + 8 * u8::from(press.mods.super_key());
@@ -60,7 +63,11 @@ pub fn encode(press: &KeyPress, mode: TermMode) -> Option<Vec<u8>> {
         Stage::Release if events => ":3",
         _ => "",
     };
-    let state = if mods == 1 && stage.is_empty() { String::new() } else { format!("{mods}{stage}") };
+    let state = if mods == 1 && stage.is_empty() {
+        String::new()
+    } else {
+        format!("{mods}{stage}")
+    };
 
     Some(
         match code {
@@ -85,7 +92,10 @@ pub fn encode(press: &KeyPress, mode: TermMode) -> Option<Vec<u8>> {
 }
 
 fn alternate(press: &KeyPress, mode: TermMode) -> Option<u32> {
-    if !mode.contains(TermMode::REPORT_ALTERNATE_KEYS) || !press.mods.shift_key() || press.key == press.unshifted {
+    if !mode.contains(TermMode::REPORT_ALTERNATE_KEYS)
+        || !press.mods.shift_key()
+        || press.key == press.unshifted
+    {
         return None;
     }
     let Key::Character(text) = press.key else {
@@ -96,17 +106,29 @@ fn alternate(press: &KeyPress, mode: TermMode) -> Option<u32> {
 
 fn associated(press: &KeyPress, mode: TermMode) -> Option<String> {
     let wanted = TermMode::REPORT_ALL_KEYS_AS_ESC | TermMode::REPORT_ASSOCIATED_TEXT;
-    let typed = !press.mods.intersects(ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER);
+    let typed = !press
+        .mods
+        .intersects(ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER);
     if !mode.contains(wanted) || press.stage == Stage::Release || !typed {
         return None;
     }
-    let text = press.text.filter(|text| !text.is_empty() && !text.chars().any(char::is_control))?;
-    Some(text.chars().map(|ch| (ch as u32).to_string()).collect::<Vec<_>>().join(":"))
+    let text = press
+        .text
+        .filter(|text| !text.is_empty() && !text.chars().any(char::is_control))?;
+    Some(
+        text.chars()
+            .map(|ch| (ch as u32).to_string())
+            .collect::<Vec<_>>()
+            .join(":"),
+    )
 }
 
 fn single(text: &str) -> Option<u32> {
     let mut chars = text.chars();
-    chars.next().filter(|_| chars.next().is_none()).map(u32::from)
+    chars
+        .next()
+        .filter(|_| chars.next().is_none())
+        .map(u32::from)
 }
 
 fn code(key: &Key, all_keys: bool) -> Option<Code> {

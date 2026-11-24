@@ -1,4 +1,6 @@
-use koral::input::{Action, BindKey, Keybind, binding, parse_action, parse_shortcut, resolve_binding};
+use koral::input::{
+    Action, BindKey, Keybind, binding, parse_action, parse_shortcut, resolve_binding,
+};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 const CTRL_SHIFT: ModifiersState = ModifiersState::CONTROL.union(ModifiersState::SHIFT);
@@ -16,7 +18,10 @@ fn tab_shortcuts_match_with_shift_held() {
 #[test]
 fn control_tab_cycles() {
     let tab = Key::Named(NamedKey::Tab);
-    assert_eq!(binding(&tab, ModifiersState::CONTROL), Some(Action::NextTab));
+    assert_eq!(
+        binding(&tab, ModifiersState::CONTROL),
+        Some(Action::NextTab)
+    );
     assert_eq!(binding(&tab, CTRL_SHIFT), Some(Action::PreviousTab));
 }
 
@@ -51,7 +56,10 @@ fn shift_page_keys_scroll() {
 fn keys_meant_for_the_app_pass_through() {
     assert_eq!(letter("c", ModifiersState::CONTROL), None);
     assert_eq!(letter("t", ModifiersState::empty()), None);
-    assert_eq!(binding(&Key::Named(NamedKey::PageUp), ModifiersState::empty()), None);
+    assert_eq!(
+        binding(&Key::Named(NamedKey::PageUp), ModifiersState::empty()),
+        None
+    );
 }
 
 #[test]
@@ -78,8 +86,14 @@ fn split_focus_and_resize_defaults_match() {
     assert_eq!(letter("D", CTRL_SHIFT), Some(Action::SplitRight));
     assert_eq!(letter("E", CTRL_SHIFT), Some(Action::SplitDown));
     assert_eq!(letter("Q", CTRL_SHIFT), Some(Action::ClosePane));
-    assert_eq!(binding(&Key::Named(NamedKey::ArrowLeft), CTRL_SHIFT), Some(Action::FocusLeft));
-    assert_eq!(binding(&Key::Named(NamedKey::ArrowRight), ctrl_alt_shift), Some(Action::ResizeRight));
+    assert_eq!(
+        binding(&Key::Named(NamedKey::ArrowLeft), CTRL_SHIFT),
+        Some(Action::FocusLeft)
+    );
+    assert_eq!(
+        binding(&Key::Named(NamedKey::ArrowRight), ctrl_alt_shift),
+        Some(Action::ResizeRight)
+    );
 }
 
 #[test]
@@ -100,7 +114,16 @@ fn custom_bindings_override_or_unbind_defaults() {
             action: parse_action("unbind").unwrap(),
         },
     ];
-    assert_eq!(resolve_binding(&Key::Character("N".into()), CTRL_SHIFT, &custom), Some(Action::NewTab));
-    assert_eq!(resolve_binding(&Key::Character("T".into()), CTRL_SHIFT, &custom), None);
-    assert_eq!(resolve_binding(&Key::Character("W".into()), CTRL_SHIFT, &custom), Some(Action::CloseTab));
+    assert_eq!(
+        resolve_binding(&Key::Character("N".into()), CTRL_SHIFT, &custom),
+        Some(Action::NewTab)
+    );
+    assert_eq!(
+        resolve_binding(&Key::Character("T".into()), CTRL_SHIFT, &custom),
+        None
+    );
+    assert_eq!(
+        resolve_binding(&Key::Character("W".into()), CTRL_SHIFT, &custom),
+        Some(Action::CloseTab)
+    );
 }

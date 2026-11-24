@@ -28,23 +28,38 @@ fn finds_a_plain_url() {
 
 #[test]
 fn drops_trailing_punctuation() {
-    assert_eq!(link("see https://a.b/c.", point(0, 8)).unwrap().uri, "https://a.b/c");
+    assert_eq!(
+        link("see https://a.b/c.", point(0, 8)).unwrap().uri,
+        "https://a.b/c"
+    );
 }
 
 #[test]
 fn keeps_a_closing_bracket_that_opens_one() {
-    assert_eq!(link("https://a.b/(c)", point(0, 8)).unwrap().uri, "https://a.b/(c)");
+    assert_eq!(
+        link("https://a.b/(c)", point(0, 8)).unwrap().uri,
+        "https://a.b/(c)"
+    );
 }
 
 #[test]
 fn drops_a_closing_bracket_that_opens_nothing() {
-    assert_eq!(link("(https://a.b/c)", point(0, 5)).unwrap().uri, "https://a.b/c");
+    assert_eq!(
+        link("(https://a.b/c)", point(0, 5)).unwrap().uri,
+        "https://a.b/c"
+    );
 }
 
 #[test]
 fn keeps_a_bang_or_a_colon_at_the_end() {
-    assert_eq!(link("https://a.b/c!", point(0, 3)).unwrap().uri, "https://a.b/c!");
-    assert_eq!(link("https://a.b/c:", point(0, 3)).unwrap().uri, "https://a.b/c:");
+    assert_eq!(
+        link("https://a.b/c!", point(0, 3)).unwrap().uri,
+        "https://a.b/c!"
+    );
+    assert_eq!(
+        link("https://a.b/c:", point(0, 3)).unwrap().uri,
+        "https://a.b/c:"
+    );
 }
 
 #[test]
@@ -63,7 +78,11 @@ fn keeps_a_url_across_a_wrapped_line() {
 
 #[test]
 fn finds_an_osc8_link() {
-    let found = link("a \x1b]8;;https://real.example\x1b\\click\x1b]8;;\x1b\\ b", point(0, 4)).unwrap();
+    let found = link(
+        "a \x1b]8;;https://real.example\x1b\\click\x1b]8;;\x1b\\ b",
+        point(0, 4),
+    )
+    .unwrap();
     assert_eq!(found.uri, "https://real.example");
     assert_eq!(found.range, point(0, 2)..=point(0, 6));
 }
@@ -81,10 +100,22 @@ fn no_link_on_plain_text() {
 
 #[test]
 fn only_safe_schemes_are_allowed() {
-    for uri in ["https://a", "http://a", "mailto:a@b", "file:///a", "HTTPS://a"] {
+    for uri in [
+        "https://a",
+        "http://a",
+        "mailto:a@b",
+        "file:///a",
+        "HTTPS://a",
+    ] {
         assert!(allowed(uri), "{uri}");
     }
-    for uri in ["javascript:alert(1)", "data:text/html,x", "ssh://a", "-x", ""] {
+    for uri in [
+        "javascript:alert(1)",
+        "data:text/html,x",
+        "ssh://a",
+        "-x",
+        "",
+    ] {
         assert!(!allowed(uri), "{uri}");
     }
 }

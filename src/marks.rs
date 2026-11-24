@@ -2,12 +2,19 @@ const ESC: u8 = 0x1b;
 const BEL: u8 = 0x07;
 const GRAPHICS: &[u8] = b"\x1b_G";
 const STATUS: &[u8] = b"\x1bP$q";
-const PREFIXES: [&[u8]; 6] = [b"\x1b]133;", b"\x1b]7;", b"\x1b]777;notify;", b"\x1b]9;", GRAPHICS, STATUS];
+const PREFIXES: [&[u8]; 6] = [
+    b"\x1b]133;",
+    b"\x1b]7;",
+    b"\x1b]777;notify;",
+    b"\x1b]9;",
+    GRAPHICS,
+    STATUS,
+];
 // The stream is untrusted: an unterminated mark must not grow without bound.
-const MAX_MARK: usize = 64 * 1024;
+pub const MAX_MARK: usize = 64 * 1024;
 // Programs send images in 4096-byte chunks, this leaves room for the ones that do not.
-const MAX_GRAPHICS: usize = 2 * 1024 * 1024;
-const MAX_STATUS: usize = 32;
+pub const MAX_GRAPHICS: usize = 2 * 1024 * 1024;
+pub const MAX_STATUS: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mark {
@@ -47,7 +54,7 @@ impl Scanner {
         let mut rest = input;
         while !rest.is_empty() {
             if self.pending.is_empty() {
-                let Some(start) = rest.iter().position(|byte| *byte == ESC) else {
+                let Some(start) = memchr::memchr(ESC, rest) else {
                     sink(Piece::Bytes(rest));
                     return;
                 };
@@ -60,10 +67,26 @@ impl Scanner {
             }
 
             let byte = rest[0];
+            // A non-terminating escape can start the next sequence.
+            if !matches!(byte, b'\\' | BEL)
+                && self.pending.len() > 1
+                && self.pending.last() == Some(&ESC)
+            {
+                sink(Piece::Bytes(&self.pending[..self.pending.len() - 1]));
+                self.pending.truncate(1);
+            }
+            if byte == ESC && self.pending.last() == Some(&ESC) {
+                sink(Piece::Bytes(&self.pending));
+                self.pending.clear();
+            }
             rest = &rest[1..];
             self.pending.push(byte);
             match self.step() {
                 Step::Keep => {}
+                Step::Release if byte == ESC => {
+                    sink(Piece::Bytes(&self.pending[..self.pending.len() - 1]));
+                    self.pending.truncate(1);
+                }
                 Step::Release => {
                     sink(Piece::Bytes(&self.pending));
                     self.pending.clear();
@@ -133,13 +156,19 @@ fn parse(body: &[u8]) -> Option<Mark> {
 
     if let Some(rest) = body.strip_prefix("777;notify;") {
         let (title, body) = rest.split_once(';')?;
-        return Some(Mark::Notify { title: title.to_string(), body: body.to_string() });
+        return Some(Mark::Notify {
+            title: title.to_string(),
+            body: body.to_string(),
+        });
     }
     if let Some(text) = body.strip_prefix("9;") {
         // ConEmu progress is digits then a semicolon, and stays with vte.
         let digits = text.chars().take_while(char::is_ascii_digit).count();
         let progress = digits > 0 && text[digits..].starts_with(';');
-        return (!progress).then(|| Mark::Notify { title: String::new(), body: text.to_string() });
+        return (!progress).then(|| Mark::Notify {
+            title: String::new(),
+            body: text.to_string(),
+        });
     }
 
     let mut params = body.strip_prefix("133;")?.split(';');
@@ -151,7 +180,9 @@ fn parse(body: &[u8]) -> Option<Mark> {
                 .find_map(|param| param.strip_prefix("cmdline_url="))
                 .and_then(percent_decode),
         )),
-        "D" => Some(Mark::CommandEnd(params.next().and_then(|status| status.parse().ok()))),
+        "D" => Some(Mark::CommandEnd(
+            params.next().and_then(|status| status.parse().ok()),
+        )),
         _ => None,
     }
 }

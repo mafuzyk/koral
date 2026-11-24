@@ -11,10 +11,19 @@ fn wire_encode_decode_round_trips_all_commands() {
         Request::NewTab {
             cwd: Some(PathBuf::from("/tmp/a\tb")),
             title: Some("Line\nTitle\\One".to_string()),
-            command: Some(("fish".to_string(), vec!["-c".to_string(), "echo hi".to_string()])),
+            command: Some((
+                "fish".to_string(),
+                vec!["-c".to_string(), "echo hi".to_string()],
+            )),
         },
-        Request::Split { axis: Axis::Horizontal, cwd: Some(PathBuf::from("/home/mafu")) },
-        Request::Split { axis: Axis::Vertical, cwd: None },
+        Request::Split {
+            axis: Axis::Horizontal,
+            cwd: Some(PathBuf::from("/home/mafu")),
+        },
+        Request::Split {
+            axis: Axis::Vertical,
+            cwd: None,
+        },
         Request::ClosePane,
         Request::CloseTab,
         Request::Focus(Dir::Left),
@@ -61,13 +70,23 @@ fn cli_parser_handles_socket_flag_and_subcommands() {
         Request::NewTab {
             cwd: Some(PathBuf::from("/tmp")),
             title: Some("Logs".to_string()),
-            command: Some(("tail".to_string(), vec!["-f".to_string(), "/tmp/a".to_string()])),
+            command: Some((
+                "tail".to_string(),
+                vec!["-f".to_string(), "/tmp/a".to_string()]
+            )),
         }
     );
 
-    let (sock2, req2) = parse_cli(&["--socket=/tmp/y.sock".into(), "split".into(), "down".into()]).unwrap();
+    let (sock2, req2) =
+        parse_cli(&["--socket=/tmp/y.sock".into(), "split".into(), "down".into()]).unwrap();
     assert_eq!(sock2, Some(PathBuf::from("/tmp/y.sock")));
-    assert_eq!(req2, Request::Split { axis: Axis::Vertical, cwd: None });
+    assert_eq!(
+        req2,
+        Request::Split {
+            axis: Axis::Vertical,
+            cwd: None
+        }
+    );
 
     assert_eq!(parse_cli(&["list".into()]).unwrap().1, Request::List);
     assert!(parse_cli(&["nope".into()]).is_err());
@@ -98,7 +117,11 @@ fn unix_socket_server_replies_cleans_up_and_sets_0600_mode() {
     let out = send(Some(sock.clone()), &Request::List).unwrap();
     assert_eq!(out, "tab 0 pane 0");
 
-    let err = send(Some(sock.clone()), &Request::SetTheme("missing".to_string())).unwrap_err();
+    let err = send(
+        Some(sock.clone()),
+        &Request::SetTheme("missing".to_string()),
+    )
+    .unwrap_err();
     assert_eq!(err, "unknown theme");
 
     assert_eq!(seen.lock().unwrap().len(), 2);

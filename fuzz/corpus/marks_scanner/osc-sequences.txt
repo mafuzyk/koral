@@ -1,0 +1,1 @@
+]8;;https://example.comlink]8;;]1337;SetMark name=demo]7;file://home/user]777;notify;title;body]133;C]133;D;0]0;window title]52;c;ZGF0YQ==]1337;File=inline=1:name=demo.txt:aGVsbG8=]1337;File=inline=1;size=999999999999999:aGk=]1337;File=inline=1:;aGVsbG8=]1337;File=inline=1:name=demo.txt;aGVsbG8=bcnormal text

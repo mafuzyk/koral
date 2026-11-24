@@ -48,9 +48,30 @@ pub struct BlockStore {
     cwd: Option<String>,
     started: Option<Instant>,
     next_id: u32,
+    /// Monotonic count of changes that can alter projected rows.
+    revision: u64,
+    /// Test hook: bytes actually looked at by `observe`.
+    bytes_scanned: usize,
 }
 
 impl BlockStore {
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn changed(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub fn in_prompt(&self) -> bool {
+        self.phase == Phase::Prompt
+    }
+
+    /// Test-only diagnostic: counts bytes scanned while in the prompt phase.
+    pub fn bytes_scanned(&self) -> usize {
+        self.bytes_scanned
+    }
+
     /// Returns a block id when its anchor has to go on the cursor line.
     pub fn apply(&mut self, mark: Mark, now: Instant) -> Option<u32> {
         match (self.phase, mark) {
@@ -68,15 +89,23 @@ impl BlockStore {
             (Phase::Input, Mark::CommandStart(command)) => {
                 self.phase = Phase::Running;
                 self.started = Some(now);
-                self.latest_mut()?.command = command;
+                let latest = self.latest_mut()?;
+                if latest.command != command {
+                    latest.command = command;
+                    self.changed();
+                }
                 None
             }
             (Phase::Input | Phase::Running, Mark::CommandEnd(status)) => {
                 let duration = self.started.take().map(|started| now - started);
                 self.phase = Phase::Idle;
                 let block = self.latest_mut()?;
+                let previous = block.status;
                 block.status = status;
                 block.duration = duration;
+                if previous != status {
+                    self.changed();
+                }
                 None
             }
             (Phase::Idle | Phase::Prompt | Phase::Input, Mark::Cwd(path)) => {
@@ -91,16 +120,25 @@ impl BlockStore {
     /// a prompt moves no cursor line and adds no history. The rows they need are
     /// read off the grid, which is what a reflow rewraps.
     pub fn observe(&mut self, bytes: &[u8]) {
-        if self.phase == Phase::Prompt
-            && let Some(block) = self.latest_mut()
-        {
-            block.prompt_breaks += bytes.iter().filter(|byte| **byte == b'\n').count();
+        if !self.in_prompt() || self.order.is_empty() {
+            return;
+        }
+        self.bytes_scanned += bytes.len();
+        if let Some(block) = self.latest_mut() {
+            let breaks = bytes.iter().filter(|byte| **byte == b'\n').count();
+            block.prompt_breaks += breaks;
+            if breaks > 0 {
+                self.changed();
+            }
         }
     }
 
     pub fn set_prompt_lines(&mut self, id: u32, lines: usize) {
-        if let Some(block) = self.blocks.get_mut(&id) {
+        if let Some(block) = self.blocks.get_mut(&id)
+            && block.prompt_lines != lines
+        {
             block.prompt_lines = lines;
+            self.changed();
         }
     }
 
@@ -123,6 +161,7 @@ impl BlockStore {
     pub fn toggle_fold(&mut self, id: u32) {
         if let Some(block) = self.blocks.get_mut(&id) {
             block.folded = !block.folded;
+            self.changed();
         }
     }
 
@@ -134,7 +173,11 @@ impl BlockStore {
         if self.phase == Phase::Running {
             return Activity::Running;
         }
-        let finished = self.order.iter().rev().find_map(|id| self.blocks[id].status);
+        let finished = self
+            .order
+            .iter()
+            .rev()
+            .find_map(|id| self.blocks[id].status);
         match finished {
             None => Activity::Idle,
             Some(0) => Activity::Succeeded,
@@ -145,9 +188,17 @@ impl BlockStore {
     fn start_block(&mut self) {
         let id = self.next_id;
         self.next_id = (id + 1) % ID_RANGE;
-        self.blocks.insert(id, Block { id, cwd: self.cwd.clone(), ..Block::default() });
+        self.blocks.insert(
+            id,
+            Block {
+                id,
+                cwd: self.cwd.clone(),
+                ..Block::default()
+            },
+        );
         self.order.push_back(id);
         self.phase = Phase::Prompt;
+        self.changed();
 
         if self.order.len() > MAX_BLOCKS
             && let Some(oldest) = self.order.pop_front()
@@ -159,6 +210,7 @@ impl BlockStore {
     fn drop_latest(&mut self) {
         if let Some(id) = self.order.pop_back() {
             self.blocks.remove(&id);
+            self.changed();
         }
     }
 

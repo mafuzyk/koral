@@ -19,9 +19,15 @@ struct Fixture {
 
 impl Fixture {
     fn new(columns: usize, lines: usize) -> Self {
-        let config = Config { scrolling_history: 100, ..Config::default() };
+        let config = Config {
+            scrolling_history: 100,
+            ..Config::default()
+        };
         let term = Term::new(config, &TermSize::new(columns, lines), VoidListener);
-        Self { session: Session::new(term), now: Instant::now() }
+        Self {
+            session: Session::new(term),
+            now: Instant::now(),
+        }
     }
 
     fn feed(&mut self, text: &str) {
@@ -55,7 +61,13 @@ impl Fixture {
         let rows = self.rows();
         let lines = self.session.term.screen_lines();
         let top = rows.len().saturating_sub(lines);
-        placed(&self.session.term, &self.session.graphics, &rows, top, lines)
+        placed(
+            &self.session.term,
+            &self.session.graphics,
+            &rows,
+            top,
+            lines,
+        )
     }
 
     fn start(&mut self, name: &str) {
@@ -68,7 +80,11 @@ impl Fixture {
     fn text(&self, line: Line) -> String {
         let grid = self.session.term.grid();
         let row = &grid[line];
-        (0..grid.columns()).map(|column| row[Column(column)].c).collect::<String>().trim_end().to_string()
+        (0..grid.columns())
+            .map(|column| row[Column(column)].c)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
     }
 
     fn rows(&self) -> Vec<Row> {
@@ -84,12 +100,19 @@ impl Fixture {
     }
 
     fn headers(&self) -> Vec<String> {
-        self.rows().iter().filter(|row| row.block.is_some()).map(|row| self.text(row.line)).collect()
+        self.rows()
+            .iter()
+            .filter(|row| row.block.is_some())
+            .map(|row| self.text(row.line))
+            .collect()
     }
 
     fn fold_latest_finished(&mut self) {
         let id = self.rows().iter().filter_map(|row| row.block).find(|id| {
-            self.session.blocks.get(*id).is_some_and(|block| block.status.is_some())
+            self.session
+                .blocks
+                .get(*id)
+                .is_some_and(|block| block.status.is_some())
         });
         self.session.blocks.toggle_fold(id.unwrap());
     }
@@ -111,6 +134,35 @@ fn a_mark_split_across_reads_still_opens_a_block() {
     f.session.feed(tail, f.now);
     f.feed("ls");
     assert_eq!(f.headers(), vec!["$ ls"]);
+}
+
+#[test]
+fn a_batch_of_chunks_matches_feeding_them_one_at_a_time() {
+    let chunks: Vec<&str> = vec![
+        "\x1b]133;A\x1b\\$ ",
+        "\x1b]133;B\x1b\\ls\r\n",
+        "a\r\n",
+        "\x1b]133;D;0\x1b\\",
+    ];
+    let mut single = Fixture::new(20, 10);
+    for chunk in &chunks {
+        single.feed(chunk);
+    }
+    let mut batched = Fixture::new(20, 10);
+    batched.session.feed_batch(
+        &chunks
+            .iter()
+            .map(|chunk| chunk.as_bytes())
+            .collect::<Vec<_>>(),
+        batched.now,
+    );
+
+    assert_eq!(batched.visible(), single.visible());
+    assert_eq!(batched.headers(), single.headers());
+    assert_eq!(
+        batched.session.blocks.latest().unwrap().status,
+        single.session.blocks.latest().unwrap().status
+    );
 }
 
 #[test]
@@ -140,7 +192,10 @@ fn folding_stops_before_the_next_prompt_of_several_lines() {
     f.tall_command("two", &["c"]);
     f.fold_latest_finished();
 
-    assert_eq!(f.visible(), vec!["", "info", "$ one", "", "info", "$ two", "c"]);
+    assert_eq!(
+        f.visible(),
+        vec!["", "info", "$ one", "", "info", "$ two", "c"]
+    );
     assert_eq!(f.rows()[2].hidden, 2);
 }
 
@@ -231,7 +286,10 @@ fn a_reflowed_prompt_stays_out_of_the_command_before() {
     f.session.term.resize(TermSize::new(5, 12));
     f.feed("\x1b]133;B\x1b\\");
 
-    assert_eq!(output_text(&f.session.term, &f.session.blocks, id).as_deref(), Some("a\nb"));
+    assert_eq!(
+        output_text(&f.session.term, &f.session.blocks, id).as_deref(),
+        Some("a\nb")
+    );
 }
 
 #[test]
@@ -275,7 +333,10 @@ fn output_text_is_only_that_commands_output() {
     f.command("one", &["a", "b"], 0);
     f.command("two", &["c"], 0);
     let id = f.rows()[0].block.unwrap();
-    assert_eq!(output_text(&f.session.term, &f.session.blocks, id).as_deref(), Some("a\nb"));
+    assert_eq!(
+        output_text(&f.session.term, &f.session.blocks, id).as_deref(),
+        Some("a\nb")
+    );
 }
 
 #[test]
@@ -284,7 +345,10 @@ fn output_text_leaves_out_the_next_prompt_of_several_lines() {
     f.tall_command("one", &["a", "b"]);
     f.tall_command("two", &["c"]);
     let id = f.rows()[2].block.unwrap();
-    assert_eq!(output_text(&f.session.term, &f.session.blocks, id).as_deref(), Some("a\nb"));
+    assert_eq!(
+        output_text(&f.session.term, &f.session.blocks, id).as_deref(),
+        Some("a\nb")
+    );
 }
 
 #[test]
@@ -293,7 +357,10 @@ fn output_text_joins_wrapped_lines_and_skips_a_wrapped_command() {
     f.command("a-long-command", &["0123456789ab"], 0);
     f.command("two", &[], 0);
     let id = f.rows()[0].block.unwrap();
-    assert_eq!(output_text(&f.session.term, &f.session.blocks, id).as_deref(), Some("0123456789ab"));
+    assert_eq!(
+        output_text(&f.session.term, &f.session.blocks, id).as_deref(),
+        Some("0123456789ab")
+    );
 }
 
 #[test]
@@ -314,7 +381,10 @@ fn output_text_of_a_running_command_stops_at_the_cursor() {
     f.start("sleep");
     f.feed("partial");
     let id = f.rows()[0].block.unwrap();
-    assert_eq!(output_text(&f.session.term, &f.session.blocks, id).as_deref(), Some("partial"));
+    assert_eq!(
+        output_text(&f.session.term, &f.session.blocks, id).as_deref(),
+        Some("partial")
+    );
 }
 
 #[test]
@@ -353,11 +423,22 @@ mod navigation {
     use std::time::Instant;
 
     fn row(block: Option<u32>) -> Row {
-        Row { line: Line(0), block, hidden: 0 }
+        Row {
+            line: Line(0),
+            block,
+            hidden: 0,
+        }
     }
 
     fn sample() -> Vec<Row> {
-        vec![row(Some(0)), row(None), row(None), row(Some(1)), row(None), row(Some(2))]
+        vec![
+            row(Some(0)),
+            row(None),
+            row(None),
+            row(Some(1)),
+            row(None),
+            row(Some(2)),
+        ]
     }
 
     #[test]
@@ -405,7 +486,10 @@ fn an_image_sits_on_the_cursor_cell() {
     f.feed("ab\r\ncd");
     f.show("i=1,c=3,r=2");
     let picture = f.pictures()[0];
-    assert_eq!((picture.row, picture.column, picture.columns, picture.rows), (1, 2, 3, 2));
+    assert_eq!(
+        (picture.row, picture.column, picture.columns, picture.rows),
+        (1, 2, 3, 2)
+    );
 }
 
 /// icat centres an image by moving the cursor forward before the command, so the placement must
@@ -436,9 +520,17 @@ fn an_image_in_a_synchronized_update_lands_on_the_cell_the_batch_names() {
         f.session.feed(tail.as_bytes(), f.now);
 
         let cursor = f.session.term.grid().cursor.point;
-        assert_eq!((cursor.line, cursor.column), (Line(0), Column(8)), "the cursor goes back to the prompt");
+        assert_eq!(
+            (cursor.line, cursor.column),
+            (Line(0), Column(8)),
+            "the cursor goes back to the prompt"
+        );
         let picture = f.pictures()[0];
-        assert_eq!((picture.row, picture.column), (4, 3), "the image sits on the cell the batch named");
+        assert_eq!(
+            (picture.row, picture.column),
+            (4, 3),
+            "the image sits on the cell the batch named"
+        );
     }
 }
 
@@ -458,10 +550,22 @@ fn an_image_placed_after_leaving_the_alternate_screen_stays() {
         f.feed(&format!("\x1b[?1049l{batch}"));
 
         let pictures = f.pictures();
-        assert_eq!(pictures.len(), 1, "the image on the primary screen outlived the exit");
-        assert_eq!((pictures[0].row, pictures[0].column), (4, 3), "it sits on the cell the batch named");
+        assert_eq!(
+            pictures.len(),
+            1,
+            "the image on the primary screen outlived the exit"
+        );
+        assert_eq!(
+            (pictures[0].row, pictures[0].column),
+            (4, 3),
+            "it sits on the cell the batch named"
+        );
         let cursor = f.session.term.grid().cursor.point;
-        assert_eq!((cursor.line, cursor.column), (Line(0), Column(8)), "the cursor stays on the primary screen");
+        assert_eq!(
+            (cursor.line, cursor.column),
+            (Line(0), Column(8)),
+            "the cursor stays on the primary screen"
+        );
     }
 }
 
@@ -478,7 +582,11 @@ fn output_after_the_end_of_a_synchronized_update_applies_at_once() {
 
     assert_eq!(f.text(Line(0)), "$ x");
     let cursor = f.session.term.grid().cursor.point;
-    assert_eq!((cursor.line, cursor.column), (Line(0), Column(3)), "the update ended with its ESU");
+    assert_eq!(
+        (cursor.line, cursor.column),
+        (Line(0), Column(3)),
+        "the update ended with its ESU"
+    );
 }
 
 /// A client that clears a preview inside a synchronized update names the cell with a move, and
@@ -517,7 +625,14 @@ fn an_image_after_a_wide_character_takes_the_column_the_cursor_reached() {
 fn an_unsupported_transfer_mode_is_answered_instead_of_dropped() {
     let mut f = Fixture::new(20, 5);
     f.feed("\x1b_Ga=T,f=100,t=s,s=1,v=1,S=19,i=4;L2ljYXQtSlRWTU5HNU9ORklJQw\x1b\\");
-    assert!(f.session.replies.iter().any(|reply| reply.contains("ENOTSUPPORTED")), "{:?}", f.session.replies);
+    assert!(
+        f.session
+            .replies
+            .iter()
+            .any(|reply| reply.contains("ENOTSUPPORTED")),
+        "{:?}",
+        f.session.replies
+    );
     assert!(f.pictures().is_empty());
 }
 
@@ -605,8 +720,16 @@ fn text_painted_over_an_image_leaves_it_on_screen() {
         f.feed("\x1b[2;3H");
         f.feed(paint);
         let pictures = f.pictures();
-        assert_eq!(pictures.len(), 1, "the image outlives the paint over its cell");
-        assert_eq!((pictures[0].row, pictures[0].column), (1, 2), "it stays on the cell it was placed on");
+        assert_eq!(
+            pictures.len(),
+            1,
+            "the image outlives the paint over its cell"
+        );
+        assert_eq!(
+            (pictures[0].row, pictures[0].column),
+            (1, 2),
+            "it stays on the cell it was placed on"
+        );
     }
 }
 
@@ -622,7 +745,11 @@ fn text_painted_over_a_scrolled_image_keeps_its_new_cell() {
     f.feed("\x1b[2;1H  ");
     let pictures = f.pictures();
     assert_eq!(pictures.len(), 1, "one anchor, put back once");
-    assert_eq!((pictures[0].row, pictures[0].column), (1, 0), "it keeps the cell the scroll gave it");
+    assert_eq!(
+        (pictures[0].row, pictures[0].column),
+        (1, 0),
+        "it keeps the cell the scroll gave it"
+    );
 }
 
 /// ED 3 clears the scrollback, not the screen: the visible image and its anchor stay.
@@ -647,7 +774,11 @@ fn a_scroll_in_a_region_keeps_one_anchor() {
     f.feed("\x1b[?1049h\x1b[1;5r\x1b[3;1H");
     f.show("i=1,p=1,c=2,r=2,C=1");
     f.feed("\x1b[5;1H\n");
-    assert_eq!(f.pictures()[0].row, 1, "the image moved up inside the region");
+    assert_eq!(
+        f.pictures()[0].row,
+        1,
+        "the image moved up inside the region"
+    );
     f.feed("\x1b[2;1H  ");
     let pictures = f.pictures();
     assert_eq!(pictures.len(), 1, "one anchor after the region scrolled");
@@ -676,7 +807,11 @@ fn a_wide_character_over_an_image_keeps_it() {
     f.show("i=1,p=1,c=2,r=2,C=1");
     f.feed("日");
     let pictures = f.pictures();
-    assert_eq!(pictures.len(), 1, "the wide glyph replaced the text, not the picture");
+    assert_eq!(
+        pictures.len(),
+        1,
+        "the wide glyph replaced the text, not the picture"
+    );
     assert_eq!((pictures[0].row, pictures[0].column), (0, 0));
 }
 
@@ -778,7 +913,11 @@ fn leaving_the_alternate_screen_takes_its_images_away() {
     assert_eq!(f.pictures().len(), 1);
     f.feed("\x1b[?1049l");
     assert!(f.pictures().is_empty());
-    assert_eq!(f.session.graphics.tallest(), 0, "the placement outlived the screen");
+    assert_eq!(
+        f.session.graphics.tallest(),
+        0,
+        "the placement outlived the screen"
+    );
 }
 
 #[test]
@@ -883,10 +1022,19 @@ fn named_images_on_one_cell_both_stay() {
 
 #[test]
 fn an_app_can_turn_the_keyboard_protocol_on() {
-    let term = Term::new(koral::pty::term_config(), &TermSize::new(20, 5), VoidListener);
+    let term = Term::new(
+        koral::pty::term_config(),
+        &TermSize::new(20, 5),
+        VoidListener,
+    );
     let mut session = Session::new(term);
     session.feed(b"\x1b[>1u", Instant::now());
-    assert!(session.term.mode().contains(TermMode::DISAMBIGUATE_ESC_CODES));
+    assert!(
+        session
+            .term
+            .mode()
+            .contains(TermMode::DISAMBIGUATE_ESC_CODES)
+    );
 }
 
 #[test]
@@ -895,8 +1043,12 @@ fn a_word_selection_stops_at_a_space_after_an_anchor() {
     fixture.feed(&format!("{PROMPT}foo bar"));
     let line = fixture.session.term.grid().cursor.point.line;
     let point = Point::new(line, Column(3));
-    fixture.session.term.selection = Some(Selection::new(SelectionType::Semantic, point, Side::Left));
-    assert_eq!(fixture.session.term.selection_to_string().as_deref(), Some("foo"));
+    fixture.session.term.selection =
+        Some(Selection::new(SelectionType::Semantic, point, Side::Left));
+    assert_eq!(
+        fixture.session.term.selection_to_string().as_deref(),
+        Some("foo")
+    );
 }
 
 #[test]
@@ -906,7 +1058,11 @@ fn overwriting_a_wide_spacer_over_an_image_keeps_it() {
     f.feed("日");
     f.feed("\x1b[1;2Ha");
     let pictures = f.pictures();
-    assert_eq!(pictures.len(), 1, "clear_wide on the right spacer must preserve the picture anchor");
+    assert_eq!(
+        pictures.len(),
+        1,
+        "clear_wide on the right spacer must preserve the picture anchor"
+    );
     assert_eq!((pictures[0].row, pictures[0].column), (0, 0));
 }
 
@@ -917,7 +1073,11 @@ fn line_erase_over_an_image_preserves_its_anchor() {
         f.show("i=1,p=1,c=2,r=2,C=1");
         f.feed("\x1b[1;1H");
         f.feed(seq);
-        assert_eq!(f.pictures().len(), 1, "sequence {seq:?} should keep the picture anchor");
+        assert_eq!(
+            f.pictures().len(),
+            1,
+            "sequence {seq:?} should keep the picture anchor"
+        );
     }
 }
 
@@ -929,14 +1089,24 @@ fn clearing_the_screen_prunes_orphan_placements() {
     assert_eq!(f.session.graphics.tallest(), 4);
     f.feed("\x1b[2J");
     assert!(f.pictures().is_empty());
-    assert_eq!(f.session.graphics.tallest(), 0, "orphan placements must be pruned after ED 2");
+    assert_eq!(
+        f.session.graphics.tallest(),
+        0,
+        "orphan placements must be pruned after ED 2"
+    );
 }
 
 #[test]
 fn synchronized_marks_and_status_read_flushed_grid_state() {
     let mut f = Fixture::new(20, 6);
-    f.feed(&format!("\x1b[?2026h\r\n\r\n{PROMPT}\x1b[1m\x1bP$qm\x1b\\\x1b[?2026l"));
-    let block_row = f.rows().into_iter().find(|row| row.block.is_some()).expect("prompt block");
+    f.feed(&format!(
+        "\x1b[?2026h\r\n\r\n{PROMPT}\x1b[1m\x1bP$qm\x1b\\\x1b[?2026l"
+    ));
+    let block_row = f
+        .rows()
+        .into_iter()
+        .find(|row| row.block.is_some())
+        .expect("prompt block");
     assert_eq!(block_row.line, Line(2));
     assert_eq!(f.session.replies, vec!["\x1bP1$r0;1m\x1b\\"]);
 }
@@ -945,11 +1115,23 @@ fn synchronized_marks_and_status_read_flushed_grid_state() {
 fn unicode_placeholder_places_and_clears_a_virtual_image() {
     let mut f = Fixture::new(20, 6);
     f.feed("\x1b_Ga=T,f=24,s=1,v=1,i=42,c=2,r=2,U=1,q=2;AAAA\x1b\\");
-    assert!(f.pictures().is_empty(), "virtual placement waits for placeholder cells");
+    assert!(
+        f.pictures().is_empty(),
+        "virtual placement waits for placeholder cells"
+    );
     f.feed("\x1b[2;3H\x1b[38;2;0;0;42m\u{10EEEE}\u{10EEEE}\x1b[3;3H\u{10EEEE}\u{10EEEE}\x1b[39m");
     let pics = f.pictures();
     assert_eq!(pics.len(), 1);
-    assert_eq!((pics[0].image, pics[0].row, pics[0].column, pics[0].columns, pics[0].rows), (42, 1, 2, 2, 2));
+    assert_eq!(
+        (
+            pics[0].image,
+            pics[0].row,
+            pics[0].column,
+            pics[0].columns,
+            pics[0].rows
+        ),
+        (42, 1, 2, 2, 2)
+    );
     f.feed("\x1b[2;3H  \x1b[3;3H  ");
     assert!(f.pictures().is_empty());
 }

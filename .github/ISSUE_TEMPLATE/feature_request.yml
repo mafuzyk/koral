@@ -1,0 +1,52 @@
+name: Feature request
+description: Propose a new capability or improvement for Koral
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Koral keeps a small core, so describe the user problem first and the proposed change
+        second. Check CONTRIBUTING.md for the release channels before proposing breaking
+        configuration or protocol changes.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that Koral makes hard or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior, not only the implementation. Include example config or keybindings if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Which workarounds or other designs did you consider, and why do they not work?
+    validations:
+      required: false
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Where should this land?
+      description: Breaking config/protocol work belongs in the alpha line; stable only takes compatible fixes.
+      options:
+        - Stable 1.2.x
+        - 2.0.0-alpha or beta
+        - Not sure
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and discussions for this proposal.
+          required: true
+        - label: I am willing to help implement or test it.
+          required: false

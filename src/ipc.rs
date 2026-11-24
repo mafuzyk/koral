@@ -16,8 +16,15 @@ const MAX_LINE: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
-    NewTab { cwd: Option<PathBuf>, title: Option<String>, command: Option<(String, Vec<String>)> },
-    Split { axis: Axis, cwd: Option<PathBuf> },
+    NewTab {
+        cwd: Option<PathBuf>,
+        title: Option<String>,
+        command: Option<(String, Vec<String>)>,
+    },
+    Split {
+        axis: Axis,
+        cwd: Option<PathBuf>,
+    },
     ClosePane,
     CloseTab,
     Focus(Dir),
@@ -87,7 +94,11 @@ fn unescape(text: &str) -> Result<String, String> {
 pub fn encode(req: &Request) -> String {
     let mut parts: Vec<String> = Vec::new();
     match req {
-        Request::NewTab { cwd, title, command } => {
+        Request::NewTab {
+            cwd,
+            title,
+            command,
+        } => {
             parts.push("new-tab".to_string());
             if let Some(cwd) = cwd {
                 parts.push(format!("cwd:{}", escape(&cwd.to_string_lossy())));
@@ -166,10 +177,18 @@ pub fn decode(line: &str) -> Result<Request, String> {
                     return Err(format!("unknown field '{field}'"));
                 }
             }
-            Ok(Request::NewTab { cwd, title, command: prog.map(|p| (p, cmd_args)) })
+            Ok(Request::NewTab {
+                cwd,
+                title,
+                command: prog.map(|p| (p, cmd_args)),
+            })
         }
         "split" => {
-            let axis = parse_axis(fields.next().ok_or_else(|| "missing split axis".to_string())?)?;
+            let axis = parse_axis(
+                fields
+                    .next()
+                    .ok_or_else(|| "missing split axis".to_string())?,
+            )?;
             let mut cwd = None;
             for field in fields {
                 if let Some(val) = field.strip_prefix("cwd:") {
@@ -182,13 +201,27 @@ pub fn decode(line: &str) -> Result<Request, String> {
         }
         "close-pane" => Ok(Request::ClosePane),
         "close-tab" => Ok(Request::CloseTab),
-        "focus" => Ok(Request::Focus(parse_dir(fields.next().ok_or_else(|| "missing focus direction".to_string())?)?)),
-        "resize" => Ok(Request::Resize(parse_dir(fields.next().ok_or_else(|| "missing resize direction".to_string())?)?)),
-        "set-title" => Ok(Request::SetTitle(unescape(fields.next().ok_or_else(|| "missing title".to_string())?)?)),
-        "set-theme" => Ok(Request::SetTheme(unescape(fields.next().ok_or_else(|| "missing theme".to_string())?)?)),
+        "focus" => Ok(Request::Focus(parse_dir(
+            fields
+                .next()
+                .ok_or_else(|| "missing focus direction".to_string())?,
+        )?)),
+        "resize" => Ok(Request::Resize(parse_dir(
+            fields
+                .next()
+                .ok_or_else(|| "missing resize direction".to_string())?,
+        )?)),
+        "set-title" => Ok(Request::SetTitle(unescape(
+            fields.next().ok_or_else(|| "missing title".to_string())?,
+        )?)),
+        "set-theme" => Ok(Request::SetTheme(unescape(
+            fields.next().ok_or_else(|| "missing theme".to_string())?,
+        )?)),
         "open-settings" => Ok(Request::OpenSettings),
         "reload" => Ok(Request::Reload),
-        "send-text" => Ok(Request::SendText(unescape(fields.next().ok_or_else(|| "missing text".to_string())?)?)),
+        "send-text" => Ok(Request::SendText(unescape(
+            fields.next().ok_or_else(|| "missing text".to_string())?,
+        )?)),
         "list" => Ok(Request::List),
         other => Err(format!("unknown ipc command '{other}'")),
     }
@@ -230,7 +263,9 @@ pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> 
             iter.next();
         } else if *arg == "--socket" {
             iter.next();
-            let path = iter.next().ok_or_else(|| "missing value for '--socket'".to_string())?;
+            let path = iter
+                .next()
+                .ok_or_else(|| "missing value for '--socket'".to_string())?;
             socket = Some(PathBuf::from(path));
         } else {
             break;
@@ -246,22 +281,31 @@ pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> 
             let mut title = None;
             let mut command = None;
             while let Some(arg) = iter.next() {
-                if let Some(val) = arg.strip_prefix("--cwd=").or_else(|| arg.strip_prefix("--working-directory=")) {
+                if let Some(val) = arg
+                    .strip_prefix("--cwd=")
+                    .or_else(|| arg.strip_prefix("--working-directory="))
+                {
                     cwd = Some(PathBuf::from(val));
                 } else if let Some(val) = arg.strip_prefix("--title=") {
                     title = Some(val.to_string());
                 } else {
                     match arg.as_str() {
                         "--cwd" | "--working-directory" => {
-                            let val = iter.next().ok_or_else(|| format!("missing value for '{arg}'"))?;
+                            let val = iter
+                                .next()
+                                .ok_or_else(|| format!("missing value for '{arg}'"))?;
                             cwd = Some(PathBuf::from(val));
                         }
                         "--title" => {
-                            let val = iter.next().ok_or_else(|| "missing value for '--title'".to_string())?;
+                            let val = iter
+                                .next()
+                                .ok_or_else(|| "missing value for '--title'".to_string())?;
                             title = Some(val.clone());
                         }
                         "-e" | "--command" | "--" => {
-                            let prog = iter.next().ok_or_else(|| format!("missing command for '{arg}'"))?;
+                            let prog = iter
+                                .next()
+                                .ok_or_else(|| format!("missing command for '{arg}'"))?;
                             command = Some((prog.clone(), iter.cloned().collect()));
                             break;
                         }
@@ -269,17 +313,25 @@ pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> 
                     }
                 }
             }
-            Request::NewTab { cwd, title, command }
+            Request::NewTab {
+                cwd,
+                title,
+                command,
+            }
         }
         "split" => {
-            let dir = iter.next().ok_or_else(|| "split requires right|down".to_string())?;
+            let dir = iter
+                .next()
+                .ok_or_else(|| "split requires right|down".to_string())?;
             let axis = parse_axis(dir)?;
             let mut cwd = None;
             while let Some(arg) = iter.next() {
                 if let Some(val) = arg.strip_prefix("--cwd=") {
                     cwd = Some(PathBuf::from(val));
                 } else if arg == "--cwd" {
-                    let val = iter.next().ok_or_else(|| "missing value for '--cwd'".to_string())?;
+                    let val = iter
+                        .next()
+                        .ok_or_else(|| "missing value for '--cwd'".to_string())?;
                     cwd = Some(PathBuf::from(val));
                 } else {
                     return Err(format!("unknown split option '{arg}'"));
@@ -289,13 +341,31 @@ pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> 
         }
         "close-pane" => Request::ClosePane,
         "close-tab" => Request::CloseTab,
-        "focus" => Request::Focus(parse_dir(iter.next().ok_or_else(|| "focus requires a direction".to_string())?)?),
-        "resize" => Request::Resize(parse_dir(iter.next().ok_or_else(|| "resize requires a direction".to_string())?)?),
-        "set-title" => Request::SetTitle(iter.next().ok_or_else(|| "set-title requires TEXT".to_string())?.clone()),
-        "set-theme" => Request::SetTheme(iter.next().ok_or_else(|| "set-theme requires a theme id".to_string())?.clone()),
+        "focus" => Request::Focus(parse_dir(
+            iter.next()
+                .ok_or_else(|| "focus requires a direction".to_string())?,
+        )?),
+        "resize" => Request::Resize(parse_dir(
+            iter.next()
+                .ok_or_else(|| "resize requires a direction".to_string())?,
+        )?),
+        "set-title" => Request::SetTitle(
+            iter.next()
+                .ok_or_else(|| "set-title requires TEXT".to_string())?
+                .clone(),
+        ),
+        "set-theme" => Request::SetTheme(
+            iter.next()
+                .ok_or_else(|| "set-theme requires a theme id".to_string())?
+                .clone(),
+        ),
         "open-settings" => Request::OpenSettings,
         "reload" => Request::Reload,
-        "send-text" => Request::SendText(iter.next().ok_or_else(|| "send-text requires TEXT".to_string())?.clone()),
+        "send-text" => Request::SendText(
+            iter.next()
+                .ok_or_else(|| "send-text requires TEXT".to_string())?
+                .clone(),
+        ),
         "list" => Request::List,
         other => return Err(format!("unknown ctl command '{other}'")),
     };
@@ -325,7 +395,10 @@ pub fn default_socket_path() -> Option<PathBuf> {
         })
         .collect();
     candidates.sort();
-    candidates.into_iter().rev().find(|path| UnixStream::connect(path).is_ok())
+    candidates
+        .into_iter()
+        .rev()
+        .find(|path| UnixStream::connect(path).is_ok())
 }
 
 pub struct Server {
@@ -392,7 +465,8 @@ where
         Ok(request) => {
             let (tx, rx) = mpsc::channel();
             dispatch(request, tx);
-            rx.recv_timeout(IO_TIMEOUT).unwrap_or_else(|_| "ERR timed out\n".to_string())
+            rx.recv_timeout(IO_TIMEOUT)
+                .unwrap_or_else(|_| "ERR timed out\n".to_string())
         }
         Err(error) => format!("ERR {error}\n"),
     };
@@ -404,13 +478,18 @@ pub fn send(socket: Option<PathBuf>, request: &Request) -> Result<String, String
     let path = socket
         .or_else(default_socket_path)
         .ok_or_else(|| "no running koral socket found".to_string())?;
-    let mut stream = UnixStream::connect(&path).map_err(|e| format!("cannot connect to {}: {e}", path.display()))?;
+    let mut stream = UnixStream::connect(&path)
+        .map_err(|e| format!("cannot connect to {}: {e}", path.display()))?;
     let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
-    stream.write_all(encode(request).as_bytes()).map_err(|e| format!("write error: {e}"))?;
+    stream
+        .write_all(encode(request).as_bytes())
+        .map_err(|e| format!("write error: {e}"))?;
     let _ = stream.shutdown(std::net::Shutdown::Write);
     let mut reply = String::new();
-    stream.read_to_string(&mut reply).map_err(|e| format!("read error: {e}"))?;
+    stream
+        .read_to_string(&mut reply)
+        .map_err(|e| format!("read error: {e}"))?;
     if let Some(body) = reply.strip_prefix("OK\n") {
         Ok(body.trim_end_matches('\n').to_string())
     } else if reply.trim() == "OK" {

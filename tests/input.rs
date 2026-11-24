@@ -2,7 +2,9 @@ use alacritty_terminal::term::TermMode;
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::selection::SelectionType;
-use koral::input::{Clicks, Mouse, encode, motion_button, mouse_report, paste, selection_kind, zoomed};
+use koral::input::{
+    Clicks, Mouse, encode, motion_button, mouse_report, paste, selection_kind, zoomed,
+};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 const NONE: ModifiersState = ModifiersState::empty();
@@ -15,7 +17,12 @@ fn named(key: NamedKey, mods: ModifiersState, mode: TermMode) -> Option<Vec<u8>>
 }
 
 fn character(text: &str, mods: ModifiersState) -> Option<Vec<u8>> {
-    encode(&Key::Character(text.into()), Some(text), mods, TermMode::empty())
+    encode(
+        &Key::Character(text.into()),
+        Some(text),
+        mods,
+        TermMode::empty(),
+    )
 }
 
 fn plain(key: NamedKey) -> Option<Vec<u8>> {
@@ -48,13 +55,20 @@ fn legacy_ctrl_aliases_match_their_c0_codes() {
         ('~', 0x00),
     ];
     for (typed, code) in cases {
-        assert_eq!(character(&typed.to_string(), CTRL), Some(vec![code]), "ctrl+{typed}");
+        assert_eq!(
+            character(&typed.to_string(), CTRL),
+            Some(vec![code]),
+            "ctrl+{typed}"
+        );
     }
 }
 
 #[test]
 fn control_space_is_nul() {
-    assert_eq!(named(NamedKey::Space, CTRL, TermMode::empty()).unwrap(), vec![0]);
+    assert_eq!(
+        named(NamedKey::Space, CTRL, TermMode::empty()).unwrap(),
+        vec![0]
+    );
 }
 
 #[test]
@@ -74,20 +88,35 @@ fn editing_keys_have_their_codes() {
 
 #[test]
 fn shift_tab_is_backtab() {
-    assert_eq!(named(NamedKey::Tab, SHIFT, TermMode::empty()).unwrap(), b"\x1b[Z");
+    assert_eq!(
+        named(NamedKey::Tab, SHIFT, TermMode::empty()).unwrap(),
+        b"\x1b[Z"
+    );
 }
 
 #[test]
 fn arrows_follow_application_cursor_mode() {
     assert_eq!(plain(NamedKey::ArrowUp).unwrap(), b"\x1b[A");
-    assert_eq!(named(NamedKey::ArrowUp, NONE, TermMode::APP_CURSOR).unwrap(), b"\x1bOA");
-    assert_eq!(named(NamedKey::Home, NONE, TermMode::APP_CURSOR).unwrap(), b"\x1bOH");
+    assert_eq!(
+        named(NamedKey::ArrowUp, NONE, TermMode::APP_CURSOR).unwrap(),
+        b"\x1bOA"
+    );
+    assert_eq!(
+        named(NamedKey::Home, NONE, TermMode::APP_CURSOR).unwrap(),
+        b"\x1bOH"
+    );
 }
 
 #[test]
 fn modified_arrows_carry_the_modifier_code() {
-    assert_eq!(named(NamedKey::ArrowLeft, CTRL, TermMode::empty()).unwrap(), b"\x1b[1;5D");
-    assert_eq!(named(NamedKey::ArrowRight, SHIFT | ALT, TermMode::empty()).unwrap(), b"\x1b[1;4C");
+    assert_eq!(
+        named(NamedKey::ArrowLeft, CTRL, TermMode::empty()).unwrap(),
+        b"\x1b[1;5D"
+    );
+    assert_eq!(
+        named(NamedKey::ArrowRight, SHIFT | ALT, TermMode::empty()).unwrap(),
+        b"\x1b[1;4C"
+    );
 }
 
 #[test]
@@ -95,7 +124,10 @@ fn function_keys_have_their_codes() {
     assert_eq!(plain(NamedKey::F1).unwrap(), b"\x1bOP");
     assert_eq!(plain(NamedKey::F5).unwrap(), b"\x1b[15~");
     assert_eq!(plain(NamedKey::F12).unwrap(), b"\x1b[24~");
-    assert_eq!(named(NamedKey::F5, CTRL, TermMode::empty()).unwrap(), b"\x1b[15;5~");
+    assert_eq!(
+        named(NamedKey::F5, CTRL, TermMode::empty()).unwrap(),
+        b"\x1b[15;5~"
+    );
 }
 
 #[test]
@@ -110,7 +142,10 @@ fn paste_turns_newlines_into_returns_without_bracketed_mode() {
 
 #[test]
 fn bracketed_paste_wraps_the_text() {
-    assert_eq!(paste("a\nb", TermMode::BRACKETED_PASTE), b"\x1b[200~a\nb\x1b[201~");
+    assert_eq!(
+        paste("a\nb", TermMode::BRACKETED_PASTE),
+        b"\x1b[200~a\nb\x1b[201~"
+    );
 }
 
 #[test]
@@ -127,11 +162,21 @@ fn bracketed_paste_drops_the_c1_control_introducer() {
 
 #[test]
 fn plain_paste_drops_the_control_introducers() {
-    assert_eq!(paste("a\x1b[31mb\u{9b}2Jc\nd", TermMode::empty()), b"a[31mb2Jc\rd");
+    assert_eq!(
+        paste("a\x1b[31mb\u{9b}2Jc\nd", TermMode::empty()),
+        b"a[31mb2Jc\rd"
+    );
 }
 
 fn press(button: u8, column: usize, line: usize) -> Mouse {
-    Mouse { button, column, line, pressed: true, mods: NONE, motion: false }
+    Mouse {
+        button,
+        column,
+        line,
+        pressed: true,
+        mods: NONE,
+        motion: false,
+    }
 }
 
 #[test]
@@ -143,14 +188,20 @@ fn mouse_reports_nothing_unless_the_app_asked() {
 fn sgr_mouse_is_one_based_and_marks_release() {
     let mode = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
     assert_eq!(mouse_report(press(0, 4, 2), mode).unwrap(), b"\x1b[<0;5;3M");
-    let release = Mouse { pressed: false, ..press(0, 4, 2) };
+    let release = Mouse {
+        pressed: false,
+        ..press(0, 4, 2)
+    };
     assert_eq!(mouse_report(release, mode).unwrap(), b"\x1b[<0;5;3m");
 }
 
 #[test]
 fn sgr_mouse_adds_modifier_bits() {
     let mode = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
-    let mouse = Mouse { mods: CTRL | ALT, ..press(64, 0, 0) };
+    let mouse = Mouse {
+        mods: CTRL | ALT,
+        ..press(64, 0, 0)
+    };
     assert_eq!(mouse_report(mouse, mode).unwrap(), b"\x1b[<88;1;1M");
 }
 
@@ -159,28 +210,44 @@ fn sgr_mouse_adds_modifier_bits() {
 #[test]
 fn a_drag_reports_the_held_button_with_the_motion_bit() {
     let mode = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
-    let mouse = Mouse { motion: true, ..press(0, 4, 2) };
+    let mouse = Mouse {
+        motion: true,
+        ..press(0, 4, 2)
+    };
     assert_eq!(mouse_report(mouse, mode).unwrap(), b"\x1b[<32;5;3M");
 }
 
 #[test]
 fn bare_motion_reports_button_three_with_the_motion_bit() {
     let mode = TermMode::MOUSE_MOTION | TermMode::SGR_MOUSE;
-    let mouse = Mouse { motion: true, ..press(3, 4, 2) };
+    let mouse = Mouse {
+        motion: true,
+        ..press(3, 4, 2)
+    };
     assert_eq!(mouse_report(mouse, mode).unwrap(), b"\x1b[<35;5;3M");
 }
 
 #[test]
 fn legacy_motion_keeps_the_same_button_bits() {
-    let mouse = Mouse { motion: true, ..press(0, 1, 2) };
-    assert_eq!(mouse_report(mouse, TermMode::MOUSE_DRAG).unwrap(), vec![0x1b, b'[', b'M', 32 + 32, 34, 35]);
+    let mouse = Mouse {
+        motion: true,
+        ..press(0, 1, 2)
+    };
+    assert_eq!(
+        mouse_report(mouse, TermMode::MOUSE_DRAG).unwrap(),
+        vec![0x1b, b'[', b'M', 32 + 32, 34, 35]
+    );
 }
 
 #[test]
 fn a_drag_forwards_the_held_button() {
     let mode = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
     let button = motion_button(mode, Some(0)).unwrap();
-    let mouse = Mouse { button, motion: true, ..press(button, 4, 2) };
+    let mouse = Mouse {
+        button,
+        motion: true,
+        ..press(button, 4, 2)
+    };
     assert_eq!(mouse_report(mouse, mode).unwrap(), b"\x1b[<32;5;3M");
 }
 
@@ -188,7 +255,11 @@ fn a_drag_forwards_the_held_button() {
 fn motion_with_no_button_held_reports_the_no_button_code() {
     let mode = TermMode::MOUSE_MOTION | TermMode::SGR_MOUSE;
     let button = motion_button(mode, None).unwrap();
-    let mouse = Mouse { button, motion: true, ..press(button, 4, 2) };
+    let mouse = Mouse {
+        button,
+        motion: true,
+        ..press(button, 4, 2)
+    };
     assert_eq!(mouse_report(mouse, mode).unwrap(), b"\x1b[<35;5;3M");
 }
 
@@ -207,14 +278,26 @@ fn motion_is_dropped_when_the_app_asked_for_no_motion() {
 #[test]
 fn legacy_mouse_offsets_values_by_32() {
     let mode = TermMode::MOUSE_REPORT_CLICK;
-    assert_eq!(mouse_report(press(0, 1, 2), mode).unwrap(), vec![0x1b, b'[', b'M', 32, 34, 35]);
-    let release = Mouse { pressed: false, ..press(2, 0, 0) };
-    assert_eq!(mouse_report(release, mode).unwrap(), vec![0x1b, b'[', b'M', 35, 33, 33]);
+    assert_eq!(
+        mouse_report(press(0, 1, 2), mode).unwrap(),
+        vec![0x1b, b'[', b'M', 32, 34, 35]
+    );
+    let release = Mouse {
+        pressed: false,
+        ..press(2, 0, 0)
+    };
+    assert_eq!(
+        mouse_report(release, mode).unwrap(),
+        vec![0x1b, b'[', b'M', 35, 33, 33]
+    );
 }
 
 #[test]
 fn legacy_mouse_cannot_report_past_its_range() {
-    assert_eq!(mouse_report(press(0, 300, 0), TermMode::MOUSE_REPORT_CLICK), None);
+    assert_eq!(
+        mouse_report(press(0, 300, 0), TermMode::MOUSE_REPORT_CLICK),
+        None
+    );
 }
 
 /// On Linux AltGr arrives as Ctrl+Alt and main.rs drops the text for it, so the
@@ -235,7 +318,9 @@ fn altgr_composed_letters_reach_the_terminal() {
 fn clicks_on_one_cell_count_up() {
     let (mut clicks, start) = (Clicks::default(), Instant::now());
     let at = |ms| start + Duration::from_millis(ms);
-    let counts: Vec<u8> = [0, 100, 200, 300].map(|ms| clicks.press((1, 2), at(ms))).to_vec();
+    let counts: Vec<u8> = [0, 100, 200, 300]
+        .map(|ms| clicks.press((1, 2), at(ms)))
+        .to_vec();
     assert_eq!(counts, [1, 2, 3, 1]);
 }
 

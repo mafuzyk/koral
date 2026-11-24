@@ -951,6 +951,7 @@ dependencies = [
  "base64",
  "flate2",
  "glyphon",
+ "memchr",
  "png",
  "polling",
  "pollster",
