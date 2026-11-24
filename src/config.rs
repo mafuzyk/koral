@@ -1,14 +1,11 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use sharky_config::tokenize;
-
 use crate::input::{self, Keybind};
 use crate::render::Face;
 use crate::theme;
 
-const INSTRUCTION: &str = "polyp";
-const BIND_INSTRUCTION: &str = "bind";
+const KEYBIND_KEY: &str = "keybind";
 
 pub const USAGE: &str = "\
 Usage: koral [OPTIONS] [-e COMMAND [ARGS...]]
@@ -195,7 +192,7 @@ pub fn home() -> Option<PathBuf> {
 }
 
 pub fn path() -> Option<PathBuf> {
-    Some(home()?.join("koral/config.sharky"))
+    Some(home()?.join("koral/koral.conf"))
 }
 
 pub fn log_path() -> Option<PathBuf> {
@@ -224,13 +221,132 @@ pub fn append(path: &std::path::Path, message: &str) -> std::io::Result<()> {
     writeln!(file, "[{seconds}] {message}")
 }
 
-/// Moves a config from before the rename; an existing `config.sharky` always wins.
-pub fn migrate(dir: &std::path::Path) -> std::io::Result<()> {
-    let (old, new) = (dir.join("config.koral"), dir.join("config.sharky"));
-    if old.exists() && !new.exists() {
-        std::fs::rename(old, new)?;
+/// Legacy tokenizer matching the old `sharky-config` parser for one-time migration and `theme.sharky`.
+pub(crate) fn tokenize_legacy(line: &str) -> Result<Vec<String>, String> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut tokens = Vec::new();
+    let mut pos = 0;
+
+    while pos < chars.len() {
+        match chars[pos] {
+            ' ' | '\t' | '\r' => pos += 1,
+            '/' if chars.get(pos + 1) == Some(&'/') => break,
+            '"' => {
+                let (value, next) = quoted_legacy(&chars, pos)?;
+                tokens.push(value);
+                pos = next;
+            }
+            _ => {
+                let start = pos;
+                while pos < chars.len() {
+                    if chars[pos].is_whitespace() {
+                        break;
+                    }
+                    if chars[pos] == '/' && chars.get(pos + 1) == Some(&'/') {
+                        break;
+                    }
+                    pos += 1;
+                }
+                tokens.push(chars[start..pos].iter().collect());
+            }
+        }
     }
-    Ok(())
+
+    Ok(tokens)
+}
+
+fn quoted_legacy(chars: &[char], start: usize) -> Result<(String, usize), String> {
+    let mut value = String::new();
+    let mut pos = start + 1;
+
+    while pos < chars.len() {
+        match chars[pos] {
+            '"' => return Ok((value, pos + 1)),
+            '\\' => {
+                let Some(&next) = chars.get(pos + 1) else {
+                    return Err("trailing backslash".to_string());
+                };
+                value.push(match next {
+                    'n' => '\n',
+                    't' => '\t',
+                    other => other,
+                });
+                pos += 2;
+            }
+            ch => {
+                value.push(ch);
+                pos += 1;
+            }
+        }
+    }
+
+    Err("unclosed quote".to_string())
+}
+
+fn legacy_comment_start(line: &str) -> Option<usize> {
+    let tokens = tokenize_legacy(line).ok()?;
+    line.match_indices("//")
+        .map(|(index, _)| index)
+        .find(|index| tokenize_legacy(&line[..*index]).is_ok_and(|words| words == tokens))
+}
+
+/// Converts a legacy `config.sharky` (or `config.koral`) once into `koral.conf` without altering the source file.
+pub fn migrate(dir: &std::path::Path) -> std::io::Result<Option<PathBuf>> {
+    let target = dir.join("koral.conf");
+    if target.exists() {
+        return Ok(None);
+    }
+    let old = [dir.join("config.sharky"), dir.join("config.koral")]
+        .into_iter()
+        .find(|candidate| candidate.exists());
+    let Some(old) = old else {
+        return Ok(None);
+    };
+
+    let source = std::fs::read_to_string(&old)?;
+    let mut out = Vec::new();
+    for line in source.lines() {
+        let raw = line.strip_suffix('\r').unwrap_or(line);
+        let trimmed = raw.trim_start();
+        if trimmed.is_empty() {
+            out.push(String::new());
+            continue;
+        }
+        if let Some(comment) = trimmed.strip_prefix("//") {
+            out.push(format!("#{comment}"));
+            continue;
+        }
+        let Ok(tokens) = tokenize_legacy(raw) else {
+            log(&format!("koral.conf migration skipped: {raw}"));
+            out.push(format!("# not migrated: {raw}"));
+            continue;
+        };
+        if let Some(start) = legacy_comment_start(raw)
+            && let Some(comment) = raw[start..].strip_prefix("//")
+        {
+            out.push(format!("#{comment}"));
+        }
+        match tokens.as_slice() {
+            [instr, key, value] if instr == "polyp" => {
+                out.push(format!("{key} {}", quote(value)));
+            }
+            [instr, shortcut, action] if instr == "bind" => {
+                out.push(format!("{KEYBIND_KEY} {shortcut}={action}"));
+            }
+            _ => {
+                log(&format!("koral.conf migration skipped: {raw}"));
+                out.push(format!("# not migrated: {raw}"));
+            }
+        }
+    }
+
+    let mut converted = out.join("\n");
+    if !source.is_empty() {
+        converted.push('\n');
+    }
+    save(&target, &converted)?;
+    log(&format!("migrated {} to koral.conf", old.display()));
+    Ok(Some(old))
 }
 
 /// Replaces the file in one step, so a crash mid-write cannot lose the config.
@@ -238,7 +354,7 @@ pub fn save(path: &std::path::Path, source: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let temporary = path.with_extension("sharky.tmp");
+    let temporary = path.with_extension("conf.tmp");
     std::fs::write(&temporary, source)?;
     std::fs::rename(&temporary, path)
 }
@@ -255,38 +371,54 @@ pub fn parse(source: &str) -> (Config, Vec<String>) {
     (config, errors)
 }
 
-fn apply(config: &mut Config, line: &str) -> Result<(), String> {
-    let tokens = tokenize(line)?;
-    let Some((instruction, rest)) = tokens.split_first() else {
-        return Ok(());
-    };
-    if instruction == BIND_INSTRUCTION {
-        let [shortcut, action] = rest else {
-            return Err(format!("{BIND_INSTRUCTION} takes a shortcut and an action"));
-        };
-        let (mods, key) = input::parse_shortcut(shortcut)?;
-        let action = input::parse_action(action)?;
-        config.bindings.push(Keybind { mods, key, action });
-        return Ok(());
+fn unquote_value(raw: &str) -> Result<String, String> {
+    if !raw.starts_with('"') {
+        return Ok(raw.to_string());
     }
-    if instruction != INSTRUCTION {
-        return Err(format!(
-            "unknown instruction '{instruction}', expected {INSTRUCTION}"
-        ));
+    let chars: Vec<char> = raw.chars().collect();
+    let (value, next) = quoted_legacy(&chars, 0)?;
+    if chars[next..].iter().any(|ch| !ch.is_whitespace()) {
+        return Err("unexpected trailing characters after quote".to_string());
     }
-    let [key, value] = rest else {
-        return Err(format!("{INSTRUCTION} takes a key and a value"));
-    };
+    Ok(value)
+}
 
-    match key.as_str() {
+fn apply(config: &mut Config, line: &str) -> Result<(), String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return Ok(());
+    }
+    let Some((key, rest)) = trimmed.split_once(char::is_whitespace) else {
+        return Err(format!("'{trimmed}' takes a key and a value"));
+    };
+    let raw_value = rest.trim();
+    if raw_value.is_empty() {
+        return Err(format!("'{key}' takes a key and a value"));
+    }
+    let value = unquote_value(raw_value)?;
+    if key == KEYBIND_KEY {
+        let Some((shortcut, action)) = value.rsplit_once('=') else {
+            return Err("keybind takes SHORTCUT=ACTION".to_string());
+        };
+        let (mods, bind_key) = input::parse_shortcut(shortcut.trim())?;
+        let action = input::parse_action(action.trim())?;
+        config.bindings.push(Keybind {
+            mods,
+            key: bind_key,
+            action,
+        });
+        return Ok(());
+    }
+
+    match key {
         "font" if value.is_empty() => Err("font cannot be empty".to_string()),
         "font" => {
-            config.font = value.clone();
+            config.font = value;
             Ok(())
         }
-        "font_weight" => weight(value).map(|weight| config.font_weight = weight),
-        "bold_weight" => weight(value).map(|weight| config.bold_weight = weight),
-        "bold_italic_weight" => weight(value).map(|weight| config.bold_italic_weight = weight),
+        "font_weight" => weight(&value).map(|weight| config.font_weight = weight),
+        "bold_weight" => weight(&value).map(|weight| config.bold_weight = weight),
+        "bold_italic_weight" => weight(&value).map(|weight| config.bold_italic_weight = weight),
         "italic_style" => match value.as_str() {
             "oblique" | "italic" => {
                 config.oblique = value == "oblique";
@@ -294,19 +426,19 @@ fn apply(config: &mut Config, line: &str) -> Result<(), String> {
             }
             _ => Err(format!("'{value}' is not oblique or italic")),
         },
-        "font_size" => number(value, 6.0, 72.0).map(|size| config.font_size = size),
-        "opacity" => number(value, 0.1, 1.0).map(|opacity| config.opacity = opacity),
-        "padding" => number(value, 0.0, 64.0).map(|padding| config.padding = padding),
+        "font_size" => number(&value, 6.0, 72.0).map(|size| config.font_size = size),
+        "opacity" => number(&value, 0.1, 1.0).map(|opacity| config.opacity = opacity),
+        "padding" => number(&value, 0.0, 64.0).map(|padding| config.padding = padding),
         "shell" => {
-            config.shell = Some(value.clone()).filter(|shell| !shell.is_empty());
+            config.shell = Some(value).filter(|shell| !shell.is_empty());
             Ok(())
         }
         "theme" => {
             if value.is_empty() {
                 config.theme = None;
                 Ok(())
-            } else if theme::is_builtin(value) {
-                config.theme = Some(value.clone());
+            } else if theme::is_builtin(&value) {
+                config.theme = Some(value);
                 Ok(())
             } else {
                 Err(format!("unknown theme '{value}'"))
@@ -319,11 +451,11 @@ fn apply(config: &mut Config, line: &str) -> Result<(), String> {
             }
             _ => Err(format!("'{value}' is not an integer from 0 to 1000000")),
         },
-        "clipboard_read" => toggle(value).map(|on| config.clipboard_read = on),
-        "clipboard_write" => policy(value).map(|policy| config.clipboard_write = policy),
-        "notifications" => policy(value).map(|policy| config.notifications = policy),
-        "matugen" => toggle(value).map(|on| config.matugen = on),
-        "window_decorations" => toggle(value).map(|on| config.window_decorations = on),
+        "clipboard_read" => toggle(&value).map(|on| config.clipboard_read = on),
+        "clipboard_write" => policy(&value).map(|policy| config.clipboard_write = policy),
+        "notifications" => policy(&value).map(|policy| config.notifications = policy),
+        "matugen" => toggle(&value).map(|on| config.matugen = on),
+        "window_decorations" => toggle(&value).map(|on| config.window_decorations = on),
         "present_mode" => {
             config.present_mode = match value.as_str() {
                 "auto" => PresentModePolicy::Auto,
@@ -357,32 +489,19 @@ fn number(value: &str, min: f32, max: f32) -> Result<f32, String> {
     }
 }
 
-/// Where a line's trailing comment starts: the first `//` that leaves the words unchanged.
-fn comment_start(line: &str) -> Option<usize> {
-    let tokens = tokenize(line).ok()?;
-    line.match_indices("//")
-        .map(|(index, _)| index)
-        .find(|index| tokenize(&line[..*index]).is_ok_and(|words| words == tokens))
-}
-
 /// The new file text with one setting changed; every other byte stays.
 pub fn set(source: &str, key: &str, value: &str) -> String {
-    let statement = format!("{INSTRUCTION} {key} {}", quote(value));
+    let statement = format!("{key} {}", quote(value));
     let mut lines: Vec<String> = source.lines().map(str::to_string).collect();
 
     let found = lines.iter().rposition(|line| {
-        tokenize(line).is_ok_and(|tokens| {
-            tokens.first().is_some_and(|word| word == INSTRUCTION)
-                && tokens.get(1).is_some_and(|word| word == key)
-        })
+        let trimmed = line.trim();
+        !trimmed.is_empty()
+            && !trimmed.starts_with('#')
+            && trimmed.split_whitespace().next() == Some(key)
     });
     match found {
-        Some(index) => {
-            lines[index] = match comment_start(&lines[index]) {
-                Some(start) => format!("{statement} {}", &lines[index][start..]),
-                None => statement,
-            };
-        }
+        Some(index) => lines[index] = statement,
         None => lines.push(statement),
     }
 
@@ -392,12 +511,13 @@ pub fn set(source: &str, key: &str, value: &str) -> String {
 }
 
 fn quote(value: &str) -> String {
-    let plain = !value.is_empty()
-        && !value.contains("//")
-        && value
-            .chars()
-            .all(|ch| !ch.is_whitespace() && ch != '"' && ch != '\\');
-    if plain {
+    let needs_quotes = value.is_empty()
+        || value.starts_with('"')
+        || value.starts_with('#')
+        || value.chars().next().is_some_and(char::is_whitespace)
+        || value.chars().last().is_some_and(char::is_whitespace)
+        || value.contains(['\n', '\t', '\r']);
+    if !needs_quotes {
         return value.to_string();
     }
     let escaped = value

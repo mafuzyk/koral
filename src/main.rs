@@ -207,14 +207,14 @@ struct App {
 impl App {
     fn new(proxy: EventLoopProxy<UserEvent>, args: Args) -> Self {
         if let Some(Err(error)) = config::home().map(|home| config::migrate(&home.join("koral"))) {
-            report(&format!("cannot rename config.koral: {error}"));
+            report(&format!("cannot migrate config: {error}"));
         }
         let source = config::path()
             .and_then(|path| std::fs::read_to_string(path).ok())
             .unwrap_or_default();
         let (config, errors) = config::parse(&source);
         for error in errors {
-            report(&format!("config.sharky {error}"));
+            report(&format!("koral.conf {error}"));
         }
         let notices = Notifier::with_policies(config.clipboard_write, config.notifications);
         matugen::watch(proxy.clone());
@@ -396,7 +396,7 @@ impl App {
             if shells[0] != fallback {
                 shells.push(fallback);
             }
-            // A bad `polyp shell` must not cost the user the window: the default gets a turn.
+            // A bad `shell` setting must not cost the user the window: the default gets a turn.
             shells.iter().find_map(|shell| {
                 match Terminal::spawn_configured(
                     id,
@@ -854,7 +854,7 @@ impl App {
         }
         let (config, errors) = config::parse(&source);
         for error in errors {
-            report(&format!("config.sharky {error}"));
+            report(&format!("koral.conf {error}"));
         }
         let font_changed =
             config.face() != self.config.face() || config.font_size != self.config.font_size;

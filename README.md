@@ -7,7 +7,7 @@
 
 <h1>koral</h1>
 
-<p><strong>A Rust Wayland terminal emulator with native <a href="https://github.com/mafuzyk/sharky-shell">sharky</a> shell integration.</strong></p>
+<p><strong>A shell-agnostic Rust Wayland terminal emulator with native <a href="https://github.com/mafuzyk/sharky-shell">sharky</a> support.</strong></p>
 
 <p>
   Foldable command blocks, native tabs and split panes, 14 built-in themes, Kitty graphics, and live Settings — rendered on the GPU with <code>wgpu</code>.
@@ -44,7 +44,7 @@ install -Dm755 koral ~/.local/bin/koral
 ```
 
 > [!NOTE]
-> `koral` targets Linux on Wayland (`x86_64`) and is developed on Hyprland. Other shells work as a plain GPU terminal, while foldable command blocks, exit markers, and prompt jumping require `sharky`.
+> `koral` targets Linux on Wayland (`x86_64`) and is developed on Hyprland. Any POSIX/interactive shell works out of the box, with native support for `sharky` and standard OSC 133/7 prompt marks.
 
 <details>
 <summary>Nix flake outputs, building from source, and optional runtime dependencies</summary>
@@ -73,7 +73,7 @@ cargo build --release --locked
 - **Default font:** `IosevkaTerm Nerd Font Mono` (missing or proportional fonts fall back automatically to a fixed-width system font via `fontconfig`, and the Settings tab reports the fallback).
 - **Desktop notifications (`OSC 777` / `OSC 9`):** `libnotify`.
 - **Opening clicked links and file paths:** `xdg-utils` (`xdg-open`).
-- **Full command-block integration:** [`sharky`](https://github.com/mafuzyk/sharky-shell) (`sharky-shell-bin` / `sharky-shell-git`).
+- **Command-block integration:** works with [`sharky`](https://github.com/mafuzyk/sharky-shell) (`sharky-shell-bin` / `sharky-shell-git`) or any shell emitting `OSC 133` / `OSC 7`.
 
 </details>
 
@@ -165,9 +165,9 @@ full methodology and its `--self-test` option for percentile checks.
       <sub><b>Live Settings tab &amp; 14 built-in themes</b></sub>
     </td>
     <td align="center" width="50%">
-      <img src="assets/screenshots/config-keybindings.png" width="440" alt="config.sharky polyp/bind directives with inotify live reload and CLI flags" />
+      <img src="assets/screenshots/config-keybindings.png" width="440" alt="koral.conf settings and keybinds with inotify live reload and CLI flags" />
       <br />
-      <sub><b>Declarative <code>config.sharky</code>, keybinds &amp; CLI flags</b></sub>
+      <sub><b>Declarative <code>koral.conf</code>, keybinds &amp; CLI flags</b></sub>
     </td>
   </tr>
 </table>
@@ -234,7 +234,7 @@ koral ctl list
 | `shift+pageup`, `shift+pagedown` | Scroll one page | `page_up`, `page_down` |
 | `ctrl+shift+,` | Open Settings tab | `settings` (`open_settings`) |
 
-Pass `none` or `unbind` in `bind <shortcut> unbind` to disable a default shortcut. Click pane dividers to drag-resize or click any pane to focus it.
+Pass `none` or `unbind` in `keybind <shortcut>=unbind` to disable a default shortcut. Click pane dividers to drag-resize or click any pane to focus it.
 
 </details>
 
@@ -242,31 +242,33 @@ Pass `none` or `unbind` in `bind <shortcut> unbind` to disable a default shortcu
 
 ## Settings, themes & configuration
 
-Open the interactive **Settings tab** (`ctrl+shift+,` or click the `⚙` icon in the tab bar) to inspect fixed-width system fonts, preview all 14 themes live, and persist changes directly to `~/.config/koral/config.sharky`. Edits to `~/.config/koral/config.sharky` are watched with `inotify` and reload automatically:
+Open the interactive **Settings tab** (`ctrl+shift+,` or click the `⚙` icon in the tab bar) to inspect fixed-width system fonts, preview all 14 themes live, and persist changes directly to `~/.config/koral/koral.conf`. Edits to `~/.config/koral/koral.conf` are watched with `inotify` and reload automatically. Existing `config.sharky` / `config.koral` files are converted once to `koral.conf` on startup and left untouched:
 
-```sh
-// ~/.config/koral/config.sharky
-polyp theme "koral"                      // or sharky, dracula, catppuccin-mocha, ...
-polyp font "IosevkaTerm Nerd Font Mono"
-polyp font_size 13.5
-polyp font_weight 500                    // 100..900
-polyp bold_weight 800
-polyp bold_italic_weight 900
-polyp italic_style oblique               // oblique | italic
-polyp opacity 0.8
-polyp padding 8
-polyp scrollback 10000                   // 0..1000000
-polyp clipboard_read off                 // OSC 52 clipboard reads (default)
-polyp clipboard_write ask                // OSC 52 clipboard writes: allow | ask | deny (default: ask)
-polyp notifications allow                // OSC 777/9 desktop notifications: allow | ask | deny (default: allow)
-polyp shell /usr/bin/sharky
-polyp matugen off                        // pull palette from ~/.config/matugen on change
-bind ctrl+shift+n new_tab
-bind ctrl+shift+t unbind
+```conf
+# ~/.config/koral/koral.conf
+theme koral                             # or sharky, dracula, catppuccin-mocha, ...
+font IosevkaTerm Nerd Font Mono
+font_size 13.5
+font_weight 500
+bold_weight 800
+bold_italic_weight 900
+italic_style oblique
+opacity 0.8
+padding 8
+scrollback 10000
+clipboard_read off
+clipboard_write ask
+notifications allow
+shell /usr/bin/bash
+matugen off
+window_decorations off
+present_mode auto
+keybind ctrl+shift+n=new_tab
+keybind ctrl+shift+t=unbind
 ```
 
 - **14 built-in themes:** `koral`, `sharky` (reads `~/.config/sharky/theme.sharky`), `terminal`, `dracula`, `catppuccin-mocha`, `catppuccin-macchiato`, `catppuccin-frappe`, `catppuccin-latte`, `tokyo-night`, `gruvbox-dark`, `nord`, `rose-pine`, `one-dark`, and `solarized-dark`.
-- **Matugen sync:** `polyp matugen on` installs [`assets/koral.matugen`](assets/koral.matugen) into your matugen configuration and updates colours dynamically on wallpaper changes.
+- **Matugen sync:** `matugen on` installs [`assets/koral.matugen`](assets/koral.matugen) into your matugen configuration and updates colours dynamically on wallpaper changes.
 
 ---
 
@@ -274,7 +276,7 @@ bind ctrl+shift+t unbind
 
 - **Kitty graphics protocol:** supports inline images, animations/video via `mpv --vo=kitty`, Unicode placeholders (`c=`, `r=`), `z`-index layering, and synchronized updates without screen tearing or lost image anchors.
 - **Desktop integration:** handles `OSC 777` and `OSC 9` for window titles, terminal bell, and desktop notifications, plus [`assets/koral.desktop`](assets/koral.desktop) and [`assets/koral.svg`](assets/koral.svg).
-- **Architecture:** pure Rust over `winit`, `wgpu`, `glyphon`, `alacritty_terminal`, and `sharky-config` (`v4.0.0-alpha.2`).
+- **Architecture:** pure Rust over `winit`, `wgpu`, `glyphon`, and `alacritty_terminal`.
 
 ---
 

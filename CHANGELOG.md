@@ -23,7 +23,11 @@ alpha tag or competitive performance results are implied.
 
 ### Changed
 
-- `polyp present_mode auto|fifo|mailbox|immediate` selects the presentation mode at startup.
+- Configuration moved to `~/.config/koral/koral.conf` (kitty-style `key value`,
+  `keybind shortcut=action`, `#` comments), dropping the `sharky-config` dependency.
+  Existing `config.sharky` / `config.koral` files are converted once to `koral.conf` and
+  left untouched.
+- `present_mode auto|fifo|mailbox|immediate` selects the presentation mode at startup.
   `auto` defaults to FIFO, and unsupported requests fall back to FIFO.
 - PTY burst pacing adapts to the monitor refresh rate (with 60 Hz fallback) and local
   keyboard input triggers an immediate redraw.

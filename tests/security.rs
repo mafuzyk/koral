@@ -136,13 +136,13 @@ fn an_allowed_program_copy_is_performed_immediately() {
 
 #[test]
 fn policy_settings_parse_and_reject_other_words() {
-    let (config, errors) = parse("polyp clipboard_write deny\npolyp notifications ask\n");
+    let (config, errors) = parse("clipboard_write deny\nnotifications ask\n");
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(config.clipboard_write, PermissionPolicy::Deny);
     assert_eq!(config.notifications, PermissionPolicy::Ask);
     assert!(!config.clipboard_read);
 
-    let errors = parse("polyp clipboard_write maybe\npolyp notifications 1\n").1;
+    let errors = parse("clipboard_write maybe\nnotifications 1\n").1;
     assert_eq!(errors.len(), 2);
 }
 
@@ -410,7 +410,7 @@ fn corrupted_input_never_panics_any_parser() {
     scanner.feed(&input, &mut |_| {});
     let text = String::from_utf8_lossy(&input);
     let _ = koral::ipc::decode(&format!("send-text\t{text}"));
-    let _ = parse(&format!("polyp font {text}\n"));
+    let _ = parse(&format!("font {text}\n"));
 }
 
 #[test]
@@ -430,7 +430,7 @@ fn deterministic_seed_corpus_never_panics() {
         }
         let _ = graphics.handle(&seed);
         let _ = koral::ipc::decode(&String::from_utf8_lossy(&seed));
-        let _ = parse(&format!("polyp font {}\n", String::from_utf8_lossy(&seed)));
+        let _ = parse(&format!("font {}\n", String::from_utf8_lossy(&seed)));
     }
 }
 

@@ -1197,7 +1197,7 @@ pub fn draw_settings(
         spans: vec![Span::plain("Settings", theme.foreground)],
         clip: header_clip,
     });
-    let subtitle = "~/.config/koral/config.sharky";
+    let subtitle = "~/.config/koral/koral.conf";
     let sub_x = (view.container.x + view.container.width
         - subtitle.chars().count() as f32 * small_cell)
         .max(view.container.x + 120.0 * scale);

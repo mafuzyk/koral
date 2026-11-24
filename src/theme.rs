@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{Color, Rgb};
 
@@ -224,19 +226,19 @@ impl Theme {
 
     /// Sharky's own colour names first, so a theme that never mentions the terminal still applies.
     pub fn with_sharky(source: &str, file: &str) -> Result<Self, String> {
-        let config = sharky_config::parse_theme(source, file).map_err(|error| error.to_string())?;
+        let parsed = parse_sharky_theme(source, file)?;
         let mut theme = Self::default();
         for (name, slot) in SHARKY_NAMES {
             if let (Some(color), Some(slot)) = (
-                config.colors.get(name).and_then(|text| hex(text)),
+                parsed.colors.get(name).and_then(|text| hex(text)),
                 theme.slot(slot),
             ) {
                 *slot = color;
             }
         }
-        for (key, value) in &config.styles {
+        for (key, value) in &parsed.styles {
             let color = match value.strip_prefix('@') {
-                Some(name) => config.colors.get(name).map(String::as_str),
+                Some(name) => parsed.colors.get(name).map(String::as_str),
                 None => Some(value.as_str()),
             };
             let slot = key
@@ -433,4 +435,57 @@ fn dim(color: Rgb) -> Rgb {
         g: scale(color.g),
         b: scale(color.b),
     }
+}
+
+struct SharkyTheme {
+    colors: HashMap<String, String>,
+    styles: HashMap<String, String>,
+}
+
+fn parse_sharky_theme(source: &str, file: &str) -> Result<SharkyTheme, String> {
+    let mut colors = HashMap::new();
+    let mut styles = HashMap::new();
+    for (index, line) in source.lines().enumerate() {
+        let number = index + 1;
+        let tokens = crate::config::tokenize_legacy(line)
+            .map_err(|message| format!("{file}:{number}: {message}"))?;
+        let Some((instruction, rest)) = tokens.split_first() else {
+            continue;
+        };
+        match instruction.as_str() {
+            "coral" => {
+                let [key, value] = rest else {
+                    return Err(format!("{file}:{number}: coral takes a name and a colour"));
+                };
+                if hex(value).is_none() {
+                    return Err(format!(
+                        "{file}:{number}: '{value}' is not a colour like #071923"
+                    ));
+                }
+                colors.insert(key.clone(), value.clone());
+            }
+            "wave" => {
+                let [key, value] = rest else {
+                    return Err(format!("{file}:{number}: wave takes a key and a value"));
+                };
+                styles.insert(key.clone(), value.clone());
+            }
+            "tide" | "pearl" | "current" | "reef" | "shoal" | "anchor" | "wake" => {}
+            other => {
+                return Err(format!(
+                    "{file}:{number}: unknown instruction '{other}' in theme.sharky"
+                ));
+            }
+        }
+    }
+    for (key, value) in &styles {
+        if let Some(reference) = value.strip_prefix('@')
+            && !colors.contains_key(reference)
+        {
+            return Err(format!(
+                "{file}:0: {key} refers to undefined colour '@{reference}'"
+            ));
+        }
+    }
+    Ok(SharkyTheme { colors, styles })
 }

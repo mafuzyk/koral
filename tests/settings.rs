@@ -192,21 +192,21 @@ fn values_read_like_the_file() {
 
 #[test]
 fn update_returns_the_new_text_and_config() {
-    let (source, config) = update("// mine\n", "opacity", "0.6").unwrap();
-    assert_eq!(source, "// mine\npolyp opacity 0.6\n");
+    let (source, config) = update("# mine\n", "opacity", "0.6").unwrap();
+    assert_eq!(source, "# mine\nopacity 0.6\n");
     assert_eq!(config.opacity, 0.6);
 }
 
 #[test]
 fn update_refuses_a_value_the_parser_would_reject() {
     assert!(update("", "font", "").is_err());
-    assert!(update("polyp opacity 0.5\n", "opacity", "9").is_err());
+    assert!(update("opacity 0.5\n", "opacity", "9").is_err());
     assert!(update("", "theme", "not-a-theme").is_err());
 }
 
 #[test]
 fn update_ignores_errors_that_were_already_in_the_file() {
-    let source = "whale oops\n";
+    let source = "whale\n";
     assert_eq!(parse(source).1.len(), 1);
     assert!(update(source, "opacity", "0.6").is_ok());
 }
