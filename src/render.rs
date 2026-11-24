@@ -1171,12 +1171,27 @@ mod present_mode_tests {
         let all = [Mode::Fifo, Mode::Mailbox, Mode::Immediate];
         assert_eq!(choose_present_mode(Policy::Auto, &all), Mode::Fifo);
         assert_eq!(choose_present_mode(Policy::Fifo, &all), Mode::Fifo);
-        for (policy, expected) in [
-            (Policy::Mailbox, Mode::Mailbox),
-            (Policy::Immediate, Mode::Immediate),
+        assert_eq!(choose_present_mode(Policy::Auto, &[]), Mode::Fifo);
+        assert_eq!(
+            choose_present_mode(Policy::Fifo, &[Mode::Mailbox]),
+            Mode::Fifo
+        );
+        for (policy, expected, without) in [
+            (
+                Policy::Mailbox,
+                Mode::Mailbox,
+                [Mode::Fifo, Mode::Immediate],
+            ),
+            (
+                Policy::Immediate,
+                Mode::Immediate,
+                [Mode::Fifo, Mode::Mailbox],
+            ),
         ] {
             assert_eq!(choose_present_mode(policy, &all), expected);
             assert_eq!(choose_present_mode(policy, &[Mode::Fifo]), Mode::Fifo);
+            assert_eq!(choose_present_mode(policy, &without), Mode::Fifo);
+            assert_eq!(choose_present_mode(policy, &[]), Mode::Fifo);
         }
     }
 }

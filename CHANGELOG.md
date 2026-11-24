@@ -25,6 +25,10 @@ alpha tag or competitive performance results are implied.
 
 - `polyp present_mode auto|fifo|mailbox|immediate` selects the presentation mode at startup.
   `auto` defaults to FIFO, and unsupported requests fall back to FIFO.
+- PTY burst pacing adapts to the monitor refresh rate (with 60 Hz fallback) and local
+  keyboard input triggers an immediate redraw.
+- Startup defers the full font inventory scan to the background loader and uses a fast
+  monospace fallback lookup first.
 - Clipboard writes and notifications use independent policies. Consent is visible in Settings,
   uses Ctrl+Shift+Enter to allow and Escape to deny, and leaves ordinary Enter available to the PTY.
 - The benchmark isolates clean profiles, pins the executable, and rejects latency samples
