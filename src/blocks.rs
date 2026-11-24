@@ -158,6 +158,10 @@ impl BlockStore {
         self.order.is_empty()
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &Block> {
+        self.order.iter().filter_map(|id| self.blocks.get(id))
+    }
+
     pub fn toggle_fold(&mut self, id: u32) {
         if let Some(block) = self.blocks.get_mut(&id) {
             block.folded = !block.folded;

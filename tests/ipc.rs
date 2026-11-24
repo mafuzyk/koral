@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use koral::ipc::{
-    PaneInfo, Request, Server, TabInfo, TabKind, decode, encode, json_error, json_string,
-    parse_cli, render_list_json, render_list_text, send,
+    BlockInfo, PaneInfo, Request, Server, TabInfo, TabKind, decode, encode, json_error,
+    json_string, parse_cli, render_blocks_json, render_blocks_text, render_list_json,
+    render_list_text, send,
 };
 use koral::splits::{Axis, Dir};
 
@@ -27,19 +28,42 @@ fn wire_encode_decode_round_trips_all_commands() {
             axis: Axis::Vertical,
             cwd: None,
         },
-        Request::ClosePane,
+        Request::ClosePane { pane: None },
+        Request::ClosePane { pane: Some(9) },
         Request::CloseTab,
         Request::Focus(Dir::Left),
         Request::Focus(Dir::Down),
         Request::Resize(Dir::Right),
         Request::Resize(Dir::Up),
-        Request::SetTitle("Tab 1\tHello".to_string()),
+        Request::SetTitle {
+            pane: None,
+            title: "Tab 1\tHello".to_string(),
+        },
+        Request::SetTitle {
+            pane: Some(4),
+            title: "pane:literal".to_string(),
+        },
         Request::SetTheme("catppuccin-mocha".to_string()),
         Request::OpenSettings,
         Request::Reload,
-        Request::SendText("ls -la\n".to_string()),
+        Request::SendText {
+            pane: None,
+            text: "ls -la\n".to_string(),
+        },
+        Request::SendText {
+            pane: Some(12),
+            text: "echo ok\n".to_string(),
+        },
         Request::List,
         Request::ListJson,
+        Request::ListBlocks {
+            pane: None,
+            json: false,
+        },
+        Request::ListBlocks {
+            pane: Some(3),
+            json: true,
+        },
         Request::SaveSession("work-1".to_string()),
         Request::RestoreSession("work-1".to_string()),
         Request::ListSessions,
@@ -253,5 +277,65 @@ tab 1* panes=2 active_pane=4 title=~/proj \"koral\"
     assert_eq!(
         render_list_json(&tabs),
         "{\"version\":1,\"tabs\":[{\"index\":0,\"active\":false,\"kind\":\"settings\"},{\"index\":1,\"active\":true,\"kind\":\"terminal\",\"title\":\"~/proj \\\"koral\\\"\",\"active_pane\":4,\"panes\":[{\"id\":3,\"active\":false,\"title\":\"logs\\t1\"},{\"id\":4,\"active\":true,\"title\":\"~/proj \\\"koral\\\"\"}]}]}"
+    );
+}
+
+#[test]
+fn pane_selectors_and_list_blocks_parse_and_render() {
+    assert_eq!(
+        parse_cli(&["send-text".into(), "--pane".into(), "7".into(), "hi".into()])
+            .unwrap()
+            .1,
+        Request::SendText {
+            pane: Some(7),
+            text: "hi".to_string()
+        }
+    );
+    assert_eq!(
+        parse_cli(&["set-title".into(), "--pane=3".into(), "build".into()])
+            .unwrap()
+            .1,
+        Request::SetTitle {
+            pane: Some(3),
+            title: "build".to_string()
+        }
+    );
+    assert_eq!(
+        parse_cli(&["close-pane".into(), "--pane".into(), "5".into()])
+            .unwrap()
+            .1,
+        Request::ClosePane { pane: Some(5) }
+    );
+    assert_eq!(
+        parse_cli(&[
+            "list-blocks".into(),
+            "--pane".into(),
+            "2".into(),
+            "--json".into()
+        ])
+        .unwrap()
+        .1,
+        Request::ListBlocks {
+            pane: Some(2),
+            json: true
+        }
+    );
+    assert!(parse_cli(&["list-blocks".into(), "--pane".into(), "abc".into()]).is_err());
+
+    let blocks = vec![BlockInfo {
+        id: 1,
+        pane_id: 2,
+        command: Some("cargo test".to_string()),
+        cwd: Some("/home/mafu/Projetos/koral".to_string()),
+        status: Some(0),
+        folded: false,
+    }];
+    assert_eq!(
+        render_blocks_text(&blocks),
+        "block 1 pane=2 status=0 folded=false cwd=/home/mafu/Projetos/koral cmd=cargo test\n"
+    );
+    assert_eq!(
+        render_blocks_json(&blocks),
+        "{\"version\":1,\"blocks\":[{\"id\":1,\"pane_id\":2,\"command\":\"cargo test\",\"cwd\":\"/home/mafu/Projetos/koral\",\"status\":0,\"folded\":false}]}"
     );
 }

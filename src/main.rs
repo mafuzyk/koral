@@ -1957,31 +1957,10 @@ impl App {
                     "ERR active tab is not a terminal\n".to_string()
                 }
             }
-            Request::ClosePane => {
-                let Some(idx) = self.tabs.as_ref().map(Tabs::active_index) else {
-                    return "ERR no active tab\n".to_string();
-                };
-                let res = self
-                    .tabs
-                    .as_mut()
-                    .and_then(Tabs::active_mut)
-                    .and_then(Tab::as_tree_mut)
-                    .map(|tree| {
-                        let id = tree.active_id();
-                        tree.close(id)
-                    });
-                match res {
-                    None | Some(CloseResult::LastPane) => self.close_tab(idx, event_loop),
-                    Some(CloseResult::Closed) => {
-                        self.search = None;
-                        self.link = None;
-                        self.resize_all();
-                        self.redraw();
-                    }
-                    Some(CloseResult::NotFound) => return "ERR pane not found\n".to_string(),
-                }
-                "OK\n".to_string()
-            }
+            Request::ClosePane { pane } => match self.close_pane_target(pane, event_loop) {
+                Ok(()) => "OK\n".to_string(),
+                Err(message) => format!("ERR {message}\n"),
+            },
             Request::CloseTab => {
                 let Some(idx) = self.tabs.as_ref().map(Tabs::active_index) else {
                     return "ERR no active tab\n".to_string();
@@ -1997,13 +1976,19 @@ impl App {
                 self.resize_dir(dir);
                 "OK\n".to_string()
             }
-            Request::SetTitle(title) => {
-                let Some(term) = self.active_mut() else {
-                    return "ERR active tab is not a terminal\n".to_string();
+            Request::SetTitle { pane, title } => {
+                let term = match pane {
+                    Some(id) => self.terminal_mut(id).ok_or("pane not found"),
+                    None => self.active_mut().ok_or("active tab is not a terminal"),
                 };
-                term.title = tabs::clean_title(&title);
-                self.redraw();
-                "OK\n".to_string()
+                match term {
+                    Ok(term) => {
+                        term.title = tabs::clean_title(&title);
+                        self.redraw();
+                        "OK\n".to_string()
+                    }
+                    Err(message) => format!("ERR {message}\n"),
+                }
             }
             Request::SetTheme(id) => match self.apply_setting_update("theme", &id) {
                 Ok(()) => {
@@ -2020,13 +2005,19 @@ impl App {
                 self.reload_config();
                 "OK\n".to_string()
             }
-            Request::SendText(text) => {
-                if self.active().is_none() {
-                    return "ERR active tab is not a terminal\n".to_string();
+            Request::SendText { pane, text } => {
+                let term = match pane {
+                    Some(id) => self.terminal_mut(id).ok_or("pane not found"),
+                    None => self.active_mut().ok_or("active tab is not a terminal"),
+                };
+                match term {
+                    Ok(term) => {
+                        term.write(text.into_bytes());
+                        self.redraw();
+                        "OK\n".to_string()
+                    }
+                    Err(message) => format!("ERR {message}\n"),
                 }
-                self.write_active(text.into_bytes());
-                self.redraw();
-                "OK\n".to_string()
             }
             Request::List | Request::ListJson => {
                 let json = matches!(request, Request::ListJson);
@@ -2035,6 +2026,40 @@ impl App {
                     format!("OK\n{}\n", ipc::render_list_json(&model))
                 } else {
                     format!("OK\n{}", ipc::render_list_text(&model))
+                }
+            }
+            Request::ListBlocks { pane, json } => {
+                let target = match pane {
+                    Some(id) => self.terminal(id).map(|t| (id, t)).ok_or("pane not found"),
+                    None => self
+                        .active()
+                        .map(|t| (t.id, t))
+                        .ok_or("active tab is not a terminal"),
+                };
+                match target {
+                    Ok((pane_id, term)) => {
+                        let infos: Vec<ipc::BlockInfo> = {
+                            let session = term.session.lock();
+                            session
+                                .blocks
+                                .iter()
+                                .map(|b| ipc::BlockInfo {
+                                    id: b.id,
+                                    pane_id,
+                                    command: b.command.clone(),
+                                    cwd: b.cwd.clone(),
+                                    status: b.status,
+                                    folded: b.folded,
+                                })
+                                .collect()
+                        };
+                        if json {
+                            format!("OK\n{}\n", ipc::render_blocks_json(&infos))
+                        } else {
+                            format!("OK\n{}", ipc::render_blocks_text(&infos))
+                        }
+                    }
+                    Err(message) => format!("ERR {message}\n"),
                 }
             }
             Request::SaveSession(name) => match self.save_named_session(&name) {
@@ -2197,6 +2222,52 @@ impl App {
         self.link = None;
         self.resize_all();
         self.redraw();
+        Ok(())
+    }
+
+    fn close_pane_target(
+        &mut self,
+        pane: Option<u64>,
+        event_loop: &ActiveEventLoop,
+    ) -> Result<(), &'static str> {
+        let Some(tabs) = self.tabs.as_mut() else {
+            return Err("no active tab");
+        };
+        let (tab_idx, res) = match pane {
+            Some(id) => {
+                let mut found = None;
+                for (idx, tab) in tabs.iter_mut().enumerate() {
+                    if let Some(tree) = tab.as_tree_mut()
+                        && tree.contains(id)
+                    {
+                        found = Some((idx, tree.close(id)));
+                        break;
+                    }
+                }
+                found.ok_or("pane not found")?
+            }
+            None => {
+                let idx = tabs.active_index();
+                let res = tabs.active_mut().and_then(Tab::as_tree_mut).map(|tree| {
+                    let id = tree.active_id();
+                    tree.close(id)
+                });
+                match res {
+                    None => (idx, CloseResult::LastPane),
+                    Some(res) => (idx, res),
+                }
+            }
+        };
+        match res {
+            CloseResult::LastPane => self.close_tab(tab_idx, event_loop),
+            CloseResult::Closed => {
+                self.search = None;
+                self.link = None;
+                self.resize_all();
+                self.redraw();
+            }
+            CloseResult::NotFound => return Err("pane not found"),
+        }
         Ok(())
     }
 }

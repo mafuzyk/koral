@@ -13,6 +13,8 @@ alpha tag or competitive performance results are implied.
 
 ### Added
 
+- Extended `koral ctl` with `--pane ID` target selectors (`send-text`, `set-title`,
+  `close-pane`, `list-blocks`) and `list-blocks [--json]` (`{"version":1,"blocks":[...]}`).
 - Named session layout save/restore (`save-session`, `restore-session`,
   `list-sessions [--json]`) stored atomically (`0600` JSON `version: 1`) under
   `$XDG_STATE_HOME/koral/sessions` without scrollback or command history.

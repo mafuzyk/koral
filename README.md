@@ -200,10 +200,13 @@ koral ctl split right            # also: down | horizontal | vertical
 koral ctl focus left             # also: right | up | down
 koral ctl resize left            # also: right | up | down
 koral ctl set-theme dracula
-koral ctl send-text "git status\n"
+koral ctl send-text [--pane ID] "git status\n"
+koral ctl set-title [--pane ID] logs
+koral ctl close-pane [--pane ID]
 koral ctl open-settings
 koral ctl reload
 koral ctl list [--json]
+koral ctl list-blocks [--pane ID] [--json]
 koral ctl save-session NAME
 koral ctl restore-session NAME
 koral ctl list-sessions [--json]

@@ -25,17 +25,29 @@ pub enum Request {
         axis: Axis,
         cwd: Option<PathBuf>,
     },
-    ClosePane,
+    ClosePane {
+        pane: Option<u64>,
+    },
     CloseTab,
     Focus(Dir),
     Resize(Dir),
-    SetTitle(String),
+    SetTitle {
+        pane: Option<u64>,
+        title: String,
+    },
     SetTheme(String),
     OpenSettings,
     Reload,
-    SendText(String),
+    SendText {
+        pane: Option<u64>,
+        text: String,
+    },
     List,
     ListJson,
+    ListBlocks {
+        pane: Option<u64>,
+        json: bool,
+    },
     SaveSession(String),
     RestoreSession(String),
     ListSessions,
@@ -48,20 +60,31 @@ Usage: koral ctl [--socket PATH] [--json] COMMAND [ARGS...]
 Commands:
   new-tab [--cwd PATH] [--title TEXT] [-e|-- COMMAND [ARGS...]]
   split right|down|horizontal|vertical [--cwd PATH]
-  close-pane
+  close-pane [--pane ID]
   close-tab
   focus left|right|up|down
   resize left|right|up|down
-  set-title TEXT
+  set-title [--pane ID] TEXT
   set-theme ID
   open-settings
   reload
-  send-text TEXT
+  send-text [--pane ID] TEXT
   list [--json]
+  list-blocks [--pane ID] [--json]
   save-session NAME
   restore-session NAME
   list-sessions [--json]
 ";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockInfo {
+    pub id: u32,
+    pub pane_id: u64,
+    pub command: Option<String>,
+    pub cwd: Option<String>,
+    pub status: Option<i32>,
+    pub folded: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneInfo {
@@ -193,6 +216,57 @@ pub fn render_list_json(tabs: &[TabInfo]) -> String {
     out
 }
 
+pub fn render_blocks_text(blocks: &[BlockInfo]) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    for b in blocks {
+        let status = b
+            .status
+            .map_or_else(|| "-".to_string(), |code| code.to_string());
+        let _ = write!(
+            out,
+            "block {} pane={} status={} folded={}",
+            b.id, b.pane_id, status, b.folded
+        );
+        if let Some(cwd) = &b.cwd {
+            let _ = write!(out, " cwd={cwd}");
+        }
+        if let Some(cmd) = &b.command {
+            let _ = write!(out, " cmd={cmd}");
+        }
+        out.push('\n');
+    }
+    out
+}
+
+pub fn render_blocks_json(blocks: &[BlockInfo]) -> String {
+    use std::fmt::Write;
+    let mut out = String::from("{\"version\":1,\"blocks\":[");
+    for (idx, b) in blocks.iter().enumerate() {
+        if idx > 0 {
+            out.push(',');
+        }
+        let cmd = b
+            .command
+            .as_deref()
+            .map_or_else(|| "null".to_string(), json_string);
+        let cwd = b
+            .cwd
+            .as_deref()
+            .map_or_else(|| "null".to_string(), json_string);
+        let status = b
+            .status
+            .map_or_else(|| "null".to_string(), |code| code.to_string());
+        let _ = write!(
+            out,
+            "{{\"id\":{},\"pane_id\":{},\"command\":{cmd},\"cwd\":{cwd},\"status\":{status},\"folded\":{}}}",
+            b.id, b.pane_id, b.folded
+        );
+    }
+    out.push_str("]}");
+    out
+}
+
 fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
@@ -261,7 +335,12 @@ pub fn encode(req: &Request) -> String {
                 parts.push(format!("cwd:{}", escape(&cwd.to_string_lossy())));
             }
         }
-        Request::ClosePane => parts.push("close-pane".to_string()),
+        Request::ClosePane { pane } => {
+            parts.push("close-pane".to_string());
+            if let Some(id) = pane {
+                parts.push(format!("pane:{id}"));
+            }
+        }
         Request::CloseTab => parts.push("close-tab".to_string()),
         Request::Focus(dir) => {
             parts.push("focus".to_string());
@@ -271,8 +350,11 @@ pub fn encode(req: &Request) -> String {
             parts.push("resize".to_string());
             parts.push(dir_name(*dir).to_string());
         }
-        Request::SetTitle(title) => {
+        Request::SetTitle { pane, title } => {
             parts.push("set-title".to_string());
+            if let Some(id) = pane {
+                parts.push(format!("pane:{id}"));
+            }
             parts.push(escape(title));
         }
         Request::SetTheme(id) => {
@@ -281,12 +363,25 @@ pub fn encode(req: &Request) -> String {
         }
         Request::OpenSettings => parts.push("open-settings".to_string()),
         Request::Reload => parts.push("reload".to_string()),
-        Request::SendText(text) => {
+        Request::SendText { pane, text } => {
             parts.push("send-text".to_string());
+            if let Some(id) = pane {
+                parts.push(format!("pane:{id}"));
+            }
             parts.push(escape(text));
         }
         Request::List => parts.push("list".to_string()),
         Request::ListJson => parts.push("list-json".to_string()),
+        Request::ListBlocks { pane, json } => {
+            parts.push(if *json {
+                "list-blocks-json".to_string()
+            } else {
+                "list-blocks".to_string()
+            });
+            if let Some(id) = pane {
+                parts.push(format!("pane:{id}"));
+            }
+        }
         Request::SaveSession(name) => {
             parts.push("save-session".to_string());
             parts.push(escape(name));
@@ -348,7 +443,9 @@ pub fn decode(line: &str) -> Result<Request, String> {
             }
             Ok(Request::Split { axis, cwd })
         }
-        "close-pane" => Ok(Request::ClosePane),
+        "close-pane" => Ok(Request::ClosePane {
+            pane: parse_optional_pane_field(fields.next())?,
+        }),
         "close-tab" => Ok(Request::CloseTab),
         "focus" => Ok(Request::Focus(parse_dir(
             fields
@@ -360,19 +457,29 @@ pub fn decode(line: &str) -> Result<Request, String> {
                 .next()
                 .ok_or_else(|| "missing resize direction".to_string())?,
         )?)),
-        "set-title" => Ok(Request::SetTitle(unescape(
-            fields.next().ok_or_else(|| "missing title".to_string())?,
-        )?)),
+        "set-title" => {
+            let (pane, title) = parse_pane_and_value(fields, "missing title")?;
+            Ok(Request::SetTitle { pane, title })
+        }
         "set-theme" => Ok(Request::SetTheme(unescape(
             fields.next().ok_or_else(|| "missing theme".to_string())?,
         )?)),
         "open-settings" => Ok(Request::OpenSettings),
         "reload" => Ok(Request::Reload),
-        "send-text" => Ok(Request::SendText(unescape(
-            fields.next().ok_or_else(|| "missing text".to_string())?,
-        )?)),
+        "send-text" => {
+            let (pane, text) = parse_pane_and_value(fields, "missing text")?;
+            Ok(Request::SendText { pane, text })
+        }
         "list" => Ok(Request::List),
         "list-json" => Ok(Request::ListJson),
+        "list-blocks" => Ok(Request::ListBlocks {
+            pane: parse_optional_pane_field(fields.next())?,
+            json: false,
+        }),
+        "list-blocks-json" => Ok(Request::ListBlocks {
+            pane: parse_optional_pane_field(fields.next())?,
+            json: true,
+        }),
         "save-session" => Ok(Request::SaveSession(unescape(
             fields
                 .next()
@@ -387,6 +494,77 @@ pub fn decode(line: &str) -> Result<Request, String> {
         "list-sessions-json" => Ok(Request::ListSessionsJson),
         other => Err(format!("unknown ipc command '{other}'")),
     }
+}
+
+fn parse_optional_pane_field(field: Option<&str>) -> Result<Option<u64>, String> {
+    let Some(field) = field else {
+        return Ok(None);
+    };
+    let id = field
+        .strip_prefix("pane:")
+        .ok_or_else(|| format!("unknown field '{field}'"))?;
+    id.parse::<u64>()
+        .map(Some)
+        .map_err(|_| format!("invalid pane id '{id}'"))
+}
+
+fn parse_pane_and_value<'a>(
+    mut fields: impl Iterator<Item = &'a str>,
+    missing: &str,
+) -> Result<(Option<u64>, String), String> {
+    let first = fields.next().ok_or_else(|| missing.to_string())?;
+    if let Some(id_str) = first.strip_prefix("pane:")
+        && let Some(val) = fields.next()
+    {
+        let id = id_str
+            .parse::<u64>()
+            .map_err(|_| format!("invalid pane id '{id_str}'"))?;
+        return Ok((Some(id), unescape(val)?));
+    }
+    Ok((None, unescape(first)?))
+}
+
+fn take_pane_flag<'a>(
+    arg: &str,
+    iter: &mut impl Iterator<Item = &'a String>,
+    pane: &mut Option<u64>,
+) -> Result<bool, String> {
+    if let Some(val) = arg.strip_prefix("--pane=") {
+        let id = val
+            .parse::<u64>()
+            .map_err(|_| format!("invalid pane id '{val}'"))?;
+        *pane = Some(id);
+        Ok(true)
+    } else if arg == "--pane" {
+        let val = iter
+            .next()
+            .ok_or_else(|| "missing value for '--pane'".to_string())?;
+        let id = val
+            .parse::<u64>()
+            .map_err(|_| format!("invalid pane id '{val}'"))?;
+        *pane = Some(id);
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+fn take_pane_and_arg<'a>(
+    iter: &mut impl Iterator<Item = &'a String>,
+    missing: &str,
+) -> Result<(Option<u64>, String), String> {
+    let mut pane = None;
+    while let Some(arg) = iter.next() {
+        if arg == "--" {
+            let val = iter.next().ok_or_else(|| missing.to_string())?;
+            return Ok((pane, val.clone()));
+        }
+        if take_pane_flag(arg, iter, &mut pane)? {
+            continue;
+        }
+        return Ok((pane, arg.clone()));
+    }
+    Err(missing.to_string())
 }
 
 fn dir_name(dir: Dir) -> &'static str {
@@ -443,7 +621,7 @@ pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> 
     if json
         && !matches!(
             cmd.as_str(),
-            "list" | "list-sessions" | "-h" | "--help" | "help"
+            "list" | "list-sessions" | "list-blocks" | "-h" | "--help" | "help"
         )
     {
         return Err(format!("--json is not supported for '{cmd}'"));
@@ -513,7 +691,15 @@ pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> 
             }
             Request::Split { axis, cwd }
         }
-        "close-pane" => Request::ClosePane,
+        "close-pane" => {
+            let mut pane = None;
+            while let Some(arg) = iter.next() {
+                if !take_pane_flag(arg, &mut iter, &mut pane)? {
+                    return Err(format!("unknown close-pane option '{arg}'"));
+                }
+            }
+            Request::ClosePane { pane }
+        }
         "close-tab" => Request::CloseTab,
         "focus" => Request::Focus(parse_dir(
             iter.next()
@@ -523,11 +709,10 @@ pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> 
             iter.next()
                 .ok_or_else(|| "resize requires a direction".to_string())?,
         )?),
-        "set-title" => Request::SetTitle(
-            iter.next()
-                .ok_or_else(|| "set-title requires TEXT".to_string())?
-                .clone(),
-        ),
+        "set-title" => {
+            let (pane, title) = take_pane_and_arg(&mut iter, "set-title requires TEXT")?;
+            Request::SetTitle { pane, title }
+        }
         "set-theme" => Request::SetTheme(
             iter.next()
                 .ok_or_else(|| "set-theme requires a theme id".to_string())?
@@ -535,11 +720,10 @@ pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> 
         ),
         "open-settings" => Request::OpenSettings,
         "reload" => Request::Reload,
-        "send-text" => Request::SendText(
-            iter.next()
-                .ok_or_else(|| "send-text requires TEXT".to_string())?
-                .clone(),
-        ),
+        "send-text" => {
+            let (pane, text) = take_pane_and_arg(&mut iter, "send-text requires TEXT")?;
+            Request::SendText { pane, text }
+        }
         "list" => {
             if let Some(extra) = iter.next() {
                 if extra == "--json" && iter.next().is_none() {
@@ -551,6 +735,21 @@ pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> 
                 Request::ListJson
             } else {
                 Request::List
+            }
+        }
+        "list-blocks" => {
+            let mut pane = None;
+            let mut flag_json = json;
+            while let Some(arg) = iter.next() {
+                if arg == "--json" {
+                    flag_json = true;
+                } else if !take_pane_flag(arg, &mut iter, &mut pane)? {
+                    return Err(format!("unknown list-blocks option '{arg}'"));
+                }
+            }
+            Request::ListBlocks {
+                pane,
+                json: flag_json,
             }
         }
         "save-session" => {
