@@ -10,6 +10,7 @@ const KEYBIND_KEY: &str = "keybind";
 pub const USAGE: &str = "\
 Usage: koral [OPTIONS] [-e COMMAND [ARGS...]]
        koral ctl [--socket PATH] COMMAND [ARGS...]
+       koral +terminfo install
 
   -h, --help                   print this help
   --version                    print the version
@@ -18,6 +19,7 @@ Usage: koral [OPTIONS] [-e COMMAND [ARGS...]]
   --class, --app-id            window class / Wayland app-id
   -e, --command                run COMMAND with ARGS in the initial tab
   ctl                          send a command to a running koral window
+  +terminfo install            install the xterm-koral terminfo entry into ~/.terminfo
 ";
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -34,6 +36,7 @@ pub enum Launch {
     Version,
     Run(Args),
     Control(Vec<String>),
+    TerminfoInstall,
 }
 
 pub fn parse_args<I, S>(args: I) -> Result<Launch, String>
@@ -45,6 +48,17 @@ where
     if iter.peek().is_some_and(|first| first == "ctl") {
         iter.next();
         return Ok(Launch::Control(iter.collect()));
+    }
+    if iter.peek().is_some_and(|first| first == "+terminfo") {
+        iter.next();
+        return match iter.next().as_deref() {
+            Some("install") if iter.next().is_none() => Ok(Launch::TerminfoInstall),
+            Some("install") => Err("unexpected arguments after '+terminfo install'".to_string()),
+            Some(other) => Err(format!(
+                "unknown +terminfo subcommand '{other}', expected 'install'"
+            )),
+            None => Err("missing subcommand for '+terminfo', expected 'install'".to_string()),
+        };
     }
     let mut parsed = Args::default();
     while let Some(arg) = iter.next() {

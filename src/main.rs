@@ -72,6 +72,16 @@ fn main() {
             println!("koral {}", env!("CARGO_PKG_VERSION"));
             return;
         }
+        Ok(Launch::TerminfoInstall) => match koral::terminfo::install() {
+            Ok(dir) => {
+                println!("installed {} to {}", koral::terminfo::NAME, dir.display());
+                return;
+            }
+            Err(message) => {
+                eprintln!("koral +terminfo install: {message}");
+                std::process::exit(1);
+            }
+        },
         Ok(Launch::Help) => {
             print!("{USAGE}");
             return;
@@ -174,6 +184,7 @@ struct App {
     args: Args,
     window: Option<Arc<Window>>,
     refresh_millihertz: Option<u32>,
+    term_name: Option<&'static str>,
     renderer: Option<Renderer>,
     ipc: Option<ipc::Server>,
     tabs: Option<Tabs<Tab>>,
@@ -223,6 +234,7 @@ impl App {
             args,
             window: None,
             refresh_millihertz: None,
+            term_name: None,
             renderer: None,
             ipc: None,
             tabs: None,
@@ -358,6 +370,11 @@ impl App {
             .find_map(|tab| tab.as_tree_mut()?.get_mut(id))
     }
 
+    fn term_name(&mut self) -> &'static str {
+        self.term_name
+            .get_or_insert_with(|| koral::terminfo::resolve(&koral::terminfo::search_dirs()))
+    }
+
     fn spawn_terminal(
         &mut self,
         geometry: Geometry,
@@ -369,7 +386,9 @@ impl App {
         self.next_id += 1;
         let scrollback = self.config.scrollback;
         let socket = self.ipc.as_ref().map(ipc::Server::path).map(PathBuf::from);
+        let term_name = self.term_name();
         let mut terminal = if let Some((prog, cmd_args)) = command {
+            let env = vec![("TERM".to_string(), term_name.to_string())];
             match Terminal::spawn_configured(
                 id,
                 self.proxy.clone(),
@@ -379,7 +398,7 @@ impl App {
                 cwd,
                 scrollback,
                 socket.as_deref(),
-                &[],
+                &env,
             ) {
                 Ok(terminal) => Some(terminal),
                 Err(error) => {
@@ -411,10 +430,13 @@ impl App {
             };
             // A bad `shell` setting must not cost the user the window: the default gets a turn.
             shells.iter().find_map(|shell| {
-                let injection = integration_dir
+                let mut injection = integration_dir
                     .as_deref()
                     .map(|dir| koral::shell::plan(shell, &|key| std::env::var(key).ok(), dir))
                     .unwrap_or_default();
+                injection
+                    .env
+                    .push(("TERM".to_string(), term_name.to_string()));
                 match Terminal::spawn_configured(
                     id,
                     self.proxy.clone(),

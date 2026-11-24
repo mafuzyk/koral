@@ -196,7 +196,6 @@ impl Terminal {
             .set_cell(geometry.cell_width.into(), geometry.cell_height.into());
         let session = Arc::new(FairMutex::new(session));
 
-        // shortcut: no koral terminfo entry, add one if an app needs it.
         let mut env = HashMap::from([
             ("TERM".to_string(), "xterm-256color".to_string()),
             ("COLORTERM".to_string(), "truecolor".to_string()),

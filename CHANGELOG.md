@@ -13,6 +13,9 @@ alpha tag or competitive performance results are implied.
 
 ### Added
 
+- `xterm-koral` terminfo source (`assets/xterm-koral.terminfo`) and explicit
+  `koral +terminfo install` command, with automatic fallback to `xterm-256color` when not
+  installed locally.
 - Automatic shell integration (`OSC 133` command marks and `OSC 7` working directory)
   for `bash`, `zsh`, and `fish` without modifying user startup files (`shell_integration
   on|off`, on by default).

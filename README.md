@@ -276,6 +276,7 @@ keybind ctrl+shift+t=unbind
 ## Graphics, notifications & stack
 
 - **Kitty graphics protocol:** supports inline images, animations/video via `mpv --vo=kitty`, Unicode placeholders (`c=`, `r=`), `z`-index layering, and synchronized updates without screen tearing or lost image anchors.
+- **Terminfo (`xterm-koral`):** ships [`assets/xterm-koral.terminfo`](assets/xterm-koral.terminfo); run `koral +terminfo install` to compile it into `~/.terminfo`. `koral` sets `TERM=xterm-koral` only when the entry is installed locally and falls back to `xterm-256color` otherwise (over SSH, remote hosts lacking `xterm-koral` need the entry copied or `TERM=xterm-256color`).
 - **Desktop integration:** handles `OSC 777` and `OSC 9` for window titles, terminal bell, and desktop notifications, plus [`assets/koral.desktop`](assets/koral.desktop) and [`assets/koral.svg`](assets/koral.svg).
 - **Architecture:** pure Rust over `winit`, `wgpu`, `glyphon`, and `alacritty_terminal`.
 
