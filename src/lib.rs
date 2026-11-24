@@ -19,6 +19,7 @@ pub mod render;
 pub mod search;
 pub mod session;
 pub mod settings;
+pub mod shell;
 pub mod splits;
 pub mod tabs;
 pub mod theme;

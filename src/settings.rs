@@ -42,7 +42,7 @@ pub struct Field {
 const ITALIC_CHOICES: &[&str] = &["oblique", "italic"];
 const PERMISSION_CHOICES: &[&str] = &["allow", "ask", "deny"];
 
-pub const FIELDS: [Field; 15] = [
+pub const FIELDS: [Field; 16] = [
     Field {
         section: Section::Appearance,
         key: "theme",
@@ -128,6 +128,12 @@ pub const FIELDS: [Field; 15] = [
         key: "shell",
         label: "Shell for new tabs",
         kind: Kind::Text,
+    },
+    Field {
+        section: Section::Terminal,
+        key: "shell_integration",
+        label: "Shell integration",
+        kind: Kind::Toggle,
     },
     Field {
         section: Section::Terminal,
@@ -534,6 +540,12 @@ pub fn value(field: usize, config: &Config) -> String {
         "bold_weight" => config.bold_weight.to_string(),
         "italic_style" => if config.oblique { "oblique" } else { "italic" }.to_string(),
         "shell" => config.shell.clone().unwrap_or_default(),
+        "shell_integration" => if config.shell_integration {
+            "on"
+        } else {
+            "off"
+        }
+        .to_string(),
         "scrollback" => config.scrollback.to_string(),
         "clipboard_read" => if config.clipboard_read { "on" } else { "off" }.to_string(),
         "clipboard_write" => config.clipboard_write.as_str().to_string(),

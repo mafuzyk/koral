@@ -379,6 +379,7 @@ impl App {
                 cwd,
                 scrollback,
                 socket.as_deref(),
+                &[],
             ) {
                 Ok(terminal) => Some(terminal),
                 Err(error) => {
@@ -396,17 +397,34 @@ impl App {
             if shells[0] != fallback {
                 shells.push(fallback);
             }
+            let integration_dir = if self.config.shell_integration {
+                let dir = koral::shell::dir();
+                match koral::shell::prepare(&dir) {
+                    Ok(()) => Some(dir),
+                    Err(error) => {
+                        report(&format!("cannot prepare shell integration: {error}"));
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             // A bad `shell` setting must not cost the user the window: the default gets a turn.
             shells.iter().find_map(|shell| {
+                let injection = integration_dir
+                    .as_deref()
+                    .map(|dir| koral::shell::plan(shell, &|key| std::env::var(key).ok(), dir))
+                    .unwrap_or_default();
                 match Terminal::spawn_configured(
                     id,
                     self.proxy.clone(),
                     shell,
-                    &[],
+                    &injection.args,
                     geometry,
                     cwd.clone(),
                     scrollback,
                     socket.as_deref(),
+                    &injection.env,
                 ) {
                     Ok(terminal) => Some(terminal),
                     Err(error) => {

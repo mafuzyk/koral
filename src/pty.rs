@@ -166,7 +166,7 @@ impl Terminal {
         geometry: Geometry,
         cwd: Option<PathBuf>,
     ) -> std::io::Result<Self> {
-        Self::spawn_configured(id, proxy, shell, args, geometry, cwd, SCROLLBACK, None)
+        Self::spawn_configured(id, proxy, shell, args, geometry, cwd, SCROLLBACK, None, &[])
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -179,6 +179,7 @@ impl Terminal {
         cwd: Option<PathBuf>,
         scrollback: usize,
         socket_path: Option<&Path>,
+        extra_env: &[(String, String)],
     ) -> std::io::Result<Self> {
         let listener = Listener {
             tab: id,
@@ -206,6 +207,9 @@ impl Terminal {
                 "KORAL_SOCKET".to_string(),
                 socket.to_string_lossy().into_owned(),
             );
+        }
+        for (key, value) in extra_env {
+            env.insert(key.clone(), value.clone());
         }
         let options = Options {
             shell: Some(Shell::new(shell.to_string(), args.to_vec())),

@@ -133,6 +133,7 @@ pub struct Config {
     pub opacity: f32,
     pub padding: f32,
     pub shell: Option<String>,
+    pub shell_integration: bool,
     pub matugen: bool,
     pub window_decorations: bool,
     pub present_mode: PresentModePolicy,
@@ -156,6 +157,7 @@ impl Default for Config {
             opacity: 0.8,
             padding: 8.0,
             shell: None,
+            shell_integration: true,
             matugen: false,
             window_decorations: false,
             present_mode: PresentModePolicy::Auto,
@@ -433,6 +435,7 @@ fn apply(config: &mut Config, line: &str) -> Result<(), String> {
             config.shell = Some(value).filter(|shell| !shell.is_empty());
             Ok(())
         }
+        "shell_integration" => toggle(&value).map(|on| config.shell_integration = on),
         "theme" => {
             if value.is_empty() {
                 config.theme = None;

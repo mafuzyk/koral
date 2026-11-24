@@ -160,6 +160,14 @@ fn matugen_takes_only_on_or_off() {
     assert_eq!(errors("matugen yes").len(), 1);
 }
 
+#[test]
+fn shell_integration_defaults_on_and_toggles() {
+    assert!(config("").shell_integration);
+    assert!(!config("shell_integration off\n").shell_integration);
+    assert!(config("shell_integration on\n").shell_integration);
+    assert_eq!(errors("shell_integration auto\n").len(), 1);
+}
+
 fn folder(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("koral-migrate-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

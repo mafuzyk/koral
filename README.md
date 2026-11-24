@@ -176,14 +176,14 @@ full methodology and its `--self-test` option for percentile checks.
 
 ---
 
-## Native `sharky` integration
+## Command blocks & shell integration
 
-`koral` treats each `sharky` command as a structured unit rather than undifferentiated scrollback text:
+`koral` treats each command as a structured unit rather than undifferentiated scrollback text, with built-in `OSC 133` / `OSC 7` integration for `bash`, `zsh`, `fish`, and `sharky`:
 
 - **Foldable blocks:** click the marker beside any command or press `ctrl+shift+f` to collapse/expand long output with an automatic folded line count.
 - **Status & duration:** every block displays completion status (`✓` / `× <code>`) and elapsed duration on the right.
 - **Prompt navigation & output capture:** jump cleanly between commands (`ctrl+shift+z` / `ctrl+shift+x`) or copy an entire command's output (`ctrl+shift+g`).
-- **Without `sharky`:** shell resolution follows `$KORAL_SHELL` → `shell` in config → `sharky` on `PATH` → `$SHELL`. Any shell works with tabs, splits, search, links, images, and video; command folding, exit markers, and prompt jumps use `sharky` marks.
+- **Zero rc-file edits:** `shell_integration on` (default) injects `bash` (`--rcfile`), `zsh` (`ZDOTDIR`), and `fish` (`XDG_DATA_DIRS`) hooks from a private runtime directory without modifying your dotfiles. Shell resolution follows `$KORAL_SHELL` → `shell` in `koral.conf` → `sharky` on `PATH` → `$SHELL`.
 
 ---
 
@@ -260,6 +260,7 @@ clipboard_read off
 clipboard_write ask
 notifications allow
 shell /usr/bin/bash
+shell_integration on
 matugen off
 window_decorations off
 present_mode auto
