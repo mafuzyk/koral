@@ -32,4 +32,13 @@ them survives; clearing half of a wide character via `clear_wide` remains an
 erase and is not preserved.
 
 To update the crate, replace this directory with the next published version,
-reapply the two KORAL PATCH hunks, and regenerate `koral.patch`.
+reapply the KORAL PATCH hunks, and regenerate `koral.patch`.
+
+## ASCII batch fast path
+
+`Term::input_count` and `Term::input_ascii_batch` let `Session::feed_batch` write
+contiguous printable ASCII runs (`0x20..=0x7E`), `\r`, and `\n` directly to the active
+grid when the VT parser is proven to be in `Ground` state, `LINE_WRAP` is enabled,
+`INSERT` mode is off, the active charset is `Ascii`, and `cursor.template.extra` is
+`None`. Cells carrying `extra` metadata or wide-character flags delegate to
+`Term::write_at_cursor` so picture anchors and wide-glyph cleanup stay exact.

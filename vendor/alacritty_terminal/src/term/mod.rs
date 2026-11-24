@@ -327,6 +327,9 @@ pub struct Term<T> {
 
     /// Config directly for the terminal.
     config: Config,
+
+    /// KORAL PATCH: count of characters processed by `Handler::input` / `input_ascii_batch`.
+    input_count: u64,
 }
 
 /// Configuration options for the [`Term`].
@@ -441,7 +444,91 @@ impl<T> Term<T> {
             selection: Default::default(),
             title: Default::default(),
             mode: Default::default(),
+            input_count: 0,
         }
+    }
+
+    /// KORAL PATCH: monotonic character-input counter used to detect Ground state safely.
+    #[inline]
+    pub fn input_count(&self) -> u64 {
+        self.input_count
+    }
+
+    /// KORAL PATCH: fast path for printable ASCII (`0x20..=0x7E`), `\r`, and `\n` in Ground state.
+    pub fn input_ascii_batch(&mut self, bytes: &[u8]) -> usize
+    where
+        T: EventListener,
+    {
+        if self.mode.contains(TermMode::INSERT)
+            || !self.mode.contains(TermMode::LINE_WRAP)
+            || !matches!(
+                self.grid.cursor.charsets[self.active_charset],
+                crate::vte::ansi::StandardCharset::Ascii
+            )
+            || self.grid.cursor.template.extra.is_some()
+        {
+            return 0;
+        }
+
+        let mut pos = 0;
+        let len = bytes.len();
+        while pos < len {
+            let b = bytes[pos];
+            if (0x20..=0x7E).contains(&b) {
+                let mut end = pos + 1;
+                while end < len && (0x20..=0x7E).contains(&bytes[end]) {
+                    end += 1;
+                }
+                while pos < end {
+                    if self.grid.cursor.input_needs_wrap {
+                        self.wrapline();
+                    }
+                    let columns = self.columns();
+                    let line = self.grid.cursor.point.line;
+                    let col = self.grid.cursor.point.column.0;
+                    let take = (end - pos).min(columns - col);
+                    let fg = self.grid.cursor.template.fg;
+                    let bg = self.grid.cursor.template.bg;
+                    let flags = self.grid.cursor.template.flags;
+
+                    for (offset, &ch_byte) in bytes[pos..pos + take].iter().enumerate() {
+                        let target_col = col + offset;
+                        let cell = &mut self.grid[line][Column(target_col)];
+                        if cell.extra.is_none()
+                            && !cell.flags.intersects(Flags::WIDE_CHAR | Flags::WIDE_CHAR_SPACER)
+                        {
+                            cell.c = ch_byte as char;
+                            cell.fg = fg;
+                            cell.bg = bg;
+                            cell.flags = flags;
+                        } else {
+                            self.grid.cursor.point.column = Column(target_col);
+                            self.write_at_cursor(ch_byte as char);
+                        }
+                    }
+
+                    self.damage.damage_line(line.0 as usize, col, col + take - 1);
+                    let next_col = col + take;
+                    if next_col < columns {
+                        self.grid.cursor.point.column = Column(next_col);
+                    } else {
+                        self.grid.cursor.point.column = Column(columns - 1);
+                        self.grid.cursor.input_needs_wrap = true;
+                    }
+                    self.input_count = self.input_count.wrapping_add(take as u64);
+                    pos += take;
+                }
+            } else if b == b'\r' {
+                self.carriage_return();
+                pos += 1;
+            } else if b == b'\n' {
+                self.linefeed();
+                pos += 1;
+            } else {
+                break;
+            }
+        }
+        pos
     }
 
     /// Collect the information about the changes in the lines, which
@@ -1073,6 +1160,7 @@ impl<T: EventListener> Handler for Term<T> {
     /// A character to be displayed.
     #[inline(never)]
     fn input(&mut self, c: char) {
+        self.input_count = self.input_count.wrapping_add(1);
         // Number of cells the char will occupy.
         let width = match c.width() {
             Some(width) => width,

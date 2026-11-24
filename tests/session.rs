@@ -1135,3 +1135,73 @@ fn unicode_placeholder_places_and_clears_a_virtual_image() {
     f.feed("\x1b[2;3H  \x1b[3;3H  ");
     assert!(f.pictures().is_empty());
 }
+
+#[test]
+fn fast_path_matches_vte_across_mixed_corpus_and_chunk_splits() {
+    use alacritty_terminal::vte::ansi::Processor;
+
+    let corpus = concat!(
+        "plain ascii flood line 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz\r\n",
+        "wrap-exact-20-chars!",
+        "continued-next-line\r\n",
+        "\x1b[31;1mred bold\x1b[0m normal ",
+        "\x1b[4:3;58:2::10:20:30mundercurl\x1b[0m ",
+        "日本語🙂ascii-after-wide\r\n",
+        "\x1b[1;1H\x1b[4hINS\x1b[4l",
+        "\x1b[?7lnowrap-clip-end-of-line-ignored-tail\x1b[?7h\r\n",
+        "\x1b(0lqqqk\x1b(Bback-to-ascii\r\n",
+        "\x1b[?2026hsynced-line\r\n\x1b[?2026l",
+        "after-sync-utf8-é-and-final-ascii-0123456789\r\n",
+    );
+
+    for chunk_size in [1, 3, 7, 13, 64, corpus.len()] {
+        let mut session = Session::new(Term::new(
+            Config {
+                scrolling_history: 100,
+                ..Config::default()
+            },
+            &TermSize::new(20, 8),
+            VoidListener,
+        ));
+        let mut ref_term = Term::new(
+            Config {
+                scrolling_history: 100,
+                ..Config::default()
+            },
+            &TermSize::new(20, 8),
+            VoidListener,
+        );
+        let mut ref_parser: Processor = Processor::new();
+        let now = Instant::now();
+
+        for chunk in corpus.as_bytes().chunks(chunk_size) {
+            session.feed(chunk, now);
+            ref_parser.advance(&mut ref_term, chunk);
+        }
+
+        let got = session.term.grid();
+        let exp = ref_term.grid();
+        assert_eq!(got.topmost_line(), exp.topmost_line(), "chunk={chunk_size}");
+        assert_eq!(
+            got.bottommost_line(),
+            exp.bottommost_line(),
+            "chunk={chunk_size}"
+        );
+        assert_eq!(got.cursor.point, exp.cursor.point, "chunk={chunk_size}");
+        assert_eq!(
+            got.cursor.input_needs_wrap, exp.cursor.input_needs_wrap,
+            "chunk={chunk_size}"
+        );
+        for line in exp.topmost_line().0..=exp.bottommost_line().0 {
+            for col in 0..20 {
+                let g = &got[Line(line)][Column(col)];
+                let e = &exp[Line(line)][Column(col)];
+                assert_eq!(
+                    (g.c, g.fg, g.bg, g.flags, g.extra.as_ref()),
+                    (e.c, e.fg, e.bg, e.flags, e.extra.as_ref()),
+                    "mismatch at line {line} col {col} (chunk={chunk_size})"
+                );
+            }
+        }
+    }
+}

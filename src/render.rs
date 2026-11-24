@@ -17,7 +17,7 @@ use crate::lag;
 
 const LINE_HEIGHT: f32 = 1.2;
 const SMALL: f32 = 0.82;
-pub const MAX_CACHED_LINES: usize = 4_000;
+pub const MAX_CACHED_LINES: usize = 1_024;
 /// Evicting down to here leaves about twenty screens of headroom, so the next screens fill the cache
 /// again instead of evicting on every line.
 const EVICT_TO: usize = MAX_CACHED_LINES * 3 / 4;

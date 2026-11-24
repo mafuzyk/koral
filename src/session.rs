@@ -35,6 +35,8 @@ pub struct Session<L> {
     /// Bumped for grid edits and screen switches that the row projection cannot infer from
     /// block revisions alone.
     grid_revision: u64,
+    /// True when the VT parser is proven to be in Ground state for fast ASCII batching.
+    ascii_ground: bool,
 }
 
 impl<L: EventListener> Session<L> {
@@ -44,6 +46,7 @@ impl<L: EventListener> Session<L> {
             columns: term.grid().columns(),
             term,
             grid_revision: 0,
+            ascii_ground: true,
             blocks: BlockStore::default(),
             graphics: Graphics::default(),
             replies: Vec::new(),
@@ -83,6 +86,7 @@ impl<L: EventListener> Session<L> {
             columns,
             alt_screen,
             grid_revision,
+            ascii_ground,
         } = self;
         let width = term.grid().columns();
         // shortcut: the row counts are read again on the next read, so a frame drawn
@@ -95,7 +99,7 @@ impl<L: EventListener> Session<L> {
         for bytes in chunks {
             scanner.feed(bytes, &mut |piece| match piece {
                 Piece::Bytes(bytes) => {
-                    parser.advance(term, bytes);
+                    advance_fast(parser, term, ascii_ground, bytes);
                     if !bytes.is_empty() {
                         *grid_revision = grid_revision.wrapping_add(1);
                     }
@@ -117,6 +121,7 @@ impl<L: EventListener> Session<L> {
                     let needs_grid = outcome.place.is_some() || outcome.delete.is_some();
                     if needs_grid {
                         *grid_revision = grid_revision.wrapping_add(1);
+                        *ascii_ground = false;
                         with_flushed_sync(parser, term, |parser, term| {
                             // The replay can leave the alternate screen: its images go before this one lands,
                             // or the end-of-feed cleanup would take the image that just arrived.
@@ -134,6 +139,7 @@ impl<L: EventListener> Session<L> {
                     }
                 }
                 Piece::Status(query) => {
+                    *ascii_ground = false;
                     let reply = with_flushed_sync(parser, term, |_, term| {
                         status_reply(query, term.grid().cursor.template.flags)
                     });
@@ -147,6 +153,7 @@ impl<L: EventListener> Session<L> {
                 }
                 Piece::Mark(mark) => {
                     *grid_revision = grid_revision.wrapping_add(1);
+                    *ascii_ground = false;
                     with_flushed_sync(parser, term, |_, term| {
                         // A program on the alternate screen must not open a block, but the
                         // shell's command end arrives there too when a program dies badly.
@@ -172,6 +179,81 @@ impl<L: EventListener> Session<L> {
             });
         }
         settle_alt(term, graphics, alt_screen);
+    }
+}
+
+/// Processes printable ASCII / CR / LF runs directly when the parser is proven to be in
+/// Ground state, falling back to `Processor::advance` for all escape sequences, controls,
+/// non-ASCII UTF-8, or non-trivial cell modes.
+fn advance_fast<L: EventListener>(
+    parser: &mut Processor,
+    term: &mut Term<L>,
+    ascii_ground: &mut bool,
+    bytes: &[u8],
+) {
+    if parser.sync_timeout().pending_timeout() {
+        *ascii_ground = false;
+        parser.advance(term, bytes);
+        return;
+    }
+
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        if *ascii_ground {
+            let consumed = term.input_ascii_batch(rest);
+            if consumed > 0 {
+                rest = &rest[consumed..];
+                continue;
+            }
+            if (0x20..=0x7E).contains(&rest[0]) {
+                parser.advance(term, rest);
+                *ascii_ground = false;
+                return;
+            }
+            *ascii_ground = false;
+        }
+
+        // Handle an inline CSI sequence (`ESC [ ... final`) in one advance call.
+        if rest.len() >= 3
+            && rest[0] == 0x1b
+            && rest[1] == b'['
+            && let Some(rel) = rest[2..].iter().position(|b| (0x40..=0x7E).contains(b))
+        {
+            let end = 2 + rel + 1;
+            parser.advance(term, &rest[..end]);
+            rest = &rest[end..];
+            if parser.sync_timeout().pending_timeout() {
+                parser.advance(term, rest);
+                return;
+            }
+            if !rest.is_empty() && (0x20..=0x7E).contains(&rest[0]) {
+                let before = term.input_count();
+                parser.advance(term, &rest[..1]);
+                if term.input_count() != before && !parser.sync_timeout().pending_timeout() {
+                    *ascii_ground = true;
+                }
+                rest = &rest[1..];
+            }
+            continue;
+        }
+
+        let Some(probe) = rest.iter().position(|b| (0x20..=0x7E).contains(b)) else {
+            parser.advance(term, rest);
+            return;
+        };
+        if probe > 0 {
+            parser.advance(term, &rest[..probe]);
+            if parser.sync_timeout().pending_timeout() {
+                parser.advance(term, &rest[probe..]);
+                return;
+            }
+        }
+        let before = term.input_count();
+        parser.advance(term, &rest[probe..=probe]);
+        if term.input_count() != before && !parser.sync_timeout().pending_timeout() {
+            *ascii_ground = true;
+        }
+        rest = &rest[probe + 1..];
     }
 }
 
