@@ -121,8 +121,10 @@ fn main() {
             std::process::exit(1);
         }
     };
+    lag::startup("event_loop");
     let proxy = event_loop.create_proxy();
     let mut app = App::new(proxy, args);
+    lag::startup("app_new");
     if let Err(error) = event_loop.run_app(&mut app) {
         report(&format!("cannot run: {error}"));
         std::process::exit(1);
@@ -201,7 +203,7 @@ struct App {
     fonts: Vec<String>,
     theme: Theme,
     home: Option<String>,
-    clipboard: Option<Clipboard>,
+    clipboard: Option<Option<Clipboard>>,
     mods: ModifiersState,
     cursor: (f32, f32),
     pressed: Option<u8>,
@@ -251,7 +253,7 @@ impl App {
             settings_error: None,
             fonts: Vec::new(),
             home: std::env::var("HOME").ok(),
-            clipboard: Clipboard::new().ok(),
+            clipboard: None,
             mods: ModifiersState::empty(),
             cursor: (0.0, 0.0),
             pressed: None,
@@ -1092,7 +1094,7 @@ impl App {
             Consent::Allow => {
                 if self.notices.confirm(Instant::now()) == Some(Decision::Performed) {
                     if let Some(text) = self.notices.take_ready_text()
-                        && let Some(clipboard) = &mut self.clipboard
+                        && let Some(clipboard) = self.clipboard()
                     {
                         let _ = clipboard
                             .set()
@@ -1188,9 +1190,15 @@ impl App {
         }
     }
 
+    fn clipboard(&mut self) -> Option<&mut Clipboard> {
+        self.clipboard
+            .get_or_insert_with(|| Clipboard::new().ok())
+            .as_mut()
+    }
+
     /// Explicit user copies are trusted: they never consult permission policy.
     fn write_clipboard(&mut self, text: String, kind: LinuxClipboardKind) {
-        let Some(clipboard) = &mut self.clipboard else {
+        let Some(clipboard) = self.clipboard() else {
             return;
         };
         let _ = clipboard.set().clipboard(kind).text(text);
@@ -1198,9 +1206,9 @@ impl App {
 
     /// Program-driven copies (OSC 52 / OSC 5522) obey the configured policy.
     fn store(&mut self, text: String, kind: LinuxClipboardKind) {
-        let Some(clipboard) = &mut self.clipboard else {
+        if self.clipboard().is_none() {
             return;
-        };
+        }
         let text = match self.notices.clipboard_write(text, Instant::now()) {
             Decision::Performed => match self.notices.take_ready_text() {
                 Some(text) => text,
@@ -1212,7 +1220,9 @@ impl App {
             }
             Decision::Denied | Decision::Held => return,
         };
-        let _ = clipboard.set().clipboard(kind).text(text);
+        if let Some(clipboard) = self.clipboard() {
+            let _ = clipboard.set().clipboard(kind).text(text);
+        }
     }
 
     fn copy_selection(&mut self, kind: LinuxClipboardKind) {
@@ -1226,8 +1236,7 @@ impl App {
 
     fn paste(&mut self, kind: LinuxClipboardKind) {
         let text = self
-            .clipboard
-            .as_mut()
+            .clipboard()
             .and_then(|clipboard| clipboard.get().clipboard(kind).text().ok());
         if let (Some(text), true) = (&text, self.search.is_some()) {
             let line = text.lines().next().unwrap_or("").to_string();
@@ -2071,6 +2080,18 @@ impl ApplicationHandler<UserEvent> for App {
         if self.window.is_some() {
             return;
         }
+        let (face, points) = (self.config.face(), self.config.font_size);
+        let cache = fonts::cache_path();
+        let quick_loader = {
+            let (face, cache) = (face.clone(), cache.clone());
+            std::thread::spawn(move || {
+                cache
+                    .as_deref()
+                    .and_then(|path| fonts::quick(path, &face))
+                    .or_else(|| fonts::listed(&face))
+                    .or_else(|| fonts::listed_fallback(&face))
+            })
+        };
         let title = self.args.title.as_deref().unwrap_or("koral");
         let class = self.args.class.as_deref().unwrap_or("koral");
         let attributes = Window::default_attributes()
@@ -2093,13 +2114,7 @@ impl ApplicationHandler<UserEvent> for App {
             Box::new(event_loop.owned_display_handle()),
         ));
         lag::startup("instance");
-        let (face, points) = (self.config.face(), self.config.font_size);
-        let cache = fonts::cache_path();
-        let quick = cache
-            .as_deref()
-            .and_then(|path| fonts::quick(path, &face))
-            .or_else(|| fonts::listed(&face))
-            .or_else(|| fonts::listed_fallback(&face));
+        let quick = quick_loader.join().ok().flatten();
         lag::startup(if quick.is_some() {
             "fonts_quick"
         } else {
@@ -2197,12 +2212,10 @@ impl ApplicationHandler<UserEvent> for App {
                     ClipboardType::Selection => LinuxClipboardKind::Primary,
                     ClipboardType::Clipboard => LinuxClipboardKind::Clipboard,
                 };
-                if let (Some(text), Some(tab)) = (
-                    self.clipboard
-                        .as_mut()
-                        .and_then(|c| c.get().clipboard(kind).text().ok()),
-                    self.terminal(id),
-                ) {
+                let text = self
+                    .clipboard()
+                    .and_then(|c| c.get().clipboard(kind).text().ok());
+                if let (Some(text), Some(tab)) = (text, self.terminal(id)) {
                     tab.write(reply(&text).into_bytes());
                 }
             }
