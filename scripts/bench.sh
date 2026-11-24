@@ -127,8 +127,22 @@ set -u
 BENCH_DIR=${BENCH_DIR:?}
 now() { date +%s%N; }
 printf '%s' "$(now)" > "$BENCH_DIR/started"
-cat "$BENCH_DIR/data"
+cat "$BENCH_DIR/payload"
 printf '%s' "$(now)" > "$BENCH_DIR/ended"
+if [[ -t 0 ]] && saved_stty=$(stty -g 2>/dev/null); then
+    stty -echo -icanon min 0 time 1 2>/dev/null || true
+    printf '\033[6n'
+    dsr_deadline=$(( $(date +%s) + 30 ))
+    while (( $(date +%s) < dsr_deadline )); do
+        if IFS= read -r -n1 -t 1 ch 2>/dev/null; then
+            if [[ "$ch" == R ]]; then
+                printf '%s' "$(now)" > "$BENCH_DIR/drained"
+                break
+            fi
+        fi
+    done
+    stty "$saved_stty" 2>/dev/null || true
+fi
 # VmHWM from the terminal process that spawned this shell (walk up to a known terminal).
 pid=$$
 for _ in 1 2 3 4 5 6 7 8; do
@@ -242,7 +256,7 @@ def med(key, sub=None):
     if not vals: return None
     vals.sort(); n=len(vals)
     return round(vals[n//2] if n%2 else (vals[n//2-1]+vals[n//2])/2,3)
-print(json.dumps({"launch_ms":med("launch_ms"),"cat_ms":med("cat_ms"),"peak_rss_kib":med("peak_rss_kib"),"tui_fps":med("tui_fps"),"latency_p50_ms":med("latency","p50_ms"),"latency_p99_ms":med("latency","p99_ms")}))' "$1"
+print(json.dumps({"launch_ms":med("launch_ms"),"cat_ms":med("cat_ms"),"cat_drain_ms":med("cat_drain_ms"),"peak_rss_kib":med("peak_rss_kib"),"tui_fps":med("tui_fps"),"latency_p50_ms":med("latency","p50_ms"),"latency_p99_ms":med("latency","p99_ms")}))' "$1"
 }
 
 run_one() {
@@ -265,7 +279,7 @@ run_one() {
     cp "$bench_dir/shell.tmpl" "$run_dir/shell"
     chmod +x "$run_dir/shell"
 
-    local launched_ns started_ns ended_ns tui_started_ns tui_ended_ns rss_kib="null" frames=0
+    local launched_ns started_ns ended_ns drained_ns="" tui_started_ns tui_ended_ns rss_kib="null" frames=0
     local -a launch_args=()
     read -r -a launch_args <<< "$config_args"
     case "$terminal" in
@@ -294,13 +308,15 @@ run_one() {
     [[ -s "$run_dir/frames" ]] && frames=$(cat "$run_dir/frames")
     [[ -s "$run_dir/started" ]] && started_ns=$(cat "$run_dir/started")
     [[ -s "$run_dir/ended" ]] && ended_ns=$(cat "$run_dir/ended")
+    [[ -s "$run_dir/drained" ]] && drained_ns=$(cat "$run_dir/drained")
     [[ -s "$run_dir/tui_started" ]] && tui_started_ns=$(cat "$run_dir/tui_started")
     [[ -s "$run_dir/tui_ended" ]] && tui_ended_ns=$(cat "$run_dir/tui_ended")
     [[ -s "$run_dir/rss" ]] && rss_kib=$(cat "$run_dir/rss")
 
-    local launch_ms=0 cat_ms=0 tui_fps=0
+    local launch_ms=0 cat_ms=0 cat_drain_ms="null" tui_fps=0
     [[ -n "${started_ns:-}" && -n "${launched_ns:-}" ]] && launch_ms=$(( (started_ns - launched_ns) / 1000000 ))
     [[ -n "${ended_ns:-}" && -n "${started_ns:-}" ]] && cat_ms=$(( (ended_ns - started_ns) / 1000000 ))
+    [[ -n "${drained_ns:-}" && -n "${started_ns:-}" ]] && cat_drain_ms=$(( (drained_ns - started_ns) / 1000000 ))
     if [[ -n "${tui_ended_ns:-}" && -n "${tui_started_ns:-}" ]] && (( tui_ended_ns > tui_started_ns )); then
         tui_fps=$(awk -v f="$frames" -v s="$tui_started_ns" -v e="$tui_ended_ns" 'BEGIN {printf "%.2f", f*1000000000/(e-s)}')
     fi
@@ -330,8 +346,8 @@ print(json.dumps(d))' "$run_dir/latency.json")
         fi
     fi
 
-    printf '{"status":"ok","launch_ms":%d,"cat_ms":%d,"peak_rss_kib":%s,"tui_fps":%s,"latency":%s}' \
-        "$launch_ms" "$cat_ms" "$rss_kib" "$tui_fps" "$latency_json"
+    printf '{"status":"ok","launch_ms":%d,"cat_ms":%d,"cat_drain_ms":%s,"peak_rss_kib":%s,"tui_fps":%s,"latency":%s}' \
+        "$launch_ms" "$cat_ms" "$cat_drain_ms" "$rss_kib" "$tui_fps" "$latency_json"
 }
 
 report="[]"
