@@ -88,6 +88,7 @@ fn main() {
         }
         Ok(Launch::Run(args)) => args,
         Ok(Launch::Control(ctl)) => {
+            let wants_json = ctl.iter().any(|arg| arg == "--json");
             match koral::ipc::parse_cli(&ctl)
                 .and_then(|(socket, req)| koral::ipc::send(socket, &req))
             {
@@ -98,7 +99,11 @@ fn main() {
                     return;
                 }
                 Err(message) => {
-                    eprintln!("koral ctl: {message}");
+                    if wants_json {
+                        println!("{}", koral::ipc::json_error(&message));
+                    } else {
+                        eprintln!("koral ctl: {message}");
+                    }
                     std::process::exit(1);
                 }
             }
@@ -1986,37 +1991,45 @@ impl App {
                 self.redraw();
                 "OK\n".to_string()
             }
-            Request::List => {
-                let Some(tabs) = &self.tabs else {
-                    return "OK\n".to_string();
-                };
-                let mut out = String::from("OK\n");
-                let active_tab = tabs.active_index();
-                for (index, tab) in tabs.iter().enumerate() {
-                    let tab_mark = if index == active_tab { "*" } else { " " };
-                    match tab {
-                        Tab::Settings(_) => {
-                            out.push_str(&format!("tab {index}{tab_mark} settings\n"));
-                        }
-                        Tab::Terminal(tree) => {
-                            let active_pane = tree.active_id();
-                            let active_term = tree.active();
-                            let tab_title = {
-                                let session = active_term.session.lock();
-                                tabs::title(
-                                    &session.blocks,
-                                    active_term.title.as_deref(),
-                                    self.home.as_deref(),
-                                )
-                            };
-                            out.push_str(&format!(
-                                "tab {index}{tab_mark} panes={} active_pane={} title={tab_title}\n",
-                                tree.len(),
-                                active_pane
-                            ));
-                            for (pane_id, term) in tree.iter() {
-                                let pane_mark = if pane_id == active_pane { "*" } else { " " };
-                                let title = {
+            Request::List | Request::ListJson => {
+                let json = matches!(request, Request::ListJson);
+                let model = self.list_tabs_info();
+                if json {
+                    format!("OK\n{}\n", ipc::render_list_json(&model))
+                } else {
+                    format!("OK\n{}", ipc::render_list_text(&model))
+                }
+            }
+        }
+    }
+
+    fn list_tabs_info(&self) -> Vec<ipc::TabInfo> {
+        let Some(tabs) = &self.tabs else {
+            return Vec::new();
+        };
+        let active_tab = tabs.active_index();
+        tabs.iter()
+            .enumerate()
+            .map(|(index, tab)| {
+                let active = index == active_tab;
+                let kind = match tab {
+                    Tab::Settings(_) => ipc::TabKind::Settings,
+                    Tab::Terminal(tree) => {
+                        let active_pane = tree.active_id();
+                        let active_term = tree.active();
+                        let title = {
+                            let session = active_term.session.lock();
+                            tabs::title(
+                                &session.blocks,
+                                active_term.title.as_deref(),
+                                self.home.as_deref(),
+                            )
+                        };
+                        let panes = tree
+                            .iter()
+                            .into_iter()
+                            .map(|(pane_id, term)| {
+                                let pane_title = {
                                     let session = term.session.lock();
                                     tabs::title(
                                         &session.blocks,
@@ -2024,16 +2037,27 @@ impl App {
                                         self.home.as_deref(),
                                     )
                                 };
-                                out.push_str(&format!(
-                                    "  pane {pane_id}{pane_mark} title={title}\n"
-                                ));
-                            }
+                                ipc::PaneInfo {
+                                    id: pane_id,
+                                    active: pane_id == active_pane,
+                                    title: pane_title,
+                                }
+                            })
+                            .collect();
+                        ipc::TabKind::Terminal {
+                            title,
+                            active_pane,
+                            panes,
                         }
                     }
+                };
+                ipc::TabInfo {
+                    index,
+                    active,
+                    kind,
                 }
-                out
-            }
-        }
+            })
+            .collect()
     }
 }
 

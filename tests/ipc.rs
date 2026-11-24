@@ -2,7 +2,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use koral::ipc::{Request, Server, decode, encode, parse_cli, send};
+use koral::ipc::{
+    PaneInfo, Request, Server, TabInfo, TabKind, decode, encode, json_error, json_string,
+    parse_cli, render_list_json, render_list_text, send,
+};
 use koral::splits::{Axis, Dir};
 
 #[test]
@@ -36,6 +39,7 @@ fn wire_encode_decode_round_trips_all_commands() {
         Request::Reload,
         Request::SendText("ls -la\n".to_string()),
         Request::List,
+        Request::ListJson,
     ];
     for req in cases {
         let line = encode(&req);
@@ -128,4 +132,98 @@ fn unix_socket_server_replies_cleans_up_and_sets_0600_mode() {
 
     drop(server);
     assert!(!sock.exists());
+}
+
+#[test]
+fn json_string_escapes_quotes_backslashes_and_control_chars() {
+    assert_eq!(json_string("plain utf8 ✓"), "\"plain utf8 ✓\"");
+    assert_eq!(
+        json_string("a\"b\\c\nd\re\tf\x00\x1b"),
+        "\"a\\\"b\\\\c\\nd\\re\\tf\\u0000\\u001b\""
+    );
+    assert_eq!(
+        json_error("bad \"socket\""),
+        "{\"version\":1,\"error\":\"bad \\\"socket\\\"\"}"
+    );
+}
+
+#[test]
+fn cli_parser_handles_json_flag() {
+    assert_eq!(
+        parse_cli(&["--json".into(), "list".into()]).unwrap(),
+        (None, Request::ListJson)
+    );
+    assert_eq!(
+        parse_cli(&[
+            "--socket".into(),
+            "/tmp/k.sock".into(),
+            "--json".into(),
+            "list".into()
+        ])
+        .unwrap(),
+        (Some(PathBuf::from("/tmp/k.sock")), Request::ListJson)
+    );
+    assert_eq!(
+        parse_cli(&[
+            "--json".into(),
+            "--socket=/tmp/k.sock".into(),
+            "list".into()
+        ])
+        .unwrap(),
+        (Some(PathBuf::from("/tmp/k.sock")), Request::ListJson)
+    );
+    assert_eq!(
+        parse_cli(&["list".into(), "--json".into()]).unwrap(),
+        (None, Request::ListJson)
+    );
+    let err = parse_cli(&["--json".into(), "set-theme".into(), "dracula".into()]).unwrap_err();
+    assert_eq!(err, "--json is only supported for list");
+}
+
+#[test]
+fn render_list_matches_exact_text_and_versioned_json() {
+    assert_eq!(render_list_text(&[]), "");
+    assert_eq!(render_list_json(&[]), "{\"version\":1,\"tabs\":[]}");
+
+    let tabs = vec![
+        TabInfo {
+            index: 0,
+            active: false,
+            kind: TabKind::Settings,
+        },
+        TabInfo {
+            index: 1,
+            active: true,
+            kind: TabKind::Terminal {
+                title: "~/proj \"koral\"".to_string(),
+                active_pane: 4,
+                panes: vec![
+                    PaneInfo {
+                        id: 3,
+                        active: false,
+                        title: "logs\t1".to_string(),
+                    },
+                    PaneInfo {
+                        id: 4,
+                        active: true,
+                        title: "~/proj \"koral\"".to_string(),
+                    },
+                ],
+            },
+        },
+    ];
+
+    assert_eq!(
+        render_list_text(&tabs),
+        "\
+tab 0  settings
+tab 1* panes=2 active_pane=4 title=~/proj \"koral\"
+  pane 3  title=logs\t1
+  pane 4* title=~/proj \"koral\"
+"
+    );
+    assert_eq!(
+        render_list_json(&tabs),
+        "{\"version\":1,\"tabs\":[{\"index\":0,\"active\":false,\"kind\":\"settings\"},{\"index\":1,\"active\":true,\"kind\":\"terminal\",\"title\":\"~/proj \\\"koral\\\"\",\"active_pane\":4,\"panes\":[{\"id\":3,\"active\":false,\"title\":\"logs\\t1\"},{\"id\":4,\"active\":true,\"title\":\"~/proj \\\"koral\\\"\"}]}]}"
+    );
 }

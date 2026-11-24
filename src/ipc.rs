@@ -35,10 +35,11 @@ pub enum Request {
     Reload,
     SendText(String),
     List,
+    ListJson,
 }
 
 pub const CTL_USAGE: &str = "\
-Usage: koral ctl [--socket PATH] COMMAND [ARGS...]
+Usage: koral ctl [--socket PATH] [--json] COMMAND [ARGS...]
 
 Commands:
   new-tab [--cwd PATH] [--title TEXT] [-e|-- COMMAND [ARGS...]]
@@ -52,8 +53,138 @@ Commands:
   open-settings
   reload
   send-text TEXT
-  list
+  list [--json]
 ";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneInfo {
+    pub id: u64,
+    pub active: bool,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TabKind {
+    Settings,
+    Terminal {
+        title: String,
+        active_pane: u64,
+        panes: Vec<PaneInfo>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TabInfo {
+    pub index: usize,
+    pub active: bool,
+    pub kind: TabKind,
+}
+
+pub fn json_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                use std::fmt::Write;
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+pub fn json_error(message: &str) -> String {
+    format!("{{\"version\":1,\"error\":{}}}", json_string(message))
+}
+
+pub fn render_list_text(tabs: &[TabInfo]) -> String {
+    let mut out = String::new();
+    for tab in tabs {
+        let tab_mark = if tab.active { "*" } else { " " };
+        match &tab.kind {
+            TabKind::Settings => {
+                out.push_str(&format!("tab {}{} settings\n", tab.index, tab_mark));
+            }
+            TabKind::Terminal {
+                title,
+                active_pane,
+                panes,
+            } => {
+                out.push_str(&format!(
+                    "tab {}{} panes={} active_pane={} title={title}\n",
+                    tab.index,
+                    tab_mark,
+                    panes.len(),
+                    active_pane
+                ));
+                for pane in panes {
+                    let pane_mark = if pane.active { "*" } else { " " };
+                    out.push_str(&format!(
+                        "  pane {}{} title={}\n",
+                        pane.id, pane_mark, pane.title
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
+pub fn render_list_json(tabs: &[TabInfo]) -> String {
+    use std::fmt::Write;
+    let mut out = String::from("{\"version\":1,\"tabs\":[");
+    for (tab_pos, tab) in tabs.iter().enumerate() {
+        if tab_pos > 0 {
+            out.push(',');
+        }
+        match &tab.kind {
+            TabKind::Settings => {
+                let _ = write!(
+                    out,
+                    "{{\"index\":{},\"active\":{},\"kind\":\"settings\"}}",
+                    tab.index, tab.active
+                );
+            }
+            TabKind::Terminal {
+                title,
+                active_pane,
+                panes,
+            } => {
+                let _ = write!(
+                    out,
+                    "{{\"index\":{},\"active\":{},\"kind\":\"terminal\",\"title\":{},\"active_pane\":{},\"panes\":[",
+                    tab.index,
+                    tab.active,
+                    json_string(title),
+                    active_pane
+                );
+                for (pane_pos, pane) in panes.iter().enumerate() {
+                    if pane_pos > 0 {
+                        out.push(',');
+                    }
+                    let _ = write!(
+                        out,
+                        "{{\"id\":{},\"active\":{},\"title\":{}}}",
+                        pane.id,
+                        pane.active,
+                        json_string(&pane.title)
+                    );
+                }
+                out.push_str("]}");
+            }
+        }
+    }
+    out.push_str("]}");
+    out
+}
 
 fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -148,6 +279,7 @@ pub fn encode(req: &Request) -> String {
             parts.push(escape(text));
         }
         Request::List => parts.push("list".to_string()),
+        Request::ListJson => parts.push("list-json".to_string()),
     }
     let mut line = parts.join("\t");
     line.push('\n');
@@ -223,6 +355,7 @@ pub fn decode(line: &str) -> Result<Request, String> {
             fields.next().ok_or_else(|| "missing text".to_string())?,
         )?)),
         "list" => Ok(Request::List),
+        "list-json" => Ok(Request::ListJson),
         other => Err(format!("unknown ipc command '{other}'")),
     }
 }
@@ -256,6 +389,7 @@ fn parse_axis(text: &str) -> Result<Axis, String> {
 
 pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> {
     let mut socket = None;
+    let mut json = false;
     let mut iter = args.iter().peekable();
     while let Some(arg) = iter.peek() {
         if let Some(path) = arg.strip_prefix("--socket=") {
@@ -267,6 +401,9 @@ pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> 
                 .next()
                 .ok_or_else(|| "missing value for '--socket'".to_string())?;
             socket = Some(PathBuf::from(path));
+        } else if *arg == "--json" {
+            json = true;
+            iter.next();
         } else {
             break;
         }
@@ -274,6 +411,9 @@ pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> 
     let Some(cmd) = iter.next() else {
         return Err(format!("missing ctl command\n\n{CTL_USAGE}"));
     };
+    if json && !matches!(cmd.as_str(), "list" | "-h" | "--help" | "help") {
+        return Err("--json is only supported for list".to_string());
+    }
     let request = match cmd.as_str() {
         "-h" | "--help" | "help" => return Err(CTL_USAGE.to_string()),
         "new-tab" => {
@@ -366,7 +506,19 @@ pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> 
                 .ok_or_else(|| "send-text requires TEXT".to_string())?
                 .clone(),
         ),
-        "list" => Request::List,
+        "list" => {
+            if let Some(extra) = iter.next() {
+                if extra == "--json" && iter.next().is_none() {
+                    Request::ListJson
+                } else {
+                    return Err(format!("unknown list option '{extra}'"));
+                }
+            } else if json {
+                Request::ListJson
+            } else {
+                Request::List
+            }
+        }
         other => return Err(format!("unknown ctl command '{other}'")),
     };
     Ok((socket, request))

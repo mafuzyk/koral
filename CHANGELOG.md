@@ -13,6 +13,8 @@ alpha tag or competitive performance results are implied.
 
 ### Added
 
+- `koral ctl --json list` for versioned JSON tab/pane inspection (`{"version":1,"tabs":[...]}`)
+  and JSON error reporting.
 - `xterm-koral` terminfo source (`assets/xterm-koral.terminfo`) and explicit
   `koral +terminfo install` command, with automatic fallback to `xterm-256color` when not
   installed locally.
