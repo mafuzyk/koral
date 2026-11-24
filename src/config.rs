@@ -16,7 +16,7 @@ Usage: koral [OPTIONS] [-e COMMAND [ARGS...]]
   --version                    print the version
   --working-directory, --cwd   initial working directory
   --title                      initial window and tab title
-  --class, --app-id            window class / Wayland app-id
+  --class, --app-id            window class / Wayland app-id / X11 WM_CLASS
   -e, --command                run COMMAND with ARGS in the initial tab
   ctl                          send a command to a running koral window
   +terminfo install            install the xterm-koral terminfo entry into ~/.terminfo

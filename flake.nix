@@ -25,14 +25,33 @@
           cargoHash = "sha256-Orj0sVH5p5etikLbNXI680FYsmlvX6ihijWlr8F8Pao=";
 
           nativeBuildInputs = with pkgs; [ pkg-config makeWrapper ];
-          buildInputs = with pkgs; [ libxkbcommon wayland fontconfig vulkan-loader libGL ];
+          buildInputs = with pkgs; [
+            libxkbcommon
+            wayland
+            xorg.libX11
+            xorg.libXcursor
+            xorg.libXi
+            xorg.libXrandr
+            fontconfig
+            vulkan-loader
+            libGL
+          ];
 
           postInstall = ''
             install -Dm644 assets/koral.desktop $out/share/applications/koral.desktop
             install -Dm644 assets/koral.svg $out/share/icons/hicolor/scalable/apps/koral.svg
             wrapProgram $out/bin/koral \
               --prefix PATH : ${lib.makeBinPath (with pkgs; [ libnotify xdg-utils fontconfig ])} \
-              --prefix LD_LIBRARY_PATH : /run/opengl-driver/lib:${lib.makeLibraryPath (with pkgs; [ libxkbcommon wayland vulkan-loader libGL ])}
+              --prefix LD_LIBRARY_PATH : /run/opengl-driver/lib:${lib.makeLibraryPath (with pkgs; [
+                libxkbcommon
+                wayland
+                xorg.libX11
+                xorg.libXcursor
+                xorg.libXi
+                xorg.libXrandr
+                vulkan-loader
+                libGL
+              ])}
           '';
 
           meta = {
@@ -52,7 +71,17 @@
           };
 
           nativeBuildInputs = with pkgs; [ autoPatchelfHook makeWrapper ];
-          buildInputs = with pkgs; [ libxkbcommon wayland vulkan-loader libGL stdenv.cc.cc.lib ];
+          buildInputs = with pkgs; [
+            libxkbcommon
+            wayland
+            xorg.libX11
+            xorg.libXcursor
+            xorg.libXi
+            xorg.libXrandr
+            vulkan-loader
+            libGL
+            stdenv.cc.cc.lib
+          ];
 
           unpackPhase = ''
             tar xzf $src
@@ -64,7 +93,16 @@
             install -Dm644 LICENSE $out/share/licenses/koral-bin/LICENSE
             wrapProgram $out/bin/koral \
               --prefix PATH : ${lib.makeBinPath (with pkgs; [ libnotify xdg-utils fontconfig ])} \
-              --prefix LD_LIBRARY_PATH : /run/opengl-driver/lib:${lib.makeLibraryPath (with pkgs; [ libxkbcommon wayland vulkan-loader libGL ])}
+              --prefix LD_LIBRARY_PATH : /run/opengl-driver/lib:${lib.makeLibraryPath (with pkgs; [
+                libxkbcommon
+                wayland
+                xorg.libX11
+                xorg.libXcursor
+                xorg.libXi
+                xorg.libXrandr
+                vulkan-loader
+                libGL
+              ])}
           '';
 
           meta = {
@@ -82,7 +120,17 @@
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [ rustc cargo rustfmt clippy pkg-config makeWrapper ];
-          buildInputs = with pkgs; [ libxkbcommon wayland fontconfig vulkan-loader libGL ];
+          buildInputs = with pkgs; [
+            libxkbcommon
+            wayland
+            xorg.libX11
+            xorg.libXcursor
+            xorg.libXi
+            xorg.libXrandr
+            fontconfig
+            vulkan-loader
+            libGL
+          ];
         };
       });
 

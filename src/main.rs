@@ -33,6 +33,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::platform::wayland::WindowAttributesExtWayland;
+use winit::platform::x11::WindowAttributesExtX11;
 use winit::window::{CursorIcon, UserAttentionType, Window, WindowId};
 
 const CONFIRM_WINDOW: Duration = Duration::from_secs(3);
@@ -2074,10 +2075,11 @@ impl ApplicationHandler<UserEvent> for App {
         let class = self.args.class.as_deref().unwrap_or("koral");
         let attributes = Window::default_attributes()
             .with_title(title)
-            .with_name(class, class)
             .with_inner_size(LogicalSize::new(960.0, 600.0))
             .with_transparent(true)
             .with_decorations(self.config.window_decorations);
+        let attributes = WindowAttributesExtWayland::with_name(attributes, class, class);
+        let attributes = WindowAttributesExtX11::with_name(attributes, class, class);
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
             Err(error) => {

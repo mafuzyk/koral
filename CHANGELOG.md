@@ -13,6 +13,8 @@ alpha tag or competitive performance results are implied.
 
 ### Added
 
+- Linux X11 support (`WM_CLASS` via `WindowAttributesExtX11` and X11 runtime library
+  packaging in `flake.nix`).
 - `koral ctl --json list` for versioned JSON tab/pane inspection (`{"version":1,"tabs":[...]}`)
   and JSON error reporting.
 - `xterm-koral` terminfo source (`assets/xterm-koral.terminfo`) and explicit

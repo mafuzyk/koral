@@ -7,7 +7,7 @@
 
 <h1>koral</h1>
 
-<p><strong>A shell-agnostic Rust Wayland terminal emulator with native <a href="https://github.com/mafuzyk/sharky-shell">sharky</a> support.</strong></p>
+<p><strong>A shell-agnostic Linux terminal emulator (Wayland &amp; X11) with native <a href="https://github.com/mafuzyk/sharky-shell">sharky</a> support.</strong></p>
 
 <p>
   Foldable command blocks, native tabs and split panes, 14 built-in themes, Kitty graphics, and live Settings — rendered on the GPU with <code>wgpu</code>.
@@ -44,7 +44,7 @@ install -Dm755 koral ~/.local/bin/koral
 ```
 
 > [!NOTE]
-> `koral` targets Linux on Wayland (`x86_64`) and is developed on Hyprland. Any POSIX/interactive shell works out of the box, with native support for `sharky` and standard OSC 133/7 prompt marks.
+> `koral` targets Linux on Wayland and X11 (`x86_64`), with `--class` setting both Wayland `app_id` and X11 `WM_CLASS`. Any POSIX/interactive shell works out of the box, with native support for `sharky` and standard OSC 133/7 prompt marks.
 
 <details>
 <summary>Nix flake outputs, building from source, and optional runtime dependencies</summary>
