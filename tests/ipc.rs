@@ -40,6 +40,10 @@ fn wire_encode_decode_round_trips_all_commands() {
         Request::SendText("ls -la\n".to_string()),
         Request::List,
         Request::ListJson,
+        Request::SaveSession("work-1".to_string()),
+        Request::RestoreSession("work-1".to_string()),
+        Request::ListSessions,
+        Request::ListSessionsJson,
     ];
     for req in cases {
         let line = encode(&req);
@@ -177,7 +181,31 @@ fn cli_parser_handles_json_flag() {
         (None, Request::ListJson)
     );
     let err = parse_cli(&["--json".into(), "set-theme".into(), "dracula".into()]).unwrap_err();
-    assert_eq!(err, "--json is only supported for list");
+    assert!(err.contains("--json is not supported"), "{err}");
+
+    assert_eq!(
+        parse_cli(&["save-session".into(), "work".into()])
+            .unwrap()
+            .1,
+        Request::SaveSession("work".to_string())
+    );
+    assert_eq!(
+        parse_cli(&["restore-session".into(), "work".into()])
+            .unwrap()
+            .1,
+        Request::RestoreSession("work".to_string())
+    );
+    assert_eq!(
+        parse_cli(&["list-sessions".into()]).unwrap().1,
+        Request::ListSessions
+    );
+    assert_eq!(
+        parse_cli(&["list-sessions".into(), "--json".into()])
+            .unwrap()
+            .1,
+        Request::ListSessionsJson
+    );
+    assert!(parse_cli(&["save-session".into(), "../bad".into()]).is_err());
 }
 
 #[test]

@@ -417,6 +417,81 @@ impl<T> SplitTree<T> {
         self.root.as_ref().is_some_and(|root| root.contains(id))
     }
 
+    pub fn snapshot(
+        &self,
+        mut map: impl FnMut(u64, &T) -> Option<String>,
+    ) -> crate::workspace::SavedNode {
+        fn build<T>(
+            node: &Node<T>,
+            active: u64,
+            map: &mut impl FnMut(u64, &T) -> Option<String>,
+        ) -> crate::workspace::SavedNode {
+            match node {
+                Node::Leaf { id, item } => crate::workspace::SavedNode::Pane {
+                    cwd: map(*id, item),
+                    active: *id == active,
+                },
+                Node::Split {
+                    axis,
+                    ratio,
+                    first,
+                    second,
+                } => crate::workspace::SavedNode::Split {
+                    axis: *axis,
+                    ratio: *ratio,
+                    first: Box::new(build(first, active, map)),
+                    second: Box::new(build(second, active, map)),
+                },
+            }
+        }
+        match &self.root {
+            Some(root) => build(root, self.active, &mut map),
+            None => crate::workspace::SavedNode::Pane {
+                cwd: None,
+                active: true,
+            },
+        }
+    }
+
+    pub fn from_saved<E>(
+        saved: &crate::workspace::SavedNode,
+        make_pane: &mut impl FnMut(Option<&str>) -> Result<(u64, T), E>,
+    ) -> Result<Self, E> {
+        fn build<T, E>(
+            saved: &crate::workspace::SavedNode,
+            make_pane: &mut impl FnMut(Option<&str>) -> Result<(u64, T), E>,
+            active_id: &mut Option<u64>,
+        ) -> Result<Node<T>, E> {
+            match saved {
+                crate::workspace::SavedNode::Pane { cwd, active } => {
+                    let (id, item) = make_pane(cwd.as_deref())?;
+                    if *active && active_id.is_none() {
+                        *active_id = Some(id);
+                    }
+                    Ok(Node::Leaf { id, item })
+                }
+                crate::workspace::SavedNode::Split {
+                    axis,
+                    ratio,
+                    first,
+                    second,
+                } => Ok(Node::Split {
+                    axis: *axis,
+                    ratio: ratio.clamp(MIN_RATIO, MAX_RATIO),
+                    first: Box::new(build(first, make_pane, active_id)?),
+                    second: Box::new(build(second, make_pane, active_id)?),
+                }),
+            }
+        }
+        let mut active_id = None;
+        let root = build(saved, make_pane, &mut active_id)?;
+        let active = active_id.unwrap_or_else(|| root.first_id());
+        Ok(Self {
+            root: Some(root),
+            active,
+        })
+    }
+
     pub fn iter(&self) -> Vec<(u64, &T)> {
         let mut out = Vec::with_capacity(self.len());
         if let Some(root) = &self.root {

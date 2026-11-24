@@ -2037,6 +2037,29 @@ impl App {
                     format!("OK\n{}", ipc::render_list_text(&model))
                 }
             }
+            Request::SaveSession(name) => match self.save_named_session(&name) {
+                Ok(()) => "OK\n".to_string(),
+                Err(message) => format!("ERR {message}\n"),
+            },
+            Request::RestoreSession(name) => match self.restore_named_session(&name) {
+                Ok(()) => "OK\n".to_string(),
+                Err(message) => format!("ERR {message}\n"),
+            },
+            Request::ListSessions | Request::ListSessionsJson => {
+                let json = matches!(request, Request::ListSessionsJson);
+                let names = match koral::workspace::dir() {
+                    Some(dir) => match koral::workspace::list(&dir) {
+                        Ok(list) => list,
+                        Err(message) => return format!("ERR {message}\n"),
+                    },
+                    None => Vec::new(),
+                };
+                if json {
+                    format!("OK\n{}\n", koral::workspace::render_sessions_json(&names))
+                } else {
+                    format!("OK\n{}", koral::workspace::render_sessions_text(&names))
+                }
+            }
         }
     }
 
@@ -2095,6 +2118,86 @@ impl App {
                 }
             })
             .collect()
+    }
+
+    fn save_named_session(&self, name: &str) -> Result<(), String> {
+        let dir = koral::workspace::dir()
+            .ok_or_else(|| "cannot resolve session directory".to_string())?;
+        let Some(tabs) = &self.tabs else {
+            return Err("no open terminal tabs".to_string());
+        };
+        let active_idx = tabs.active_index();
+        let mut active_tab = 0usize;
+        let mut saved_tabs = Vec::new();
+        for (idx, tab) in tabs.iter().enumerate() {
+            let Tab::Terminal(tree) = tab else {
+                continue;
+            };
+            if idx == active_idx {
+                active_tab = saved_tabs.len();
+            }
+            let title = tree.active().title.clone();
+            let layout = tree.snapshot(|_, term| {
+                term.session
+                    .lock()
+                    .blocks
+                    .latest()
+                    .and_then(|block| block.cwd.clone())
+            });
+            saved_tabs.push(koral::workspace::SavedTab { title, layout });
+        }
+        if saved_tabs.is_empty() {
+            return Err("no open terminal tabs".to_string());
+        }
+        let session = koral::workspace::SavedSession {
+            version: koral::workspace::VERSION,
+            name: name.to_string(),
+            active_tab,
+            tabs: saved_tabs,
+        };
+        koral::workspace::save(&dir, &session).map(|_| ())
+    }
+
+    fn restore_named_session(&mut self, name: &str) -> Result<(), String> {
+        let dir = koral::workspace::dir()
+            .ok_or_else(|| "cannot resolve session directory".to_string())?;
+        let saved = koral::workspace::load(&dir, name)?;
+        if saved.tabs.is_empty() {
+            return Err(format!("session '{name}' has no saved tabs"));
+        }
+        let layout = self
+            .layout()
+            .ok_or_else(|| "window layout is not ready".to_string())?;
+        let geometry = Self::geometry_for(layout.content_rect(), layout);
+        let fallback_cwd = self.active_cwd();
+        let mut built = Vec::with_capacity(saved.tabs.len());
+        for saved_tab in saved.tabs {
+            let mut tree = SplitTree::from_saved(&saved_tab.layout, &mut |cwd| {
+                let target_cwd = cwd.map(PathBuf::from).or_else(|| fallback_cwd.clone());
+                let term = self
+                    .spawn_terminal(geometry, target_cwd, None, None)
+                    .ok_or_else(|| "failed to spawn terminal pane".to_string())?;
+                Ok::<_, String>((term.id, term))
+            })?;
+            tree.active_mut().title = saved_tab.title.as_deref().and_then(tabs::clean_title);
+            built.push(Tab::Terminal(tree));
+        }
+        let base = self.tabs.as_ref().map_or(0, Tabs::len);
+        let target_active = base + saved.active_tab.min(built.len() - 1);
+        for tab in built {
+            match &mut self.tabs {
+                Some(tabs) => tabs.push(tab),
+                None => self.tabs = Some(Tabs::new(tab)),
+            }
+        }
+        if let Some(tabs) = &mut self.tabs {
+            tabs.select(target_active);
+        }
+        self.search = None;
+        self.link = None;
+        self.resize_all();
+        self.redraw();
+        Ok(())
     }
 }
 

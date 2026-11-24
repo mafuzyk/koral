@@ -13,6 +13,9 @@ alpha tag or competitive performance results are implied.
 
 ### Added
 
+- Named session layout save/restore (`save-session`, `restore-session`,
+  `list-sessions [--json]`) stored atomically (`0600` JSON `version: 1`) under
+  `$XDG_STATE_HOME/koral/sessions` without scrollback or command history.
 - Built-in `high-contrast` accessibility theme (WCAG AAA 21:1 foreground/background contrast).
 - `koral +ssh [--bootstrap-terminfo] [SSH_ARGS...]` OpenSSH wrapper that falls back to
   `TERM=xterm-256color` by default and compiles `xterm-koral` remotely only when requested.

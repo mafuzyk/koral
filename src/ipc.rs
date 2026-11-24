@@ -36,6 +36,10 @@ pub enum Request {
     SendText(String),
     List,
     ListJson,
+    SaveSession(String),
+    RestoreSession(String),
+    ListSessions,
+    ListSessionsJson,
 }
 
 pub const CTL_USAGE: &str = "\
@@ -54,6 +58,9 @@ Commands:
   reload
   send-text TEXT
   list [--json]
+  save-session NAME
+  restore-session NAME
+  list-sessions [--json]
 ";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,6 +287,16 @@ pub fn encode(req: &Request) -> String {
         }
         Request::List => parts.push("list".to_string()),
         Request::ListJson => parts.push("list-json".to_string()),
+        Request::SaveSession(name) => {
+            parts.push("save-session".to_string());
+            parts.push(escape(name));
+        }
+        Request::RestoreSession(name) => {
+            parts.push("restore-session".to_string());
+            parts.push(escape(name));
+        }
+        Request::ListSessions => parts.push("list-sessions".to_string()),
+        Request::ListSessionsJson => parts.push("list-sessions-json".to_string()),
     }
     let mut line = parts.join("\t");
     line.push('\n');
@@ -356,6 +373,18 @@ pub fn decode(line: &str) -> Result<Request, String> {
         )?)),
         "list" => Ok(Request::List),
         "list-json" => Ok(Request::ListJson),
+        "save-session" => Ok(Request::SaveSession(unescape(
+            fields
+                .next()
+                .ok_or_else(|| "missing session name".to_string())?,
+        )?)),
+        "restore-session" => Ok(Request::RestoreSession(unescape(
+            fields
+                .next()
+                .ok_or_else(|| "missing session name".to_string())?,
+        )?)),
+        "list-sessions" => Ok(Request::ListSessions),
+        "list-sessions-json" => Ok(Request::ListSessionsJson),
         other => Err(format!("unknown ipc command '{other}'")),
     }
 }
@@ -411,8 +440,13 @@ pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> 
     let Some(cmd) = iter.next() else {
         return Err(format!("missing ctl command\n\n{CTL_USAGE}"));
     };
-    if json && !matches!(cmd.as_str(), "list" | "-h" | "--help" | "help") {
-        return Err("--json is only supported for list".to_string());
+    if json
+        && !matches!(
+            cmd.as_str(),
+            "list" | "list-sessions" | "-h" | "--help" | "help"
+        )
+    {
+        return Err(format!("--json is not supported for '{cmd}'"));
     }
     let request = match cmd.as_str() {
         "-h" | "--help" | "help" => return Err(CTL_USAGE.to_string()),
@@ -517,6 +551,41 @@ pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> 
                 Request::ListJson
             } else {
                 Request::List
+            }
+        }
+        "save-session" => {
+            let name = iter
+                .next()
+                .ok_or_else(|| "save-session requires NAME".to_string())?
+                .clone();
+            if let Some(extra) = iter.next() {
+                return Err(format!("unexpected save-session argument '{extra}'"));
+            }
+            crate::workspace::validate_name(&name)?;
+            Request::SaveSession(name)
+        }
+        "restore-session" => {
+            let name = iter
+                .next()
+                .ok_or_else(|| "restore-session requires NAME".to_string())?
+                .clone();
+            if let Some(extra) = iter.next() {
+                return Err(format!("unexpected restore-session argument '{extra}'"));
+            }
+            crate::workspace::validate_name(&name)?;
+            Request::RestoreSession(name)
+        }
+        "list-sessions" => {
+            if let Some(extra) = iter.next() {
+                if extra == "--json" && iter.next().is_none() {
+                    Request::ListSessionsJson
+                } else {
+                    return Err(format!("unknown list-sessions option '{extra}'"));
+                }
+            } else if json {
+                Request::ListSessionsJson
+            } else {
+                Request::ListSessions
             }
         }
         other => return Err(format!("unknown ctl command '{other}'")),

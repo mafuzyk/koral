@@ -204,6 +204,9 @@ koral ctl send-text "git status\n"
 koral ctl open-settings
 koral ctl reload
 koral ctl list [--json]
+koral ctl save-session NAME
+koral ctl restore-session NAME
+koral ctl list-sessions [--json]
 ```
 
 - **Navigation, search & links:** `ctrl+shift+s` opens smart-case scrollback search (`Enter`/`Up`/`Down` step matches with an `N/M` counter, `Shift+Enter` steps down, lowercase queries ignore case). Hold `ctrl` over URLs or local paths (`path/to/file.rs:42`) to preview their resolved target and click to open via `xdg-open` (`ctrl+shift+click` when mouse reporting is active; restricted to `http`, `https`, `mailto`, and `file`).

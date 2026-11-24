@@ -26,3 +26,4 @@ pub mod tabs;
 pub mod terminfo;
 pub mod theme;
 pub mod view;
+pub mod workspace;
