@@ -83,6 +83,13 @@ fn main() {
                 std::process::exit(1);
             }
         },
+        Ok(Launch::Ssh(ssh_args)) => match koral::ssh::run(&ssh_args) {
+            Ok(code) => std::process::exit(code),
+            Err(message) => {
+                eprintln!("koral +ssh: {message}");
+                std::process::exit(2);
+            }
+        },
         Ok(Launch::Help) => {
             print!("{USAGE}");
             return;

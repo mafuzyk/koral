@@ -11,6 +11,7 @@ pub const USAGE: &str = "\
 Usage: koral [OPTIONS] [-e COMMAND [ARGS...]]
        koral ctl [--socket PATH] COMMAND [ARGS...]
        koral +terminfo install
+       koral +ssh [--bootstrap-terminfo] [SSH_ARGS...]
 
   -h, --help                   print this help
   --version                    print the version
@@ -20,6 +21,7 @@ Usage: koral [OPTIONS] [-e COMMAND [ARGS...]]
   -e, --command                run COMMAND with ARGS in the initial tab
   ctl                          send a command to a running koral window
   +terminfo install            install the xterm-koral terminfo entry into ~/.terminfo
+  +ssh                         run OpenSSH with safe TERM fallback or opt-in terminfo bootstrap
 ";
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -37,6 +39,7 @@ pub enum Launch {
     Run(Args),
     Control(Vec<String>),
     TerminfoInstall,
+    Ssh(Vec<String>),
 }
 
 pub fn parse_args<I, S>(args: I) -> Result<Launch, String>
@@ -48,6 +51,10 @@ where
     if iter.peek().is_some_and(|first| first == "ctl") {
         iter.next();
         return Ok(Launch::Control(iter.collect()));
+    }
+    if iter.peek().is_some_and(|first| first == "+ssh") {
+        iter.next();
+        return Ok(Launch::Ssh(iter.collect()));
     }
     if iter.peek().is_some_and(|first| first == "+terminfo") {
         iter.next();

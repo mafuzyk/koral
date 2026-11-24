@@ -21,6 +21,7 @@ pub mod session;
 pub mod settings;
 pub mod shell;
 pub mod splits;
+pub mod ssh;
 pub mod tabs;
 pub mod terminfo;
 pub mod theme;
