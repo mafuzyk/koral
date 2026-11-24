@@ -161,6 +161,8 @@ pub struct Config {
     pub bold_weight: u16,
     pub bold_italic_weight: u16,
     pub oblique: bool,
+    pub ligatures: bool,
+    pub font_features: Vec<([u8; 4], u32)>,
 }
 
 impl Default for Config {
@@ -185,6 +187,8 @@ impl Default for Config {
             bold_weight: 800,
             bold_italic_weight: 900,
             oblique: true,
+            ligatures: true,
+            font_features: Vec::new(),
         }
     }
 }
@@ -197,6 +201,8 @@ impl Config {
             bold: self.bold_weight,
             bold_italic: self.bold_italic_weight,
             oblique: self.oblique,
+            ligatures: self.ligatures,
+            features: self.font_features.clone(),
         }
     }
 }
@@ -442,6 +448,10 @@ fn apply(config: &mut Config, line: &str) -> Result<(), String> {
             }
             _ => Err(format!("'{value}' is not oblique or italic")),
         },
+        "ligatures" => toggle(&value).map(|on| config.ligatures = on),
+        "font_features" => parse_font_features(&value).map(|features| {
+            config.font_features = features;
+        }),
         "font_size" => number(&value, 6.0, 72.0).map(|size| config.font_size = size),
         "opacity" => number(&value, 0.1, 1.0).map(|opacity| config.opacity = opacity),
         "padding" => number(&value, 0.0, 64.0).map(|padding| config.padding = padding),
@@ -493,6 +503,39 @@ fn toggle(value: &str) -> Result<bool, String> {
         "off" => Ok(false),
         _ => Err(format!("'{value}' is not on or off")),
     }
+}
+
+fn parse_font_features(value: &str) -> Result<Vec<([u8; 4], u32)>, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed == "none" {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for raw in trimmed
+        .split(|ch: char| ch.is_ascii_whitespace() || ch == ',')
+        .filter(|part| !part.is_empty())
+    {
+        let (tag_str, val) = if let Some(rest) = raw.strip_prefix('+') {
+            (rest, 1)
+        } else if let Some(rest) = raw.strip_prefix('-') {
+            (rest, 0)
+        } else if let Some((tag, num)) = raw.split_once('=') {
+            let parsed = num
+                .parse::<u32>()
+                .map_err(|_| format!("invalid font feature value in '{raw}'"))?;
+            (tag, parsed)
+        } else {
+            (raw, 1)
+        };
+        let bytes = tag_str.as_bytes();
+        if bytes.len() != 4 || !bytes.iter().all(|b| b.is_ascii_alphanumeric()) {
+            return Err(format!(
+                "invalid OpenType feature tag '{tag_str}'; expected 4 ASCII characters"
+            ));
+        }
+        out.push(([bytes[0], bytes[1], bytes[2], bytes[3]], val));
+    }
+    Ok(out)
 }
 
 fn weight(value: &str) -> Result<u16, String> {

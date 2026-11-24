@@ -349,3 +349,28 @@ keybind ctrl+shift+,=settings
     assert_eq!(errors("keybind ctrl+shift+x\n").len(), 1);
     assert!(set(source, "opacity", "0.75").contains("keybind ctrl+shift+n=new_tab"));
 }
+
+#[test]
+fn ligatures_and_font_features_parse_and_validate() {
+    assert!(config("").ligatures);
+    assert!(config("").font_features.is_empty());
+
+    let parsed = config("ligatures off\nfont_features +zero -calt ss01=1 cv02\n");
+    assert!(!parsed.ligatures);
+    assert_eq!(
+        parsed.font_features,
+        vec![(*b"zero", 1), (*b"calt", 0), (*b"ss01", 1), (*b"cv02", 1)]
+    );
+    let face = parsed.face();
+    assert!(!face.ligatures);
+    assert_eq!(face.features, parsed.font_features);
+
+    assert!(
+        config("font_features +zero\nfont_features none\n")
+            .font_features
+            .is_empty()
+    );
+    assert_eq!(errors("ligatures maybe\n").len(), 1);
+    assert_eq!(errors("font_features badtag\n").len(), 1);
+    assert_eq!(errors("font_features ss01=abc\n").len(), 1);
+}

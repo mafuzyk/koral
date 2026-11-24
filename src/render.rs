@@ -5,6 +5,7 @@ use std::sync::{Arc, Weak};
 use std::time::Instant;
 
 use alacritty_terminal::vte::ansi::Rgb;
+use glyphon::cosmic_text::{FeatureTag, FontFeatures};
 use glyphon::{
     Attrs, Buffer, Cache, Color, ColorMode, Family, FontSystem, Metrics, Resolution, Shaping,
     Style, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
@@ -320,6 +321,8 @@ pub struct Face {
     pub bold: u16,
     pub bold_italic: u16,
     pub oblique: bool,
+    pub ligatures: bool,
+    pub features: Vec<([u8; 4], u32)>,
 }
 
 #[derive(Debug, Clone)]
@@ -1081,14 +1084,27 @@ pub fn attrs(face: &Face, bold: bool, italic: bool) -> Attrs<'_> {
         (true, false) => face.bold,
         (false, _) => face.weight,
     };
-    let attrs = Attrs::new()
+    let mut attrs = Attrs::new()
         .family(Family::Name(&face.family))
         .weight(Weight(weight));
-    match (italic, face.oblique) {
+    attrs = match (italic, face.oblique) {
         (false, _) => attrs,
         (true, true) => attrs.style(Style::Oblique),
         (true, false) => attrs.style(Style::Italic),
+    };
+    if !face.ligatures || !face.features.is_empty() {
+        let mut features = FontFeatures::new();
+        if !face.ligatures {
+            for tag in [b"calt", b"liga", b"clig", b"dlig"] {
+                features.disable(FeatureTag::new(tag));
+            }
+        }
+        for &(tag, value) in &face.features {
+            features.set(FeatureTag::new(&tag), value);
+        }
+        attrs = attrs.font_features(features);
     }
+    attrs
 }
 
 fn measure(font_system: &mut FontSystem, face: &Face, points: f32, scale: f32) -> Cell {

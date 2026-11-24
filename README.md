@@ -253,6 +253,8 @@ font_weight 500
 bold_weight 800
 bold_italic_weight 900
 italic_style oblique
+ligatures on
+# font_features +zero +ss01
 opacity 0.8
 padding 8
 scrollback 10000

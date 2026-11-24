@@ -13,6 +13,8 @@ alpha tag or competitive performance results are implied.
 
 ### Added
 
+- `ligatures on|off` and `font_features` (`+tag`, `-tag`, `tag=N` OpenType tags) in `koral.conf`
+  and **Settings → Typography → Font ligatures**.
 - Linux X11 support (`WM_CLASS` via `WindowAttributesExtX11` and X11 runtime library
   packaging in `flake.nix`).
 - `koral ctl --json list` for versioned JSON tab/pane inspection (`{"version":1,"tabs":[...]}`)

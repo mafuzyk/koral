@@ -477,10 +477,13 @@ fn bold_italic_takes_the_chosen_weight_and_style() {
         bold: 800,
         bold_italic: 900,
         oblique: true,
+        ligatures: true,
+        features: Vec::new(),
     };
     let attrs = attrs(&face, true, true);
     assert_eq!(attrs.weight, Weight(900));
     assert_eq!(attrs.style, Style::Oblique);
+    assert!(attrs.font_features.features.is_empty());
 }
 
 #[test]
@@ -491,10 +494,40 @@ fn plain_text_takes_the_regular_weight() {
         bold: 800,
         bold_italic: 900,
         oblique: false,
+        ligatures: true,
+        features: Vec::new(),
     };
     assert_eq!(attrs(&face, false, false).weight, Weight(500));
     assert_eq!(attrs(&face, true, false).weight, Weight(800));
     assert_eq!(attrs(&face, false, true).style, Style::Italic);
+}
+
+#[test]
+fn disabling_ligatures_and_custom_features_reach_attrs() {
+    use glyphon::cosmic_text::FeatureTag;
+
+    let face = Face {
+        family: "Iosevka".to_string(),
+        weight: 500,
+        bold: 800,
+        bold_italic: 900,
+        oblique: false,
+        ligatures: false,
+        features: vec![(*b"zero", 1), (*b"ss01", 2)],
+    };
+    let a = attrs(&face, false, false);
+    let pairs: Vec<(FeatureTag, u32)> = a
+        .font_features
+        .features
+        .iter()
+        .map(|f| (f.tag, f.value))
+        .collect();
+    assert!(pairs.contains(&(FeatureTag::new(b"calt"), 0)));
+    assert!(pairs.contains(&(FeatureTag::new(b"liga"), 0)));
+    assert!(pairs.contains(&(FeatureTag::new(b"clig"), 0)));
+    assert!(pairs.contains(&(FeatureTag::new(b"dlig"), 0)));
+    assert!(pairs.contains(&(FeatureTag::new(b"zero"), 1)));
+    assert!(pairs.contains(&(FeatureTag::new(b"ss01"), 2)));
 }
 
 #[test]

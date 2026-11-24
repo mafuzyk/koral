@@ -41,6 +41,8 @@ fn face() -> Face {
         bold: 800,
         bold_italic: 900,
         oblique: true,
+        ligatures: true,
+        features: Vec::new(),
     }
 }
 
@@ -225,6 +227,8 @@ fn asking_for(family: &str) -> Face {
         bold: 400,
         bold_italic: 400,
         oblique: false,
+        ligatures: true,
+        features: Vec::new(),
     }
 }
 
@@ -335,6 +339,8 @@ fn a_family_without_the_weights_asked_for_uses_its_nearest_ones() {
         bold: 800,
         bold_italic: 900,
         oblique: true,
+        ligatures: true,
+        features: Vec::new(),
     };
     let got = usable(&asked, &db);
     assert_eq!((got.weight, got.bold, got.bold_italic), (400, 700, 700));
