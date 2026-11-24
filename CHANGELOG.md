@@ -13,6 +13,7 @@ alpha tag or competitive performance results are implied.
 
 ### Added
 
+- Built-in `high-contrast` accessibility theme (WCAG AAA 21:1 foreground/background contrast).
 - `koral +ssh [--bootstrap-terminfo] [SSH_ARGS...]` OpenSSH wrapper that falls back to
   `TERM=xterm-256color` by default and compiles `xterm-koral` remotely only when requested.
 - `OSC 9;4` tab progress indicators and `OSC 22` pointer cursor shapes (automatically reset when leaving the alternate screen).

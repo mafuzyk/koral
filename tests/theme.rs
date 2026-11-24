@@ -167,7 +167,7 @@ fn builtin_themes_resolve_and_have_readable_contrast() {
         };
         0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
     };
-    assert_eq!(BUILTINS.len(), 14);
+    assert_eq!(BUILTINS.len(), 15);
     for info in BUILTINS {
         assert!(is_builtin(info.id));
         assert_eq!(theme_name(info.id), Some(info.name));
@@ -176,6 +176,12 @@ fn builtin_themes_resolve_and_have_readable_contrast() {
         let l2 = luminance(theme.background);
         let contrast = (l1.max(l2) + 0.05) / (l1.min(l2) + 0.05);
         assert!(contrast > 4.5, "{} contrast too low: {contrast}", info.id);
+        if info.id == "high-contrast" {
+            assert!(
+                contrast > 15.0,
+                "high-contrast contrast too low: {contrast}"
+            );
+        }
     }
     assert!(Theme::builtin("unknown-theme").is_none());
     assert!(!is_builtin("unknown-theme"));

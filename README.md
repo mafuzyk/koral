@@ -242,7 +242,7 @@ Pass `none` or `unbind` in `keybind <shortcut>=unbind` to disable a default shor
 
 ## Settings, themes & configuration
 
-Open the interactive **Settings tab** (`ctrl+shift+,` or click the `⚙` icon in the tab bar) to inspect fixed-width system fonts, preview all 14 themes live, and persist changes directly to `~/.config/koral/koral.conf`. Edits to `~/.config/koral/koral.conf` are watched with `inotify` and reload automatically. Existing `config.sharky` / `config.koral` files are converted once to `koral.conf` on startup and left untouched:
+Open the interactive **Settings tab** (`ctrl+shift+,` or click the `⚙` icon in the tab bar) to inspect fixed-width system fonts, preview all 15 themes live, and persist changes directly to `~/.config/koral/koral.conf`. Edits to `~/.config/koral/koral.conf` are watched with `inotify` and reload automatically. Existing `config.sharky` / `config.koral` files are converted once to `koral.conf` on startup and left untouched:
 
 ```conf
 # ~/.config/koral/koral.conf
@@ -270,7 +270,7 @@ keybind ctrl+shift+n=new_tab
 keybind ctrl+shift+t=unbind
 ```
 
-- **14 built-in themes:** `koral`, `sharky` (reads `~/.config/sharky/theme.sharky`), `terminal`, `dracula`, `catppuccin-mocha`, `catppuccin-macchiato`, `catppuccin-frappe`, `catppuccin-latte`, `tokyo-night`, `gruvbox-dark`, `nord`, `rose-pine`, `one-dark`, and `solarized-dark`.
+- **15 built-in themes:** `koral`, `sharky` (reads `~/.config/sharky/theme.sharky`), `terminal`, `dracula`, `catppuccin-mocha`, `catppuccin-macchiato`, `catppuccin-frappe`, `catppuccin-latte`, `tokyo-night`, `gruvbox-dark`, `nord`, `rose-pine`, `one-dark`, `solarized-dark`, and `high-contrast`.
 - **Matugen sync:** `matugen on` installs [`assets/koral.matugen`](assets/koral.matugen) into your matugen configuration and updates colours dynamically on wallpaper changes.
 
 ---

@@ -104,6 +104,10 @@ pub const BUILTINS: &[ThemeInfo] = &[
         id: "solarized-dark",
         name: "Solarized Dark",
     },
+    ThemeInfo {
+        id: "high-contrast",
+        name: "High Contrast",
+    },
 ];
 
 const fn preset(ui: [u32; 7], ansi: [u32; 16]) -> Theme {
@@ -376,6 +380,15 @@ impl Theme {
                 [
                     0x073642, 0xDC322F, 0x859900, 0xB58900, 0x268BD2, 0xD33682, 0x2AA198, 0xEEE8D5,
                     0x002B36, 0xCB4B16, 0x586E75, 0x657B83, 0x839496, 0x6C71C4, 0x93A1A1, 0xFDF6E3,
+                ],
+            ),
+            "high-contrast" => preset(
+                [
+                    0x000000, 0xFFFFFF, 0x00FFFF, 0x00FFFF, 0x00FF00, 0xFF4444, 0xB8B8B8,
+                ],
+                [
+                    0x000000, 0xFF5555, 0x55FF55, 0xFFFF55, 0x5599FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF,
+                    0x808080, 0xFF7777, 0x77FF77, 0xFFFF88, 0x88BBFF, 0xFF88FF, 0x88FFFF, 0xFFFFFF,
                 ],
             ),
             _ => return None,
