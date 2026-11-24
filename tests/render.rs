@@ -537,6 +537,7 @@ fn a_rung_tab_shows_a_mark() {
         activity: Activity::Idle,
         confirming: false,
         rang,
+        progress: None,
     };
     let shown = |rang| {
         let bar = koral::tabs::layout(2, 800.0, 38.0);
@@ -561,6 +562,42 @@ fn a_rung_tab_shows_a_mark() {
     };
     assert!(shown(true));
     assert!(!shown(false));
+}
+
+#[test]
+fn tab_progress_draws_bottom_indicator_quad() {
+    let tab_with = |progress| TabView {
+        title: "cargo build".to_string(),
+        activity: Activity::Running,
+        confirming: false,
+        rang: false,
+        progress,
+    };
+    let quads_for = |progress| {
+        let bar = koral::tabs::layout(1, 800.0, 38.0);
+        let views = [tab_with(progress)];
+        let chrome = Chrome {
+            tabs: &views,
+            active: 0,
+            hovered: None,
+            hovered_close: false,
+            hovered_new: false,
+            hovered_settings: false,
+            settings_open: false,
+            bar: &bar,
+        };
+        let mut frame = Frame::default();
+        draw_chrome(&mut frame, &chrome, layout(), &Theme::default());
+        frame.quads.len()
+    };
+    assert_eq!(
+        quads_for(Some(koral::marks::Progress::Normal(50))),
+        quads_for(None) + 1
+    );
+    assert_eq!(
+        quads_for(Some(koral::marks::Progress::Indeterminate)),
+        quads_for(None) + 1
+    );
 }
 
 #[test]

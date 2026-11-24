@@ -10,7 +10,7 @@ use alacritty_terminal::vte::ansi::{Processor, Timeout};
 
 use crate::blocks::BlockStore;
 use crate::graphics::{Area, Graphics, Request};
-use crate::marks::{Mark, Piece, Scanner};
+use crate::marks::{Mark, Piece, Progress, Scanner};
 use crate::notify::{BODY_LIMIT, Notice, TITLE_LIMIT, clean};
 use crate::view::{anchor_char, picture_anchor, picture_char, picture_foot};
 
@@ -23,6 +23,10 @@ pub struct Session<L> {
     pub replies: Vec<String>,
     /// Notifications for the desktop, which also work on the alternate screen.
     pub notices: Vec<Notice>,
+    /// Latest tab progress indicator (`OSC 9;4`).
+    pub progress: Option<Progress>,
+    /// Latest pointer cursor shape requested by the app (`OSC 22`).
+    pub mouse_cursor: Option<String>,
     parser: Processor,
     scanner: Scanner,
     /// The row the shell opened the prompt on, so the anchor cannot climb into
@@ -51,6 +55,8 @@ impl<L: EventListener> Session<L> {
             graphics: Graphics::default(),
             replies: Vec::new(),
             notices: Vec::new(),
+            progress: None,
+            mouse_cursor: None,
             parser: Processor::new(),
             scanner: Scanner::default(),
             prompt_start: None,
@@ -80,6 +86,8 @@ impl<L: EventListener> Session<L> {
             graphics,
             replies,
             notices,
+            progress,
+            mouse_cursor,
             parser,
             scanner,
             prompt_start,
@@ -125,7 +133,7 @@ impl<L: EventListener> Session<L> {
                         with_flushed_sync(parser, term, |parser, term| {
                             // The replay can leave the alternate screen: its images go before this one lands,
                             // or the end-of-feed cleanup would take the image that just arrived.
-                            settle_alt(term, graphics, alt_screen);
+                            settle_alt(term, graphics, mouse_cursor, alt_screen);
                             if let Some(delete) = outcome.delete {
                                 let anchors = targets(term, graphics, delete.area);
                                 graphics.drop(&anchors, delete.free);
@@ -135,7 +143,7 @@ impl<L: EventListener> Session<L> {
                             }
                         });
                     } else {
-                        settle_alt(term, graphics, alt_screen);
+                        settle_alt(term, graphics, mouse_cursor, alt_screen);
                     }
                 }
                 Piece::Status(query) => {
@@ -150,6 +158,15 @@ impl<L: EventListener> Session<L> {
                         title: clean(&title, TITLE_LIMIT),
                         body: clean(&body, BODY_LIMIT),
                     });
+                }
+                Piece::Mark(Mark::Progress(state)) => {
+                    *progress = match state {
+                        Progress::Clear => None,
+                        other => Some(other),
+                    };
+                }
+                Piece::Mark(Mark::CursorShape(shape)) => {
+                    *mouse_cursor = shape;
                 }
                 Piece::Mark(mark) => {
                     *grid_revision = grid_revision.wrapping_add(1);
@@ -178,7 +195,7 @@ impl<L: EventListener> Session<L> {
                 }
             });
         }
-        settle_alt(term, graphics, alt_screen);
+        settle_alt(term, graphics, mouse_cursor, alt_screen);
     }
 }
 
@@ -296,11 +313,17 @@ fn prune_placements<L: EventListener>(term: &Term<L>, graphics: &mut Graphics) {
     graphics.retain_anchors(|anchor| live.contains(&anchor));
 }
 
-/// Leaving the alternate screen leaves its images behind: an app that dies must not ghost.
-fn settle_alt<L: EventListener>(term: &Term<L>, graphics: &mut Graphics, alt_screen: &mut bool) {
+/// Leaving the alternate screen leaves its images and pointer shape behind: an app that dies must not ghost.
+fn settle_alt<L: EventListener>(
+    term: &Term<L>,
+    graphics: &mut Graphics,
+    mouse_cursor: &mut Option<String>,
+    alt_screen: &mut bool,
+) {
     let alt = term.mode().contains(TermMode::ALT_SCREEN);
     if *alt_screen && !alt {
         graphics.clear_placements();
+        *mouse_cursor = None;
     }
     *alt_screen = alt;
 }

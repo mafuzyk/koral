@@ -299,8 +299,46 @@ fn osc_9_is_a_notification() {
 
 #[test]
 fn osc9_progress_is_not_a_notification() {
-    let text = b"\x1b]9;4;1;50\x07";
-    assert_eq!(scan(&[text]), vec![bytes(text)]);
+    assert_eq!(
+        scan(&[b"\x1b]9;4;1;50\x07"]),
+        vec![Out::Mark(Mark::Progress(koral::marks::Progress::Normal(
+            50
+        )))]
+    );
+    assert_eq!(
+        scan(&[b"\x1b]9;4;0\x07\x1b]9;4;2;120\x07\x1b]9;4;3\x07\x1b]9;4;4;75\x07"]),
+        vec![
+            Out::Mark(Mark::Progress(koral::marks::Progress::Clear)),
+            Out::Mark(Mark::Progress(koral::marks::Progress::Error(100))),
+            Out::Mark(Mark::Progress(koral::marks::Progress::Indeterminate)),
+            Out::Mark(Mark::Progress(koral::marks::Progress::Paused(75))),
+        ]
+    );
+    // Non-progress numeric `9;<N>;...` or malformed `9;4;99` pass through as raw bytes and never notify.
+    assert_eq!(
+        scan(&[b"\x1b]9;4;99;10\x07"]),
+        vec![bytes(b"\x1b]9;4;99;10\x07")]
+    );
+    assert_eq!(
+        scan(&[b"\x1b]9;2;foo\x07"]),
+        vec![bytes(b"\x1b]9;2;foo\x07")]
+    );
+}
+
+#[test]
+fn osc22_cursor_shape_parses_and_resets() {
+    assert_eq!(
+        scan(&[b"\x1b]22;pointer\x07"]),
+        vec![Out::Mark(Mark::CursorShape(Some("pointer".to_string())))]
+    );
+    assert_eq!(
+        scan(&[b"\x1b]22;default\x1b\\"]),
+        vec![Out::Mark(Mark::CursorShape(None))]
+    );
+    assert_eq!(
+        scan(&[b"\x1b]22;\x07"]),
+        vec![Out::Mark(Mark::CursorShape(None))]
+    );
 }
 
 #[test]

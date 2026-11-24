@@ -2,11 +2,12 @@ const ESC: u8 = 0x1b;
 const BEL: u8 = 0x07;
 const GRAPHICS: &[u8] = b"\x1b_G";
 const STATUS: &[u8] = b"\x1bP$q";
-const PREFIXES: [&[u8]; 6] = [
+const PREFIXES: [&[u8]; 7] = [
     b"\x1b]133;",
     b"\x1b]7;",
     b"\x1b]777;notify;",
     b"\x1b]9;",
+    b"\x1b]22;",
     GRAPHICS,
     STATUS,
 ];
@@ -16,6 +17,16 @@ pub const MAX_MARK: usize = 64 * 1024;
 pub const MAX_GRAPHICS: usize = 2 * 1024 * 1024;
 pub const MAX_STATUS: usize = 32;
 
+/// Tab progress indicator from ConEmu `OSC 9;4;<state>;<percent>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Progress {
+    Clear,
+    Normal(u8),
+    Error(u8),
+    Indeterminate,
+    Paused(u8),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mark {
     PromptStart,
@@ -24,6 +35,8 @@ pub enum Mark {
     CommandEnd(Option<i32>),
     Cwd(String),
     Notify { title: String, body: String },
+    Progress(Progress),
+    CursorShape(Option<String>),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -162,13 +175,27 @@ fn parse(body: &[u8]) -> Option<Mark> {
         });
     }
     if let Some(text) = body.strip_prefix("9;") {
-        // ConEmu progress is digits then a semicolon, and stays with vte.
+        // ConEmu `OSC 9;4;...` progress sequences are handled here rather than as notifications.
+        if let Some(prog) = text.strip_prefix("4;") {
+            return parse_progress(prog).map(Mark::Progress);
+        }
         let digits = text.chars().take_while(char::is_ascii_digit).count();
-        let progress = digits > 0 && text[digits..].starts_with(';');
-        return (!progress).then(|| Mark::Notify {
+        let numeric_sub = digits > 0 && text[digits..].starts_with(';');
+        return (!numeric_sub).then(|| Mark::Notify {
             title: String::new(),
             body: text.to_string(),
         });
+    }
+
+    if let Some(shape) = body.strip_prefix("22;") {
+        if shape.is_empty() || shape == "default" {
+            return Some(Mark::CursorShape(None));
+        }
+        return (shape.len() <= 64
+            && shape
+                .bytes()
+                .all(|b| b.is_ascii_graphic() || b == b'-' || b == b'_'))
+        .then(|| Mark::CursorShape(Some(shape.to_string())));
     }
 
     let mut params = body.strip_prefix("133;")?.split(';');
@@ -200,4 +227,24 @@ fn percent_decode(text: &str) -> Option<String> {
         });
     }
     String::from_utf8(decoded).ok()
+}
+
+fn parse_progress(rest: &str) -> Option<Progress> {
+    let mut parts = rest.split(';');
+    let state = parts.next()?;
+    let pct = match parts.next() {
+        None | Some("") => 0,
+        Some(raw) => raw.parse::<u16>().ok()?.min(100) as u8,
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+    match state {
+        "0" => Some(Progress::Clear),
+        "1" => Some(Progress::Normal(pct)),
+        "2" => Some(Progress::Error(pct)),
+        "3" => Some(Progress::Indeterminate),
+        "4" => Some(Progress::Paused(pct)),
+        _ => None,
+    }
 }

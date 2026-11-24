@@ -1205,3 +1205,26 @@ fn fast_path_matches_vte_across_mixed_corpus_and_chunk_splits() {
         }
     }
 }
+
+#[test]
+fn osc9_progress_and_osc22_cursor_shape_track_and_reset_on_alt_exit() {
+    let mut fix = Fixture::new(40, 10);
+    assert_eq!(fix.session.progress, None);
+    assert_eq!(fix.session.mouse_cursor, None);
+
+    fix.feed("\x1b]9;4;1;42\x07\x1b]22;pointer\x07");
+    assert_eq!(
+        fix.session.progress,
+        Some(koral::marks::Progress::Normal(42))
+    );
+    assert_eq!(fix.session.mouse_cursor.as_deref(), Some("pointer"));
+
+    fix.feed("\x1b]9;4;0\x07");
+    assert_eq!(fix.session.progress, None);
+
+    // Entering and leaving alt screen resets app pointer shapes so TUI exits cleanly.
+    fix.feed("\x1b[?1049h\x1b]22;grab\x07");
+    assert_eq!(fix.session.mouse_cursor.as_deref(), Some("grab"));
+    fix.feed("\x1b[?1049l");
+    assert_eq!(fix.session.mouse_cursor, None);
+}

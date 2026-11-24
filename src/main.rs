@@ -1539,16 +1539,25 @@ impl App {
             links::at_in(&session.term, point, cwd, self.home.as_deref()).map(|l| (id, l))
         });
         if link != self.link {
+            let default_icon = self.cursor_icon_under_pointer();
             if let Some(window) = &self.window {
                 window.set_cursor(if link.is_some() {
                     CursorIcon::Pointer
                 } else {
-                    CursorIcon::Default
+                    default_icon
                 });
             }
             self.link = link;
             self.redraw();
         }
+    }
+
+    fn cursor_icon_under_pointer(&self) -> CursorIcon {
+        let shape = self
+            .pane_under_cursor()
+            .and_then(|(id, _, _)| self.terminal(id))
+            .and_then(|term| term.session.lock().mouse_cursor.clone());
+        osc_cursor_icon(shape.as_deref())
     }
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
@@ -1604,11 +1613,12 @@ impl App {
                         self.cursor.0,
                         self.cursor.1,
                     );
+                    let default_icon = self.cursor_icon_under_pointer();
                     if let Some(window) = &self.window {
                         let icon = match div.map(|d| d.axis) {
                             Some(Axis::Horizontal) => CursorIcon::EwResize,
                             Some(Axis::Vertical) => CursorIcon::NsResize,
-                            None => CursorIcon::Default,
+                            None => default_icon,
                         };
                         window.set_cursor(icon);
                     }
@@ -1679,6 +1689,7 @@ impl App {
                     activity: Activity::Idle,
                     confirming: false,
                     rang: false,
+                    progress: None,
                 },
                 Tab::Terminal(tree) => {
                     let active_id = tree.active_id();
@@ -1695,16 +1706,24 @@ impl App {
                     if panes > 1 {
                         title = format!("{title} [{panes}]");
                     }
-                    let (mut activity, mut rang) = (session.blocks.activity(), active_term.rang);
+                    let (mut activity, mut rang, mut progress) = (
+                        session.blocks.activity(),
+                        active_term.rang,
+                        session.progress,
+                    );
                     drop(session);
                     for (id, term) in tree.iter() {
                         if id == active_id {
                             continue;
                         }
                         rang |= term.rang;
-                        let other = term.session.lock().blocks.activity();
+                        let other_sess = term.session.lock();
+                        let other = other_sess.blocks.activity();
                         if activity == Activity::Idle {
                             activity = other;
+                        }
+                        if progress.is_none() {
+                            progress = other_sess.progress;
                         }
                     }
                     TabView {
@@ -1712,6 +1731,7 @@ impl App {
                         activity,
                         confirming: confirming == Some(active_id),
                         rang,
+                        progress,
                     }
                 }
             })
@@ -2484,6 +2504,25 @@ impl ApplicationHandler<UserEvent> for App {
             Some(deadline) => ControlFlow::WaitUntil(deadline),
             None => ControlFlow::Wait,
         });
+    }
+}
+
+fn osc_cursor_icon(name: Option<&str>) -> CursorIcon {
+    match name {
+        Some("text" | "xterm") => CursorIcon::Text,
+        Some("pointer" | "hand" | "hand2") => CursorIcon::Pointer,
+        Some("grab") => CursorIcon::Grab,
+        Some("grabbing") => CursorIcon::Grabbing,
+        Some("wait") => CursorIcon::Wait,
+        Some("progress") => CursorIcon::Progress,
+        Some("crosshair") => CursorIcon::Crosshair,
+        Some("move" | "all-scroll") => CursorIcon::Move,
+        Some("not-allowed" | "no-drop") => CursorIcon::NotAllowed,
+        Some("ew-resize" | "col-resize") => CursorIcon::EwResize,
+        Some("ns-resize" | "row-resize") => CursorIcon::NsResize,
+        Some("nesw-resize") => CursorIcon::NeswResize,
+        Some("nwse-resize") => CursorIcon::NwseResize,
+        _ => CursorIcon::Default,
     }
 }
 

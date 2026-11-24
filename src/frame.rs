@@ -191,6 +191,7 @@ pub struct TabView {
     pub activity: Activity,
     pub confirming: bool,
     pub rang: bool,
+    pub progress: Option<crate::marks::Progress>,
 }
 
 pub struct Chrome<'a> {
@@ -1951,6 +1952,46 @@ pub fn draw_chrome(frame: &mut Frame, chrome: &Chrome<'_>, layout: Layout, theme
                 spans: vec![Span::plain("×", color)],
                 clip: None,
             });
+        }
+
+        if let Some(progress) = tab.progress {
+            let track_x = rect.x + 6.0 * scale;
+            let track_w = (rect.width - 12.0 * scale).max(0.0);
+            let bar_h = 2.0 * scale;
+            let bar_y = strip - bar_h;
+            let bar = match progress {
+                crate::marks::Progress::Clear => None,
+                crate::marks::Progress::Normal(pct) => Some((
+                    track_x,
+                    (track_w * (pct as f32 / 100.0)).max(2.0 * scale),
+                    rgba(theme.accent, 0.95),
+                )),
+                crate::marks::Progress::Error(pct) => Some((
+                    track_x,
+                    (track_w * (pct as f32 / 100.0)).max(2.0 * scale),
+                    rgba(theme.failure, 0.95),
+                )),
+                crate::marks::Progress::Paused(pct) => Some((
+                    track_x,
+                    (track_w * (pct as f32 / 100.0)).max(2.0 * scale),
+                    rgba(theme.muted, 0.95),
+                )),
+                crate::marks::Progress::Indeterminate => Some((
+                    track_x + track_w * 0.325,
+                    (track_w * 0.35).max(8.0 * scale).min(track_w),
+                    rgba(theme.accent, 0.85),
+                )),
+            };
+            if let Some((bx, bw, color)) = bar {
+                frame.quads.push(Quad {
+                    x: bx,
+                    y: bar_y,
+                    width: bw.min(track_w),
+                    height: bar_h,
+                    color,
+                    shape: Shape::Plain,
+                });
+            }
         }
     }
 

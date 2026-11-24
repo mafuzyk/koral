@@ -13,6 +13,7 @@ alpha tag or competitive performance results are implied.
 
 ### Added
 
+- `OSC 9;4` tab progress indicators and `OSC 22` pointer cursor shapes (automatically reset when leaving the alternate screen).
 - `ligatures on|off` and `font_features` (`+tag`, `-tag`, `tag=N` OpenType tags) in `koral.conf`
   and **Settings → Typography → Font ligatures**.
 - Linux X11 support (`WM_CLASS` via `WindowAttributesExtX11` and X11 runtime library
