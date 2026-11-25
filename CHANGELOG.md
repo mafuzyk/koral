@@ -13,6 +13,8 @@ alpha tag or competitive performance results are implied.
 
 ### Added
 
+- `OSC 5522` extended clipboard protocol (`text/plain` and `image/png`, `clipboard` and
+  `primary` targets) gated by `clipboard_write` / `clipboard_read` policies.
 - `CSI ?2027` (grapheme clustering mode + `DECRQM` query) keeping ZWJ emoji, skin-tone
   modifiers, variation selectors, and regional indicator flags in single cell clusters.
 - Extended `koral ctl` with `--pane ID` target selectors (`send-text`, `set-title`,

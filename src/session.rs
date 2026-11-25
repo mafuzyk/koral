@@ -10,7 +10,7 @@ use alacritty_terminal::vte::ansi::{Processor, Timeout};
 
 use crate::blocks::BlockStore;
 use crate::graphics::{Area, Graphics, Request};
-use crate::marks::{Mark, Piece, Progress, Scanner};
+use crate::marks::{ClipboardOp, Mark, Piece, Progress, Scanner};
 use crate::notify::{BODY_LIMIT, Notice, TITLE_LIMIT, clean};
 use crate::view::{anchor_char, picture_anchor, picture_char, picture_foot};
 
@@ -23,6 +23,8 @@ pub struct Session<L> {
     pub replies: Vec<String>,
     /// Notifications for the desktop, which also work on the alternate screen.
     pub notices: Vec<Notice>,
+    /// Extended clipboard requests (`OSC 5522`) awaiting host policy handling.
+    pub clipboard_ops: Vec<ClipboardOp>,
     /// Latest tab progress indicator (`OSC 9;4`).
     pub progress: Option<Progress>,
     /// Latest pointer cursor shape requested by the app (`OSC 22`).
@@ -55,6 +57,7 @@ impl<L: EventListener> Session<L> {
             graphics: Graphics::default(),
             replies: Vec::new(),
             notices: Vec::new(),
+            clipboard_ops: Vec::new(),
             progress: None,
             mouse_cursor: None,
             parser: Processor::new(),
@@ -86,6 +89,7 @@ impl<L: EventListener> Session<L> {
             graphics,
             replies,
             notices,
+            clipboard_ops,
             progress,
             mouse_cursor,
             parser,
@@ -167,6 +171,9 @@ impl<L: EventListener> Session<L> {
                 }
                 Piece::Mark(Mark::CursorShape(shape)) => {
                     *mouse_cursor = shape;
+                }
+                Piece::Mark(Mark::Clipboard(op)) => {
+                    clipboard_ops.push(op);
                 }
                 Piece::Mark(mark) => {
                     *grid_revision = grid_revision.wrapping_add(1);

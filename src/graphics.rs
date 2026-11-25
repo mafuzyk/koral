@@ -786,6 +786,24 @@ fn pixels(keys: Keys, raw: &[u8]) -> Result<Decoded, &'static str> {
     })
 }
 
+pub fn decode_png_rgba(raw: &[u8]) -> Result<(u32, u32, Vec<u8>), &'static str> {
+    let decoded = decode_png(raw)?;
+    Ok((decoded.width, decoded.height, decoded.rgba))
+}
+
+pub fn encode_png_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().map_err(|_| "EINVAL:png encode")?;
+    writer
+        .write_image_data(rgba)
+        .map_err(|_| "EINVAL:png encode")?;
+    drop(writer);
+    Ok(out)
+}
+
 fn decode_png(raw: &[u8]) -> Result<Decoded, &'static str> {
     let limits = png::Limits { bytes: MAX_IMAGE };
     let mut decoder = png::Decoder::new_with_limits(Cursor::new(raw), limits);

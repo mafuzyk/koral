@@ -1285,3 +1285,25 @@ fn mode_2027_clusters_zwj_skin_tone_vs16_and_flags_and_reports_decrqm() {
     session.feed(b"\x1b[?2027l", now);
     assert!(!session.term.mode().contains(TermMode::GRAPHEME_CLUSTERING));
 }
+
+#[test]
+fn osc5522_clipboard_ops_queue_in_session() {
+    use koral::marks::{ClipboardLoc, ClipboardOp};
+
+    let mut fix = Fixture::new(40, 8);
+    fix.feed("\x1b]5522;type=write:mime=text/plain;aGk=\x1b\\\x1b]5522;type=read:loc=primary\x07");
+    assert_eq!(
+        fix.session.clipboard_ops,
+        vec![
+            ClipboardOp::Write {
+                loc: ClipboardLoc::Clipboard,
+                mime: "text/plain".to_string(),
+                data: b"hi".to_vec(),
+            },
+            ClipboardOp::Read {
+                loc: ClipboardLoc::Primary,
+                mime: "text/plain".to_string(),
+            },
+        ]
+    );
+}

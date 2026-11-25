@@ -211,6 +211,8 @@ struct App {
     theme: Theme,
     home: Option<String>,
     clipboard: Option<Option<Clipboard>>,
+    pending_clipboard_kind: LinuxClipboardKind,
+    pending_clipboard_image: Option<(LinuxClipboardKind, usize, usize, Vec<u8>)>,
     mods: ModifiersState,
     cursor: (f32, f32),
     pressed: Option<u8>,
@@ -261,6 +263,8 @@ impl App {
             fonts: Vec::new(),
             home: std::env::var("HOME").ok(),
             clipboard: None,
+            pending_clipboard_kind: LinuxClipboardKind::Clipboard,
+            pending_clipboard_image: None,
             mods: ModifiersState::empty(),
             cursor: (0.0, 0.0),
             pressed: None,
@@ -1100,13 +1104,19 @@ impl App {
         match consent {
             Consent::Allow => {
                 if self.notices.confirm(Instant::now()) == Some(Decision::Performed) {
-                    if let Some(text) = self.notices.take_ready_text()
-                        && let Some(clipboard) = self.clipboard()
-                    {
-                        let _ = clipboard
-                            .set()
-                            .clipboard(LinuxClipboardKind::Clipboard)
-                            .text(text);
+                    if let Some(text) = self.notices.take_ready_text() {
+                        if let Some((kind, width, height, bytes)) =
+                            self.pending_clipboard_image.take()
+                            && text == "[image/png]"
+                        {
+                            self.write_clipboard_image(kind, width, height, bytes);
+                        } else {
+                            let kind = self.pending_clipboard_kind;
+                            self.pending_clipboard_kind = LinuxClipboardKind::Clipboard;
+                            if let Some(clipboard) = self.clipboard() {
+                                let _ = clipboard.set().clipboard(kind).text(text);
+                            }
+                        }
                     }
                     if let Some(notice) = self.notices.take_ready_notice(Instant::now()) {
                         notify::show(&notice);
@@ -1115,6 +1125,8 @@ impl App {
             }
             Consent::Deny => {
                 self.notices.cancel();
+                self.pending_clipboard_image = None;
+                self.pending_clipboard_kind = LinuxClipboardKind::Clipboard;
             }
         }
         self.redraw();
@@ -1211,6 +1223,22 @@ impl App {
         let _ = clipboard.set().clipboard(kind).text(text);
     }
 
+    fn write_clipboard_image(
+        &mut self,
+        kind: LinuxClipboardKind,
+        width: usize,
+        height: usize,
+        bytes: Vec<u8>,
+    ) {
+        if let Some(clipboard) = self.clipboard() {
+            let _ = clipboard.set().clipboard(kind).image(arboard::ImageData {
+                width,
+                height,
+                bytes: std::borrow::Cow::Owned(bytes),
+            });
+        }
+    }
+
     /// Program-driven copies (OSC 52 / OSC 5522) obey the configured policy.
     fn store(&mut self, text: String, kind: LinuxClipboardKind) {
         if self.clipboard().is_none() {
@@ -1222,6 +1250,8 @@ impl App {
                 None => return,
             },
             Decision::Confirm => {
+                self.pending_clipboard_kind = kind;
+                self.pending_clipboard_image = None;
                 self.redraw();
                 return;
             }
@@ -1229,6 +1259,87 @@ impl App {
         };
         if let Some(clipboard) = self.clipboard() {
             let _ = clipboard.set().clipboard(kind).text(text);
+        }
+    }
+
+    fn store_image(&mut self, png_bytes: &[u8], kind: LinuxClipboardKind) {
+        if self.clipboard().is_none() {
+            return;
+        }
+        let Ok((width, height, rgba)) = koral::graphics::decode_png_rgba(png_bytes) else {
+            return;
+        };
+        match self
+            .notices
+            .clipboard_write("[image/png]".to_string(), Instant::now())
+        {
+            Decision::Performed => {
+                let _ = self.notices.take_ready_text();
+                self.write_clipboard_image(kind, width as usize, height as usize, rgba);
+            }
+            Decision::Confirm => {
+                self.pending_clipboard_kind = kind;
+                self.pending_clipboard_image = Some((kind, width as usize, height as usize, rgba));
+                self.redraw();
+            }
+            Decision::Denied | Decision::Held => {}
+        }
+    }
+
+    fn handle_osc5522(&mut self, id: u64, op: koral::marks::ClipboardOp) {
+        use base64::Engine;
+        use base64::engine::general_purpose::STANDARD;
+        use koral::marks::{ClipboardLoc, ClipboardOp};
+
+        let to_kind = |loc| match loc {
+            ClipboardLoc::Clipboard => LinuxClipboardKind::Clipboard,
+            ClipboardLoc::Primary => LinuxClipboardKind::Primary,
+        };
+        match op {
+            ClipboardOp::Write { loc, mime, data } => {
+                let kind = to_kind(loc);
+                if mime == "image/png" {
+                    self.store_image(&data, kind);
+                } else if let Ok(text) = String::from_utf8(data) {
+                    self.store(text, kind);
+                }
+            }
+            ClipboardOp::Read { loc, mime } => {
+                if !self.config.clipboard_read {
+                    if let Some(tab) = self.terminal(id) {
+                        tab.write(b"\x1b]5522;type=read:status=EACCES\x1b\\".to_vec());
+                    }
+                    return;
+                }
+                let kind = to_kind(loc);
+                let payload = if mime == "image/png" {
+                    self.clipboard()
+                        .and_then(|c| c.get().clipboard(kind).image().ok())
+                        .and_then(|img| {
+                            koral::graphics::encode_png_rgba(
+                                img.width as u32,
+                                img.height as u32,
+                                &img.bytes,
+                            )
+                            .ok()
+                        })
+                } else {
+                    self.clipboard()
+                        .and_then(|c| c.get().clipboard(kind).text().ok())
+                        .map(String::into_bytes)
+                };
+                if let Some(tab) = self.terminal(id) {
+                    if let Some(bytes) = payload {
+                        let b64 = STANDARD.encode(&bytes);
+                        let reply = format!(
+                            "\x1b]5522;type=read:status=OK\x1b\\\x1b]5522;type=rdata:mime={mime};{b64}\x1b\\\x1b]5522;type=read:status=DONE\x1b\\"
+                        );
+                        tab.write(reply.into_bytes());
+                    } else {
+                        tab.write(b"\x1b]5522;type=read:status=ENODATA\x1b\\".to_vec());
+                    }
+                }
+            }
         }
     }
 
@@ -2439,11 +2550,13 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                     Decision::Performed => {
                         if let Some(ready) = self.notices.take_ready_notice(Instant::now()) {
-                            notify::show(&ready);
+                            notify::show(&notice);
+                            let _ = ready;
                         }
                     }
                 }
             }
+            UserEvent::ClipboardOp(id, op) => self.handle_osc5522(id, op),
             UserEvent::Blink => {
                 self.blink.reset(Instant::now());
                 self.redraw();

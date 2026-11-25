@@ -394,3 +394,43 @@ fn sequence_caps_are_exposed_and_ordered() {
     assert_eq!(MAX_GRAPHICS, 2 * 1024 * 1024);
     assert_eq!(MAX_STATUS, 32);
 }
+
+#[test]
+fn osc5522_write_and_read_parse_and_reject_invalid_payloads() {
+    use koral::marks::{ClipboardLoc, ClipboardOp};
+
+    assert_eq!(
+        scan(&[b"\x1b]5522;type=write:loc=primary:mime=text/plain;aGVsbG8=\x1b\\"]),
+        vec![Out::Mark(Mark::Clipboard(ClipboardOp::Write {
+            loc: ClipboardLoc::Primary,
+            mime: "text/plain".to_string(),
+            data: b"hello".to_vec(),
+        }))]
+    );
+    assert_eq!(
+        scan(&[b"\x1b]5522;type=wdata:mime=image/png;AQID\x07"]),
+        vec![Out::Mark(Mark::Clipboard(ClipboardOp::Write {
+            loc: ClipboardLoc::Clipboard,
+            mime: "image/png".to_string(),
+            data: vec![1, 2, 3],
+        }))]
+    );
+    assert_eq!(
+        scan(&[b"\x1b]5522;type=read:mime=text/plain\x07"]),
+        vec![Out::Mark(Mark::Clipboard(ClipboardOp::Read {
+            loc: ClipboardLoc::Clipboard,
+            mime: "text/plain".to_string(),
+        }))]
+    );
+    // Invalid base64 or unsupported MIME passes through without crashing.
+    assert_eq!(
+        scan(&[b"\x1b]5522;type=write:mime=text/plain;!!!\x07"]),
+        vec![bytes(b"\x1b]5522;type=write:mime=text/plain;!!!\x07")]
+    );
+    assert_eq!(
+        scan(&[b"\x1b]5522;type=read:mime=application/octet-stream\x07"]),
+        vec![bytes(
+            b"\x1b]5522;type=read:mime=application/octet-stream\x07"
+        )]
+    );
+}

@@ -1,13 +1,17 @@
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD_NO_PAD;
+
 const ESC: u8 = 0x1b;
 const BEL: u8 = 0x07;
 const GRAPHICS: &[u8] = b"\x1b_G";
 const STATUS: &[u8] = b"\x1bP$q";
-const PREFIXES: [&[u8]; 7] = [
+const PREFIXES: [&[u8]; 8] = [
     b"\x1b]133;",
     b"\x1b]7;",
     b"\x1b]777;notify;",
     b"\x1b]9;",
     b"\x1b]22;",
+    b"\x1b]5522;",
     GRAPHICS,
     STATUS,
 ];
@@ -16,6 +20,27 @@ pub const MAX_MARK: usize = 64 * 1024;
 // Programs send images in 4096-byte chunks, this leaves room for the ones that do not.
 pub const MAX_GRAPHICS: usize = 2 * 1024 * 1024;
 pub const MAX_STATUS: usize = 32;
+
+/// Clipboard target for `OSC 5522`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardLoc {
+    Clipboard,
+    Primary,
+}
+
+/// Extended clipboard request from Kitty `OSC 5522`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClipboardOp {
+    Write {
+        loc: ClipboardLoc,
+        mime: String,
+        data: Vec<u8>,
+    },
+    Read {
+        loc: ClipboardLoc,
+        mime: String,
+    },
+}
 
 /// Tab progress indicator from ConEmu `OSC 9;4;<state>;<percent>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +62,7 @@ pub enum Mark {
     Notify { title: String, body: String },
     Progress(Progress),
     CursorShape(Option<String>),
+    Clipboard(ClipboardOp),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -198,6 +224,10 @@ fn parse(body: &[u8]) -> Option<Mark> {
         .then(|| Mark::CursorShape(Some(shape.to_string())));
     }
 
+    if let Some(rest) = body.strip_prefix("5522;") {
+        return parse_5522(rest).map(Mark::Clipboard);
+    }
+
     let mut params = body.strip_prefix("133;")?.split(';');
     match params.next()? {
         "A" => Some(Mark::PromptStart),
@@ -245,6 +275,57 @@ fn parse_progress(rest: &str) -> Option<Progress> {
         "2" => Some(Progress::Error(pct)),
         "3" => Some(Progress::Indeterminate),
         "4" => Some(Progress::Paused(pct)),
+        _ => None,
+    }
+}
+
+fn parse_5522(rest: &str) -> Option<ClipboardOp> {
+    let (meta, payload) = match rest.split_once(';') {
+        Some((m, p)) => (m, Some(p)),
+        None => (rest, None),
+    };
+    let mut op_type = None;
+    let mut mime = "text/plain";
+    let mut loc = ClipboardLoc::Clipboard;
+
+    for pair in meta.split(':').filter(|part| !part.is_empty()) {
+        let (key, value) = pair.split_once('=')?;
+        match key {
+            "type" => op_type = Some(value),
+            "mime" => mime = value,
+            "loc" => {
+                loc = match value {
+                    "clipboard" => ClipboardLoc::Clipboard,
+                    "primary" => ClipboardLoc::Primary,
+                    _ => return None,
+                };
+            }
+            _ => {}
+        }
+    }
+
+    if !matches!(mime, "text/plain" | "image/png") && !mime.starts_with("text/plain;") {
+        return None;
+    }
+
+    match op_type? {
+        "read" => Some(ClipboardOp::Read {
+            loc,
+            mime: mime.to_string(),
+        }),
+        "write" | "wdata" => {
+            let b64 = payload?;
+            let clean: String = b64
+                .chars()
+                .filter(|ch| !ch.is_ascii_whitespace() && *ch != '=')
+                .collect();
+            let data = STANDARD_NO_PAD.decode(clean.as_bytes()).ok()?;
+            Some(ClipboardOp::Write {
+                loc,
+                mime: mime.to_string(),
+                data,
+            })
+        }
         _ => None,
     }
 }

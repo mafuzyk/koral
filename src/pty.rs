@@ -60,6 +60,7 @@ pub enum UserEvent {
     Title(u64, Option<String>),
     Bell(u64),
     Notify(u64, Notice),
+    ClipboardOp(u64, crate::marks::ClipboardOp),
     Size(u64, SizeReply),
     Fonts(Box<FontSystem>, Vec<String>),
     Ipc(crate::ipc::Request, Sender<String>),
@@ -565,6 +566,9 @@ fn read_loop(
             }
             for notice in session.notices.drain(..) {
                 let _ = proxy.send_event(UserEvent::Notify(id, notice));
+            }
+            for op in session.clipboard_ops.drain(..) {
+                let _ = proxy.send_event(UserEvent::ClipboardOp(id, op));
             }
             drop(session);
             let rate = refresh_millihertz.load(Ordering::Relaxed);

@@ -13,7 +13,7 @@ publish = false
 
 [dependencies]
 alacritty_terminal = { version = "0.26.0", path = "vendor/alacritty_terminal" }
-arboard = { version = "3.7.0", default-features = false, features = ["wayland-data-control"] }
+arboard = { version = "3.7.0", default-features = false, features = ["wayland-data-control", "image-data"] }
 base64 = "0.22"
 flate2 = "1.1.10"
 glyphon = "0.12"
