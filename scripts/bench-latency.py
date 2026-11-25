@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Measure terminal input-to-photon latency with stdlib-only tools.
+"""Measure terminal input-to-photon latency with stdlib-only / session-native tools.
 
-Methodology (Wayland/Hyprland, compositor-native):
+Methodology (Wayland Hyprland or KDE/KWin, compositor-native):
   1. A generated Python helper runs inside the target terminal as its command.
      It puts the PTY in raw mode, renders a full-screen red sentinel, and
      writes `BENCH_READY` to `BENCH_LAT_READY`.
-  2. We wait for READY, take a `grim` screenshot baseline, then inject a
-     synthetic key via Hyprland's Lua dispatcher (`hl.dsp.send_key_state`).
+  2. We wait for READY, take a screenshot baseline (`org.kde.KWin.ScreenShot2`
+     or `spectacle` on KDE/KWin, `grim` on Hyprland/wlroots), then inject a
+     synthetic key (`org_kde_kwin_fake_input` or `ydotool` on KDE/KWin,
+     Hyprland's Lua dispatcher `hl.dsp.send_key_state` on Hyprland).
      The helper reads the PTY directly and only acknowledges the exact expected
      sequence (F12 is `ESC [ 2 4 ~`) in `BENCH_LAT_ACK`, then renders a green
      sentinel. No external benchmark shell or FIFO is involved.
-  3. A synchronous capture loop repeatedly calls `grim -o <output> -` and
-     hashes the PNG bytes. A sample is valid only when the first differing
+  3. A synchronous capture loop repeatedly captures the workspace and
+     hashes the pixels/PNG bytes. A sample is valid only when the first differing
      frame and the PTY acknowledgement are both observed before the deadline.
      `time.perf_counter_ns()` sampled immediately before key injection gives
      the start timestamp; the first differing frame gives the end timestamp.
@@ -21,14 +23,11 @@ Methodology (Wayland/Hyprland, compositor-native):
 This measures the full path: key injection -> compositor -> terminal PTY ->
 renderer -> compositor frame -> screen capture. The PTY acknowledgement proves
 that the injected key reached the process inside the terminal, which is the
-fact missing from screenshot-only latency figures. Capture uses the Wayland
-`grim` screencopy protocol and no terminal-specific APIs; injection currently
-requires Hyprland's `hyprctl eval` Lua dispatcher. When prerequisites are
+fact missing from screenshot-only latency figures. When prerequisites are
 missing the tool exits with status "unavailable" and a reason instead of
 inventing numbers.
 
-No third-party Python modules are used. X11 can use xdotool for injection and
-ImageMagick `import` for capture when present (not exercised here).
+X11 can use xdotool for injection and ImageMagick `import` for capture when present.
 """
 
 from __future__ import annotations
@@ -43,6 +42,8 @@ import select
 import shlex
 import shutil
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -202,9 +203,211 @@ def expected_key_sequence(key: str) -> bytes:
     return sequences[key]
 
 
+def expected_evdev_keycode(key: str) -> int:
+    """Linux evdev keycode corresponding to a supported benchmark key."""
+    keycodes = {"F12": 88}
+    if key not in keycodes:
+        raise RuntimeError(f"unsupported benchmark key: {key}")
+    return keycodes[key]
+
+
+_KWIN_SCREENSHOT2_IFACE: Any = None
+
+
+def _kwin_screenshot2_iface() -> Any:
+    global _KWIN_SCREENSHOT2_IFACE
+    if _KWIN_SCREENSHOT2_IFACE is None:
+        import dbus
+
+        bus = dbus.SessionBus()
+        obj = bus.get_object("org.kde.KWin", "/org/kde/KWin/ScreenShot2")
+        _KWIN_SCREENSHOT2_IFACE = dbus.Interface(obj, "org.kde.KWin.ScreenShot2")
+    return _KWIN_SCREENSHOT2_IFACE
+
+
+def _capture_kwin_screenshot2() -> bytes:
+    import dbus
+
+    iface = _kwin_screenshot2_iface()
+    read_fd, write_fd = os.pipe()
+    try:
+        try:
+            iface.CaptureWorkspace(
+                dbus.Dictionary({}, signature="sv"),
+                dbus.types.UnixFd(write_fd),
+            )
+        finally:
+            os.close(write_fd)
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(read_fd, 65_536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(read_fd)
+
+
+def _wayland_socket_path() -> str | None:
+    display = os.environ.get("WAYLAND_DISPLAY", "")
+    if not display:
+        return None
+    if os.path.isabs(display):
+        path = display
+    else:
+        runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "")
+        if not runtime_dir:
+            return None
+        path = os.path.join(runtime_dir, display)
+    return path if os.path.exists(path) else None
+
+
+def _wl_send(sock: socket.socket, obj_id: int, opcode: int, payload: bytes = b"") -> None:
+    size = 8 + len(payload)
+    sock.sendall(struct.pack("=II", obj_id, (size << 16) | opcode) + payload)
+
+
+def _wl_str(text: str) -> bytes:
+    raw = text.encode("utf-8") + b"\x00"
+    pad = (4 - (len(raw) % 4)) % 4
+    return struct.pack("=I", len(raw)) + raw + (b"\x00" * pad)
+
+
+def _wl_connect_and_find_global(
+    sock_path: str, target_iface: str, timeout: float = 2.0
+) -> tuple[socket.socket, int, int] | None:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.connect(sock_path)
+        _wl_send(sock, 1, 1, struct.pack("=I", 2))  # wl_display.get_registry(2)
+        _wl_send(sock, 1, 0, struct.pack("=I", 3))  # wl_display.sync(3)
+        buf = b""
+        found: tuple[int, int] | None = None
+        deadline = time.monotonic() + timeout
+        done = False
+        while not done and time.monotonic() < deadline:
+            remaining = max(0.0, deadline - time.monotonic())
+            readable, _, _ = select.select([sock], [], [], remaining)
+            if not readable:
+                break
+            chunk = sock.recv(65_536)
+            if not chunk:
+                break
+            buf += chunk
+            while len(buf) >= 8:
+                oid, sz_op = struct.unpack("=II", buf[:8])
+                size, opcode = sz_op >> 16, sz_op & 0xFFFF
+                if size < 8 or len(buf) < size:
+                    break
+                body = buf[8:size]
+                buf = buf[size:]
+                if oid == 2 and opcode == 0 and len(body) >= 8:
+                    name, slen = struct.unpack("=II", body[:8])
+                    pad = (4 - (slen % 4)) % 4
+                    iface = body[8 : 8 + slen - 1].decode("utf-8", "replace")
+                    ver_off = 8 + slen + pad
+                    if len(body) >= ver_off + 4 and iface == target_iface:
+                        (version,) = struct.unpack("=I", body[ver_off : ver_off + 4])
+                        found = (name, version)
+                elif oid == 3 and opcode == 0:
+                    done = True
+        if found is None:
+            sock.close()
+            return None
+        return (sock, found[0], found[1])
+    except OSError:
+        sock.close()
+        return None
+
+
+def _find_wayland_global(sock_path: str, target_iface: str) -> tuple[int, int] | None:
+    conn = _wl_connect_and_find_global(sock_path, target_iface)
+    if conn is None:
+        return None
+    sock, name, version = conn
+    sock.close()
+    return (name, version)
+
+
+def _kwin_fake_input_key(keycode: int, timeout: float = 2.0) -> None:
+    sock_path = _wayland_socket_path()
+    if not sock_path:
+        raise RuntimeError("WAYLAND_DISPLAY socket not found")
+    conn = _wl_connect_and_find_global(sock_path, "org_kde_kwin_fake_input", timeout=timeout)
+    if conn is None:
+        raise RuntimeError("org_kde_kwin_fake_input global not available")
+    sock, name, version = conn
+    try:
+        bind_payload = (
+            struct.pack("=I", name)
+            + _wl_str("org_kde_kwin_fake_input")
+            + struct.pack("=II", min(version, 4), 4)
+        )
+        _wl_send(sock, 2, 0, bind_payload)  # wl_registry.bind -> object 4
+        _wl_send(sock, 4, 0, _wl_str("koral-bench") + _wl_str("latency benchmark"))  # authenticate
+        _wl_send(sock, 4, 10, struct.pack("=II", keycode, 1))  # keyboard_key press
+        _wl_send(sock, 4, 10, struct.pack("=II", keycode, 0))  # keyboard_key release
+        _wl_send(sock, 1, 0, struct.pack("=I", 5))  # wl_display.sync(5)
+        buf = b""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            remaining = max(0.0, deadline - time.monotonic())
+            readable, _, _ = select.select([sock], [], [], remaining)
+            if not readable:
+                raise RuntimeError("timed out waiting for fake-input sync")
+            chunk = sock.recv(65_536)
+            if not chunk:
+                raise RuntimeError("Wayland socket closed during fake-input sync")
+            buf += chunk
+            while len(buf) >= 8:
+                oid, sz_op = struct.unpack("=II", buf[:8])
+                size, opcode = sz_op >> 16, sz_op & 0xFFFF
+                if size < 8 or len(buf) < size:
+                    break
+                body = buf[8:size]
+                buf = buf[size:]
+                if oid == 1 and opcode == 0:  # wl_display.error
+                    err_oid, err_code, slen = struct.unpack("=III", body[:12])
+                    msg = body[12 : 12 + slen - 1].decode("utf-8", "replace")
+                    raise RuntimeError(
+                        f"Wayland error on object {err_oid} code {err_code}: {msg}"
+                    )
+                if oid == 5 and opcode == 0:  # wl_callback.done
+                    return
+        raise RuntimeError("timed out waiting for fake-input sync")
+    finally:
+        sock.close()
+
+
+def _ydotool_socket_exists() -> bool:
+    candidates = [
+        os.environ.get("YDOTOOL_SOCKET", ""),
+        f"/run/user/{os.getuid()}/.ydotool_socket",
+        "/tmp/.ydotool_socket",
+    ]
+    return any(path and os.path.exists(path) for path in candidates)
+
+
 def detect_capture() -> tuple[str, list[str]] | None:
+    wayland = bool(os.environ.get("WAYLAND_DISPLAY"))
+    is_kde = "KDE" in os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
+    if wayland:
+        try:
+            if _capture_kwin_screenshot2():
+                return "kwin-screenshot2", ["kwin-screenshot2"]
+        except Exception:
+            pass
+    if shutil_which("grim") and not is_kde:
+        monitor = os.environ.get("BENCH_OUTPUT", "")
+        cmd = ["grim"]
+        if monitor:
+            cmd += ["-o", monitor]
+        cmd += ["-"]
+        return "grim-screencopy", cmd
+    if wayland and shutil_which("spectacle"):
+        return "spectacle", ["spectacle"]
     if shutil_which("grim"):
-        output = os.environ.get("WAYLAND_DISPLAY", "")
         monitor = os.environ.get("BENCH_OUTPUT", "")
         cmd = ["grim"]
         if monitor:
@@ -219,6 +422,11 @@ def detect_capture() -> tuple[str, list[str]] | None:
 def detect_injection() -> str | None:
     if os.environ.get("XDG_SESSION_TYPE") == "wayland" and shutil_which("hyprctl"):
         return "hyprland-lua"
+    sock_path = _wayland_socket_path()
+    if sock_path and _find_wayland_global(sock_path, "org_kde_kwin_fake_input") is not None:
+        return "kwin-fake-input"
+    if shutil_which("ydotool") and _ydotool_socket_exists():
+        return "ydotool"
     if shutil_which("xdotool"):
         return "xdotool"
     return None
@@ -228,6 +436,12 @@ def inject_key(method: str, key: str) -> None:
     if method == "hyprland-lua":
         lua = f'hl.dsp.send_key_state({{mods=0,key="{key}",state="down"}}) ; hl.dsp.send_key_state({{mods=0,key="{key}",state="up"}})'
         result = run(["hyprctl", "--batch", f"eval {lua}"], timeout=5)
+    elif method == "kwin-fake-input":
+        _kwin_fake_input_key(expected_evdev_keycode(key))
+        return
+    elif method == "ydotool":
+        code = expected_evdev_keycode(key)
+        result = run(["ydotool", "key", f"{code}:1", f"{code}:0"], timeout=5)
     elif method == "xdotool":
         result = run(["xdotool", "key", key], timeout=5)
     else:
@@ -237,6 +451,28 @@ def inject_key(method: str, key: str) -> None:
 
 
 def capture_hash(cmd: list[str], timeout: float = 3.0) -> str:
+    if cmd == ["kwin-screenshot2"]:
+        data = _capture_kwin_screenshot2()
+        if not data:
+            raise RuntimeError("kwin-screenshot2 capture produced no data")
+        return hashlib.sha256(data).hexdigest()
+    if cmd == ["spectacle"]:
+        fd, tmp_path = tempfile.mkstemp(prefix="koral-spectacle-", suffix=".png")
+        os.close(fd)
+        try:
+            result = run(["spectacle", "-b", "-n", "-f", "-o", tmp_path], timeout=timeout)
+            if result.returncode != 0:
+                raise RuntimeError("capture failed: " + result.stderr.decode("utf-8", "replace")[:200])
+            with open(tmp_path, "rb") as handle:
+                data = handle.read()
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
+        if not data:
+            raise RuntimeError("spectacle capture produced no data")
+        return hashlib.sha256(data).hexdigest()
     result = run(cmd, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError("capture failed: " + result.stderr.decode("utf-8", "replace")[:200])
@@ -523,6 +759,7 @@ def self_test() -> int:
     sample = unavailable("test", "self-test")
     assert set(sample) == set(RESULT_KEYS)
     assert expected_key_sequence("F12") == b"\x1b[24~"
+    assert expected_evdev_keycode("F12") == 88
 
     with tempfile.TemporaryDirectory(prefix="koral-pty-selftest-") as directory:
         helper = write_helper(directory)
@@ -618,12 +855,14 @@ def main() -> int:
     injection = detect_injection()
     if not capture:
         result = unavailable(
-            args.terminal, "no capture tool (grim or ImageMagick import) available", args.binary
+            args.terminal,
+            "no capture tool (kwin-screenshot2, spectacle, grim, or ImageMagick import) available",
+            args.binary,
         )
     elif not injection:
         result = unavailable(
             args.terminal,
-            "no input injection tool (hyprctl Lua on Wayland or xdotool) available",
+            "no input injection tool (hyprctl Lua, kwin-fake-input, ydotool, or xdotool) available",
             args.binary,
         )
     else:
