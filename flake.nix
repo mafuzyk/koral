@@ -24,7 +24,7 @@
 
           cargoHash = "sha256-Orj0sVH5p5etikLbNXI680FYsmlvX6ihijWlr8F8Pao=";
 
-          nativeBuildInputs = with pkgs; [ pkg-config makeWrapper ];
+          nativeBuildInputs = with pkgs; [ pkg-config makeWrapper ncurses ];
           buildInputs = with pkgs; [
             libxkbcommon
             wayland
@@ -40,6 +40,8 @@
           postInstall = ''
             install -Dm644 assets/koral.desktop $out/share/applications/koral.desktop
             install -Dm644 assets/koral.svg $out/share/icons/hicolor/scalable/apps/koral.svg
+            install -dm755 $out/share/terminfo
+            tic -x -o $out/share/terminfo assets/xterm-koral.terminfo
             wrapProgram $out/bin/koral \
               --prefix PATH : ${lib.makeBinPath (with pkgs; [ libnotify xdg-utils fontconfig ])} \
               --prefix LD_LIBRARY_PATH : /run/opengl-driver/lib:${lib.makeLibraryPath (with pkgs; [
@@ -70,7 +72,7 @@
             hash = "sha256-Td0i2367T9BcOyX5QB/vAMyQjlvh1OL6iGxLsc16B4c=";
           };
 
-          nativeBuildInputs = with pkgs; [ autoPatchelfHook makeWrapper ];
+          nativeBuildInputs = with pkgs; [ autoPatchelfHook makeWrapper ncurses ];
           buildInputs = with pkgs; [
             libxkbcommon
             wayland
@@ -91,6 +93,10 @@
             install -Dm644 koral.desktop $out/share/applications/koral.desktop
             install -Dm644 koral.svg $out/share/icons/hicolor/scalable/apps/koral.svg
             install -Dm644 LICENSE $out/share/licenses/koral-bin/LICENSE
+            if [ -f xterm-koral.terminfo ]; then
+              install -dm755 $out/share/terminfo
+              tic -x -o $out/share/terminfo xterm-koral.terminfo
+            fi
             wrapProgram $out/bin/koral \
               --prefix PATH : ${lib.makeBinPath (with pkgs; [ libnotify xdg-utils fontconfig ])} \
               --prefix LD_LIBRARY_PATH : /run/opengl-driver/lib:${lib.makeLibraryPath (with pkgs; [

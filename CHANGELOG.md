@@ -13,6 +13,8 @@ alpha tag or competitive performance results are implied.
 
 ### Added
 
+- Arch Linux packaging recipe (`packaging/arch/PKGBUILD`) and compiled `xterm-koral`
+  terminfo bundling in `flake.nix` and `.github/workflows/release.yml`.
 - `koral ctl get-block-output [--pane ID] [--block ID] [--json]`, streaming
   `koral ctl watch [--pane ID] [--json]` NDJSON lifecycle hooks, and Linux `SO_PEERCRED`
   same-UID socket authentication.

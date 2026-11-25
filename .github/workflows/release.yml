@@ -40,8 +40,8 @@ jobs:
       - name: Package
         run: |
           ./target/release/koral --version
-          cp target/release/koral assets/koral.desktop assets/koral.svg .
-          tar -czf koral-x86_64-linux.tar.gz koral koral.desktop koral.svg LICENSE
+          cp target/release/koral assets/koral.desktop assets/koral.svg assets/xterm-koral.terminfo .
+          tar -czf koral-x86_64-linux.tar.gz koral koral.desktop koral.svg xterm-koral.terminfo LICENSE
           sha256sum koral-x86_64-linux.tar.gz > SHA256SUMS
       - name: Sign
         run: |

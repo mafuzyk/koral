@@ -10,7 +10,7 @@
 <p><strong>A shell-agnostic Linux terminal emulator (Wayland &amp; X11) with native <a href="https://github.com/mafuzyk/sharky-shell">sharky</a> support.</strong></p>
 
 <p>
-  Foldable command blocks, native tabs and split panes, 14 built-in themes, Kitty graphics, and live Settings — rendered on the GPU with <code>wgpu</code>.
+  Foldable command blocks, native tabs and split panes, 15 built-in themes, Kitty graphics, and live Settings — rendered on the GPU with <code>wgpu</code>.
 </p>
 
 <p>
@@ -31,7 +31,7 @@
 <h2 align="center">Installation</h2>
 
 ```sh
-# Arch Linux (prebuilt binary on AUR)
+# Arch Linux (AUR / local packaging/arch/PKGBUILD)
 paru -S koral-bin
 
 # NixOS / Nix flakes
