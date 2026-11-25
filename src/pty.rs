@@ -4,7 +4,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -401,8 +401,9 @@ impl Pacer {
 }
 
 pub struct Burst<'a> {
-    /// Contiguous slices of the staging buffer, in stream order.
-    chunks: Vec<&'a [u8]>,
+    /// Contiguous slice of the staging buffer, in stream order.
+    chunks: [&'a [u8]; 1],
+    empty: bool,
     eof: bool,
     /// The staging cap was reached: more reads are pending, so the burst is still open.
     capped: bool,
@@ -410,11 +411,11 @@ pub struct Burst<'a> {
 
 impl<'a> Burst<'a> {
     pub fn chunks(&self) -> &[&'a [u8]] {
-        &self.chunks
+        if self.empty { &[] } else { &self.chunks }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.chunks.is_empty()
+        self.empty
     }
 
     pub fn eof(&self) -> bool {
@@ -434,66 +435,37 @@ pub fn drain<'a, R: Read>(
     stage: &'a mut Vec<u8>,
     closed: &AtomicBool,
 ) -> Burst<'a> {
-    let mut lengths = Vec::new();
     let mut used = 0;
-    loop {
+    let (eof, capped) = loop {
         if closed.load(Ordering::SeqCst) {
             return Burst {
-                chunks: Vec::new(),
+                chunks: [&[]],
+                empty: true,
                 eof: false,
                 capped: false,
             };
         }
         if used == MAX_STAGE {
-            return Burst {
-                chunks: slices(stage, &lengths),
-                eof: false,
-                capped: true,
-            };
+            break (false, true);
         }
         if used == stage.len() {
             let grown = (stage.len() * 2).clamp(64 * 1024, MAX_STAGE);
             stage.resize(grown, 0);
         }
         match reader.read(&mut stage[used..]) {
-            Ok(0) => {
-                return Burst {
-                    chunks: slices(stage, &lengths),
-                    eof: true,
-                    capped: false,
-                };
-            }
-            Ok(count) => {
-                lengths.push(count);
-                used += count;
-                continue;
-            }
+            Ok(0) => break (true, false),
+            Ok(count) => used += count,
             Err(error) if error.kind() == ErrorKind::Interrupted => continue,
-            Err(error) if error.kind() == ErrorKind::WouldBlock => break,
-            Err(_) => {
-                return Burst {
-                    chunks: slices(stage, &lengths),
-                    eof: true,
-                    capped: false,
-                };
-            }
+            Err(error) if error.kind() == ErrorKind::WouldBlock => break (false, false),
+            Err(_) => break (true, false),
         }
-    }
+    };
     Burst {
-        chunks: slices(stage, &lengths),
-        eof: false,
-        capped: false,
+        chunks: [&stage[..used]],
+        empty: used == 0,
+        eof,
+        capped,
     }
-}
-
-fn slices<'a>(stage: &'a [u8], lengths: &[usize]) -> Vec<&'a [u8]> {
-    let mut start = 0;
-    let mut parts = Vec::with_capacity(lengths.len());
-    for &len in lengths {
-        parts.push(&stage[start..start + len]);
-        start += len;
-    }
-    parts
 }
 
 /// Drives the PTY, handing each chunk of output and the end of each burst to `sink`.
@@ -562,41 +534,70 @@ fn read_loop(
     closed: Arc<AtomicBool>,
     refresh_millihertz: Arc<AtomicU32>,
 ) {
-    let mut pacer = Pacer::default();
-    let mut previous_rate = 0;
+    let (to_parser, from_reader) = sync_channel::<Option<Vec<u8>>>(8);
+    let (recycle_tx, recycle_rx) = channel::<Vec<u8>>();
+    let parser = std::thread::spawn(move || {
+        let mut pacer = Pacer::default();
+        let mut previous_rate = 0;
+        while let Ok(item) = from_reader.recv() {
+            match item {
+                Some(mut buf) => {
+                    let now = Instant::now();
+                    let mut session = session.lock();
+                    session.feed(&buf, now);
+                    for reply in session.replies.drain(..) {
+                        let _ = proxy.send_event(UserEvent::Reply(id, reply));
+                    }
+                    for notice in session.notices.drain(..) {
+                        let _ = proxy.send_event(UserEvent::Notify(id, notice));
+                    }
+                    for op in session.clipboard_ops.drain(..) {
+                        let _ = proxy.send_event(UserEvent::ClipboardOp(id, op));
+                    }
+                    for mut event in session.events.drain(..) {
+                        event.pane_id = id;
+                        let _ = proxy.send_event(UserEvent::BlockEvent(id, event));
+                    }
+                    drop(session);
+                    let rate = refresh_millihertz.load(Ordering::Relaxed);
+                    if rate != previous_rate {
+                        pacer.interval = refresh_interval(Some(rate));
+                        previous_rate = rate;
+                    }
+                    if pacer.read(Instant::now()) {
+                        let _ = proxy.send_event(UserEvent::Redraw);
+                    }
+                    buf.clear();
+                    if buf.capacity() > MAX_STAGE {
+                        buf.shrink_to(MAX_STAGE);
+                    }
+                    let _ = recycle_tx.send(buf);
+                }
+                None => {
+                    if pacer.drained() {
+                        let _ = proxy.send_event(UserEvent::Redraw);
+                    }
+                }
+            }
+        }
+        let _ = proxy.send_event(UserEvent::Exited(id));
+    });
+
     let _ = pump(&pty, &poller, &closed, |chunk| match chunk {
         Some(chunks) => {
-            let now = Instant::now();
-            let mut session = session.lock();
-            session.feed_batch(chunks, now);
-            for reply in session.replies.drain(..) {
-                let _ = proxy.send_event(UserEvent::Reply(id, reply));
+            let total: usize = chunks.iter().map(|part| part.len()).sum();
+            let mut buf = recycle_rx.try_recv().unwrap_or_default();
+            buf.clear();
+            buf.reserve(total);
+            for part in chunks {
+                buf.extend_from_slice(part);
             }
-            for notice in session.notices.drain(..) {
-                let _ = proxy.send_event(UserEvent::Notify(id, notice));
-            }
-            for op in session.clipboard_ops.drain(..) {
-                let _ = proxy.send_event(UserEvent::ClipboardOp(id, op));
-            }
-            for mut event in session.events.drain(..) {
-                event.pane_id = id;
-                let _ = proxy.send_event(UserEvent::BlockEvent(id, event));
-            }
-            drop(session);
-            let rate = refresh_millihertz.load(Ordering::Relaxed);
-            if rate != previous_rate {
-                pacer.interval = refresh_interval(Some(rate));
-                previous_rate = rate;
-            }
-            if pacer.read(Instant::now()) {
-                let _ = proxy.send_event(UserEvent::Redraw);
-            }
+            let _ = to_parser.send(Some(buf));
         }
         None => {
-            if pacer.drained() {
-                let _ = proxy.send_event(UserEvent::Redraw);
-            }
+            let _ = to_parser.send(None);
         }
     });
-    let _ = proxy.send_event(UserEvent::Exited(id));
+    drop(to_parser);
+    let _ = parser.join();
 }

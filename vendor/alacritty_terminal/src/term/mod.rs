@@ -492,9 +492,11 @@ impl<T> Term<T> {
                     let bg = self.grid.cursor.template.bg;
                     let flags = self.grid.cursor.template.flags;
 
-                    for (offset, &ch_byte) in bytes[pos..pos + take].iter().enumerate() {
-                        let target_col = col + offset;
-                        let cell = &mut self.grid[line][Column(target_col)];
+                    let cells = &mut self.grid[line][Column(col)..Column(col + take)];
+                    let mut wide_at = None;
+                    for (offset, (cell, &ch_byte)) in
+                        cells.iter_mut().zip(&bytes[pos..pos + take]).enumerate()
+                    {
                         if cell.extra.is_none()
                             && !cell.flags.intersects(Flags::WIDE_CHAR | Flags::WIDE_CHAR_SPACER)
                         {
@@ -503,12 +505,22 @@ impl<T> Term<T> {
                             cell.bg = bg;
                             cell.flags = flags;
                         } else {
-                            self.grid.cursor.point.column = Column(target_col);
+                            wide_at = Some(offset);
+                            break;
+                        }
+                    }
+                    if let Some(offset) = wide_at {
+                        for (extra_off, &ch_byte) in
+                            bytes[pos + offset..pos + take].iter().enumerate()
+                        {
+                            self.grid.cursor.point.column = Column(col + offset + extra_off);
                             self.write_at_cursor(ch_byte as char);
                         }
                     }
 
-                    self.damage.damage_line(line.0 as usize, col, col + take - 1);
+                    if !self.damage.full {
+                        self.damage.damage_line(line.0 as usize, col, col + take - 1);
+                    }
                     let next_col = col + take;
                     if next_col < columns {
                         self.grid.cursor.point.column = Column(next_col);

@@ -198,7 +198,7 @@ fn a_nonblocking_drain_hands_every_read_to_the_sink_in_one_batch() {
     let burst = drain(&mut reader, &mut staging, &closed);
 
     assert!(!burst.eof());
-    assert_eq!(burst.chunks(), &[b"aa".as_slice(), b"bbb", b"cccc"]);
+    assert_eq!(burst.chunks(), &[b"aabbbcccc".as_slice()]);
     assert_eq!(
         reader.reads_done, 4,
         "the drain must run until the reader would block"
