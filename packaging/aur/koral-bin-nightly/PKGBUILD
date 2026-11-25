@@ -32,8 +32,7 @@ provides=('koral')
 conflicts=('koral' 'koral-bin')
 options=('!debug')
 source=("koral-${_tag}.tar.gz::${url}/releases/download/v${_tag}/koral-x86_64-linux.tar.gz")
-# Replace 'SKIP' with the release tarball checksum from SHA256SUMS after publishing v2.0.0-alpha.1.
-sha256sums=('SKIP')
+sha256sums=('00db9fa3ad9a44439be9e44850963f2aadae9cc65d38123e48e6ba7b6b875259')
 
 package() {
   install -Dm755 koral "$pkgdir/usr/bin/koral"
