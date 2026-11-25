@@ -40,9 +40,22 @@ pub fn term_config() -> Config {
 }
 
 pub fn term_config_with(scrollback: usize) -> Config {
+    term_config_with_cursor(
+        scrollback,
+        alacritty_terminal::vte::ansi::CursorShape::Block,
+        true,
+    )
+}
+
+pub fn term_config_with_cursor(
+    scrollback: usize,
+    shape: alacritty_terminal::vte::ansi::CursorShape,
+    blinking: bool,
+) -> Config {
     Config {
         scrolling_history: scrollback,
         kitty_keyboard: true,
+        default_cursor_style: alacritty_terminal::vte::ansi::CursorStyle { shape, blinking },
         ..Config::default()
     }
 }

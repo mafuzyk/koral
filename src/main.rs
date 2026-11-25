@@ -9,7 +9,7 @@ use alacritty_terminal::term::{ClipboardType, TermMode};
 use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use koral::blink::Blink;
 use koral::blocks::Activity;
-use koral::config::{self, Args, Config, Launch, USAGE};
+use koral::config::{self, Args, Config, Launch, TabBarMode, USAGE};
 use koral::diff::{self, DiffLine};
 use koral::fonts;
 use koral::frame::{self, Chrome, CursorView, Frame, Layout, PaneLayout, TabView};
@@ -390,6 +390,47 @@ impl App {
         })
     }
 
+    fn show_tab_bar(&self) -> bool {
+        match self.config.tab_bar {
+            TabBarMode::Always => true,
+            TabBarMode::Hidden => false,
+            TabBarMode::Auto => {
+                self.tabs.as_ref().is_some_and(|t| t.len() > 1) || self.active_is_settings()
+            }
+        }
+    }
+
+    fn content_rect(&self, layout: Layout) -> Rect {
+        if self.show_tab_bar() {
+            layout.content_rect()
+        } else {
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: layout.width,
+                height: layout.height.max(1.0),
+            }
+        }
+    }
+
+    fn sync_sessions(&self) {
+        let Some(tabs) = &self.tabs else {
+            return;
+        };
+        let options = koral::pty::term_config_with_cursor(
+            self.config.scrollback,
+            self.config.cursor_shape.into_ansi(),
+            self.config.cursor_blink,
+        );
+        for tree in tabs.iter().filter_map(Tab::as_tree) {
+            for (_, terminal) in tree.iter() {
+                let mut session = terminal.session.lock();
+                session.auto_fold_lines = self.config.auto_fold_lines;
+                session.term.set_options(options.clone());
+            }
+        }
+    }
+
     fn divider_px(layout: Layout) -> f32 {
         (2.0 * layout.scale).round().max(1.0)
     }
@@ -407,7 +448,7 @@ impl App {
     fn active_pane(&self) -> Option<(u64, Rect, PaneLayout)> {
         let layout = self.layout()?;
         let tree = self.tabs.as_ref()?.active()?.as_tree()?;
-        let (panes, _) = tree.layout(layout.content_rect(), Self::divider_px(layout));
+        let (panes, _) = tree.layout(self.content_rect(layout), Self::divider_px(layout));
         let (id, rect) = panes.into_iter().find(|(id, _)| *id == tree.active_id())?;
         Some((id, rect, PaneLayout::from_rect(rect, layout)))
     }
@@ -570,7 +611,15 @@ impl App {
         };
         if let Some(term) = &mut terminal {
             term.set_refresh_millihertz(self.refresh_millihertz);
-            term.session.lock().auto_fold_lines = self.config.auto_fold_lines;
+            let options = koral::pty::term_config_with_cursor(
+                self.config.scrollback,
+                self.config.cursor_shape.into_ansi(),
+                self.config.cursor_blink,
+            );
+            let mut session = term.session.lock();
+            session.auto_fold_lines = self.config.auto_fold_lines;
+            session.term.set_options(options);
+            drop(session);
             if title.is_some() {
                 term.title = title;
             }
@@ -610,7 +659,7 @@ impl App {
         let Some(layout) = self.layout() else {
             return;
         };
-        let geometry = Self::geometry_for(layout.content_rect(), layout);
+        let geometry = Self::geometry_for(self.content_rect(layout), layout);
         let cwd = cwd.or_else(|| self.active_cwd());
         let Some(terminal) = self.spawn_terminal(geometry, cwd, title, command) else {
             return;
@@ -637,7 +686,7 @@ impl App {
             return false;
         }
         let cwd = cwd.or_else(|| self.active_cwd());
-        let geometry = Self::geometry_for(layout.content_rect(), layout);
+        let geometry = Self::geometry_for(self.content_rect(layout), layout);
         let Some(terminal) = self.spawn_terminal(geometry, cwd, None, None) else {
             return false;
         };
@@ -697,13 +746,14 @@ impl App {
         let Some(layout) = self.layout() else {
             return;
         };
+        let area = self.content_rect(layout);
         let div = Self::divider_px(layout);
         if let Some(tree) = self
             .tabs
             .as_mut()
             .and_then(Tabs::active_mut)
             .and_then(Tab::as_tree_mut)
-            && tree.focus_dir(dir, layout.content_rect(), div)
+            && tree.focus_dir(dir, area, div)
         {
             self.search = None;
             self.redraw();
@@ -965,8 +1015,10 @@ impl App {
             current = updated;
         }
         let (source, config) = config::update(&current, key, value)?;
-        let font_changed =
-            config.face() != self.config.face() || config.font_size != self.config.font_size;
+        let font_changed = config.face() != self.config.face()
+            || config.font_size != self.config.font_size
+            || (config.line_height - self.config.line_height).abs() > 1e-3;
+        let present_changed = config.present_mode != self.config.present_mode;
         self.source = source;
         self.notices
             .set_policies(config.clipboard_write, config.notifications);
@@ -976,20 +1028,20 @@ impl App {
             window.set_decorations(config.window_decorations);
         }
         self.config = config;
-        if let Some(tabs) = &self.tabs {
-            for tree in tabs.iter().filter_map(Tab::as_tree) {
-                for (_, terminal) in tree.iter() {
-                    terminal.session.lock().auto_fold_lines = self.config.auto_fold_lines;
-                }
-            }
-        }
+        self.sync_sessions();
         self.theme = matugen::resolve_theme(self.config.matugen, self.config.theme.as_deref());
 
-        if font_changed && let Some(renderer) = &mut self.renderer {
-            renderer.set_font(
-                &self.config.face(),
-                input::zoomed(self.config.font_size, self.zoom),
-            );
+        if let Some(renderer) = &mut self.renderer {
+            if present_changed {
+                renderer.set_present_mode(self.config.present_mode);
+            }
+            if font_changed {
+                renderer.set_line_height(self.config.line_height);
+                renderer.set_font(
+                    &self.config.face(),
+                    input::zoomed(self.config.font_size, self.zoom),
+                );
+            }
         }
         self.resize_all();
 
@@ -1747,13 +1799,10 @@ impl App {
 
     fn pane_under_cursor(&self) -> Option<(u64, Rect, PaneLayout)> {
         let layout = self.layout()?;
+        let area = self.content_rect(layout);
         let tree = self.tabs.as_ref()?.active()?.as_tree()?;
-        let (id, rect) = tree.pane_at(
-            layout.content_rect(),
-            Self::divider_px(layout),
-            self.cursor.0,
-            self.cursor.1,
-        )?;
+        let (id, rect) =
+            tree.pane_at(area, Self::divider_px(layout), self.cursor.0, self.cursor.1)?;
         Some((id, rect, PaneLayout::from_rect(rect, layout)))
     }
 
@@ -1807,7 +1856,7 @@ impl App {
                 .and_then(Tabs::active)
                 .and_then(Tab::as_tree)
             && let Some(div) = tree.divider_at(
-                layout.content_rect(),
+                self.content_rect(layout),
                 Self::divider_px(layout),
                 4.0 * layout.scale,
                 self.cursor.0,
@@ -1998,7 +2047,7 @@ impl App {
                         .and_then(Tab::as_tree)
                 {
                     let div = tree.divider_at(
-                        layout.content_rect(),
+                        self.content_rect(layout),
                         Self::divider_px(layout),
                         4.0 * layout.scale,
                         self.cursor.0,
@@ -2016,9 +2065,10 @@ impl App {
                 }
             }
         }
-        if self
-            .layout()
-            .is_some_and(|layout| self.cursor.1 < layout.strip())
+        if (self.show_tab_bar()
+            && self
+                .layout()
+                .is_some_and(|layout| self.cursor.1 < layout.strip()))
             || self.drag != Drag::None
         {
             self.redraw();
@@ -2030,7 +2080,7 @@ impl App {
         let Some(layout) = self.layout() else {
             return;
         };
-        let area = layout.content_rect();
+        let area = self.content_rect(layout);
         let div = Self::divider_px(layout);
         if let Some(tabs) = &mut self.tabs {
             for tab in tabs.iter_mut() {
@@ -2047,7 +2097,8 @@ impl App {
     }
 
     fn blinking(&self) -> bool {
-        self.focused
+        self.config.cursor_blink
+            && self.focused
             && self.active().is_some_and(|tab| {
                 tab.scroll == 0 && tab.session.lock().term.cursor_style().blinking
             })
@@ -2145,9 +2196,11 @@ impl App {
             .as_ref()
             .map_or_else(fonts::Coverage::default, Renderer::coverage);
 
+        let show_bar = self.show_tab_bar();
+        let content_area = self.content_rect(layout);
         match tabs.active() {
             Some(Tab::Terminal(tree)) => {
-                let area = layout.content_rect();
+                let area = content_area;
                 let div = Self::divider_px(layout);
                 let (pane_rects, dividers) = tree.layout(area, div);
                 let active_id = tree.active_id();
@@ -2272,7 +2325,9 @@ impl App {
             settings_open,
             bar: &bar,
         };
-        frame::draw_chrome(&mut frame, &chrome, layout, &display_theme);
+        if show_bar {
+            frame::draw_chrome(&mut frame, &chrome, layout, &display_theme);
+        }
         if let Some(Tab::Settings(settings)) = tabs.active() {
             let substitute = self
                 .renderer
@@ -2349,7 +2404,7 @@ impl App {
             return;
         }
         let pane_lines = self.layout().map_or(24, |l| {
-            let area = l.content_rect();
+            let area = self.content_rect(l);
             let div = Self::divider_px(l);
             self.tabs
                 .as_ref()
@@ -2710,7 +2765,7 @@ impl App {
         let layout = self
             .layout()
             .ok_or_else(|| "window layout is not ready".to_string())?;
-        let geometry = Self::geometry_for(layout.content_rect(), layout);
+        let geometry = Self::geometry_for(self.content_rect(layout), layout);
         let fallback_cwd = self.active_cwd();
         let mut built = Vec::with_capacity(saved.tabs.len());
         for saved_tab in saved.tabs {
@@ -2866,14 +2921,16 @@ impl ApplicationHandler<UserEvent> for App {
             fonts
         });
         lag::startup("fonts_ready");
-        self.renderer = Some(pollster::block_on(Renderer::new(
+        let mut renderer = pollster::block_on(Renderer::new(
             window.clone(),
             instance,
             &face,
             points,
             fonts,
             self.config.present_mode,
-        )));
+        ));
+        renderer.set_line_height(self.config.line_height);
+        self.renderer = Some(renderer);
         lag::startup("renderer_ready");
         window.set_ime_allowed(true);
         window.set_visible(true);
@@ -3003,7 +3060,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
             UserEvent::Size(id, reply) => {
                 let rect = self.layout().and_then(|layout| {
-                    let area = layout.content_rect();
+                    let area = self.content_rect(layout);
                     let div = Self::divider_px(layout);
                     self.tabs.as_ref()?.iter().find_map(|tab| {
                         let tree = tab.as_tree()?;
@@ -3162,9 +3219,10 @@ impl ApplicationHandler<UserEvent> for App {
                 button,
                 ..
             } => {
-                if self
-                    .layout()
-                    .is_some_and(|layout| self.cursor.1 < layout.strip())
+                if self.show_tab_bar()
+                    && self
+                        .layout()
+                        .is_some_and(|layout| self.cursor.1 < layout.strip())
                 {
                     self.press_strip(button, event_loop);
                 } else if self.active_is_settings() {

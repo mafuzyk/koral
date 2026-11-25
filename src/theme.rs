@@ -108,6 +108,46 @@ pub const BUILTINS: &[ThemeInfo] = &[
         id: "high-contrast",
         name: "High Contrast",
     },
+    ThemeInfo {
+        id: "github-dark",
+        name: "GitHub Dark",
+    },
+    ThemeInfo {
+        id: "github-dark-dimmed",
+        name: "GitHub Dark Dimmed",
+    },
+    ThemeInfo {
+        id: "github-light",
+        name: "GitHub Light",
+    },
+    ThemeInfo {
+        id: "kanagawa",
+        name: "Kanagawa",
+    },
+    ThemeInfo {
+        id: "everforest-dark",
+        name: "Everforest Dark",
+    },
+    ThemeInfo {
+        id: "ayu-dark",
+        name: "Ayu Dark",
+    },
+    ThemeInfo {
+        id: "monokai-pro",
+        name: "Monokai Pro",
+    },
+    ThemeInfo {
+        id: "gruvbox-light",
+        name: "Gruvbox Light",
+    },
+    ThemeInfo {
+        id: "solarized-light",
+        name: "Solarized Light",
+    },
+    ThemeInfo {
+        id: "rose-pine-dawn",
+        name: "Rosé Pine Dawn",
+    },
 ];
 
 const fn preset(ui: [u32; 7], ansi: [u32; 16]) -> Theme {
@@ -389,6 +429,96 @@ impl Theme {
                 [
                     0x000000, 0xFF5555, 0x55FF55, 0xFFFF55, 0x5599FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF,
                     0x808080, 0xFF7777, 0x77FF77, 0xFFFF88, 0x88BBFF, 0xFF88FF, 0x88FFFF, 0xFFFFFF,
+                ],
+            ),
+            "github-dark" => preset(
+                [
+                    0x0D1117, 0xE6EDF3, 0x58A6FF, 0x58A6FF, 0x3FB950, 0xF85149, 0x8B949E,
+                ],
+                [
+                    0x484F58, 0xFF7B72, 0x3FB950, 0xD29922, 0x58A6FF, 0xBC8CFF, 0x39C5CF, 0xB1BAC4,
+                    0x6E7681, 0xFFA198, 0x56D364, 0xE3B341, 0x79C0FF, 0xD2A8FF, 0x56D4DD, 0xF0F6FC,
+                ],
+            ),
+            "github-dark-dimmed" => preset(
+                [
+                    0x22272E, 0xADBAC7, 0x539BF5, 0x539BF5, 0x57AB5A, 0xF47067, 0x768390,
+                ],
+                [
+                    0x545D68, 0xF47067, 0x57AB5A, 0xC69026, 0x539BF5, 0xB083F0, 0x39C5CF, 0x909DAB,
+                    0x636E7B, 0xFF938A, 0x6BC46D, 0xDAAA3F, 0x6CB6FF, 0xDCBDFB, 0x56D4DD, 0xCDD9E5,
+                ],
+            ),
+            "github-light" => preset(
+                [
+                    0xFFFFFF, 0x1F2328, 0x0969DA, 0x0969DA, 0x1A7F37, 0xCF222E, 0x656D76,
+                ],
+                [
+                    0x24292F, 0xCF222E, 0x116329, 0x4D2D00, 0x0969DA, 0x8250DF, 0x1B7C83, 0x6E7781,
+                    0x57606A, 0xA40E26, 0x1A7F37, 0x633C01, 0x218BFF, 0xA475F9, 0x3192AA, 0x8C959F,
+                ],
+            ),
+            "kanagawa" => preset(
+                [
+                    0x1F1F28, 0xDCD7BA, 0xC8C093, 0x7E9CD8, 0x98BB6C, 0xE46876, 0x727169,
+                ],
+                [
+                    0x090618, 0xC34043, 0x76946A, 0xC0A36E, 0x7E9CD8, 0x957FB8, 0x6A9589, 0xC8C093,
+                    0x727169, 0xE82424, 0x98BB6C, 0xE6C384, 0x7FB4CA, 0x938AA9, 0x7AA89F, 0xDCD7BA,
+                ],
+            ),
+            "everforest-dark" => preset(
+                [
+                    0x2D353B, 0xD3C6AA, 0xA7C080, 0x7FBBB3, 0xA7C080, 0xE67E80, 0x859289,
+                ],
+                [
+                    0x475258, 0xE67E80, 0xA7C080, 0xDBBC7F, 0x7FBBB3, 0xD699B6, 0x83C092, 0xD3C6AA,
+                    0x475258, 0xE67E80, 0xA7C080, 0xDBBC7F, 0x7FBBB3, 0xD699B6, 0x83C092, 0xD3C6AA,
+                ],
+            ),
+            "ayu-dark" => preset(
+                [
+                    0x0B0E14, 0xBFBDB6, 0xE6B450, 0x39BAE6, 0x7FD962, 0xD95757, 0x6C7380,
+                ],
+                [
+                    0x1E232B, 0xEA6C73, 0x7FD962, 0xF9AF4F, 0x53BDFA, 0xCDA1FA, 0x90E1C6, 0xC7C7C7,
+                    0x686868, 0xF07178, 0xAAD94C, 0xFFB454, 0x59C2FF, 0xD2A6FF, 0x95E6CB, 0xFFFFFF,
+                ],
+            ),
+            "monokai-pro" => preset(
+                [
+                    0x2D2A2E, 0xFCFCFA, 0xFFD866, 0x78DCE8, 0xA9DC76, 0xFF6188, 0x939293,
+                ],
+                [
+                    0x403E41, 0xFF6188, 0xA9DC76, 0xFFD866, 0xFC9867, 0xAB9DF2, 0x78DCE8, 0xFCFCFA,
+                    0x727072, 0xFF6188, 0xA9DC76, 0xFFD866, 0xFC9867, 0xAB9DF2, 0x78DCE8, 0xFCFCFA,
+                ],
+            ),
+            "gruvbox-light" => preset(
+                [
+                    0xFBF1C7, 0x3C3836, 0x3C3836, 0x076678, 0x79740E, 0x9D0006, 0x7C6F64,
+                ],
+                [
+                    0xFBF1C7, 0xCC241D, 0x98971A, 0xD79921, 0x458588, 0xB16286, 0x689D6A, 0x7C6F64,
+                    0x928374, 0x9D0006, 0x79740E, 0xB57614, 0x076678, 0x8F3F71, 0x427B58, 0x3C3836,
+                ],
+            ),
+            "solarized-light" => preset(
+                [
+                    0xFDF6E3, 0x475B62, 0x475B62, 0x268BD2, 0x6C7B00, 0xDC322F, 0x657B83,
+                ],
+                [
+                    0x073642, 0xDC322F, 0x859900, 0xB58900, 0x268BD2, 0xD33682, 0x2AA198, 0xEEE8D5,
+                    0x002B36, 0xCB4B16, 0x586E75, 0x657B83, 0x839496, 0x6C71C4, 0x93A1A1, 0xFDF6E3,
+                ],
+            ),
+            "rose-pine-dawn" => preset(
+                [
+                    0xFAF4ED, 0x575279, 0x575279, 0x907AA9, 0x286983, 0xB4637A, 0x797593,
+                ],
+                [
+                    0xF2E9E1, 0xB4637A, 0x286983, 0xEA9D34, 0x56949F, 0x907AA9, 0xD7827E, 0x575279,
+                    0x9893A5, 0xB4637A, 0x286983, 0xEA9D34, 0x56949F, 0x907AA9, 0xD7827E, 0x575279,
                 ],
             ),
             _ => return None,

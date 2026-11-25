@@ -1996,13 +1996,33 @@ fn draw_preview_column(
         });
     }
     let cursor_x = tx + "❯ echo ready".chars().count() as f32 * small_cell + 2.0 * scale;
-    frame.quads.push(Quad::new(
-        cursor_x,
-        ty0 + 4.0 * line_h + 2.0 * scale,
-        small_cell,
-        line_h - 4.0 * scale,
-        rgba(theme.cursor, 0.9),
-    ));
+    let cursor_y = ty0 + 4.0 * line_h + 2.0 * scale;
+    let cursor_h = (line_h - 4.0 * scale).max(2.0);
+    let thickness = (2.0 * scale).round().max(1.0);
+    let cursor_quad = match config.cursor_shape {
+        crate::config::CursorShapeConfig::Beam => Quad::new(
+            cursor_x,
+            cursor_y,
+            thickness,
+            cursor_h,
+            rgba(theme.cursor, 0.9),
+        ),
+        crate::config::CursorShapeConfig::Underline => Quad::new(
+            cursor_x,
+            cursor_y + cursor_h - thickness,
+            small_cell,
+            thickness,
+            rgba(theme.cursor, 0.9),
+        ),
+        crate::config::CursorShapeConfig::Block => Quad::new(
+            cursor_x,
+            cursor_y,
+            small_cell,
+            cursor_h,
+            rgba(theme.cursor, 0.9),
+        ),
+    };
+    frame.quads.push(cursor_quad);
 
     // 16 ANSI colour tiles (2x8 grid) + semantic colours
     let pal_y = term_y + term_h + 12.0 * scale;
@@ -2036,9 +2056,9 @@ fn draw_preview_column(
     let short_y = grid_y + (tile_h + gap) * 2.0 + 10.0 * scale;
     let shortcuts = [
         ("Ctrl+Shift+D / E", "Split right / down"),
-        ("Ctrl+Shift+Arrows", "Focus pane"),
-        ("Ctrl+Shift+F / G", "Fold / copy block"),
-        ("Ctrl+Shift+S", "Search scrollback"),
+        ("Ctrl+Shift+F / Y", "Fold / diff blocks"),
+        ("Ctrl+Shift+S / B", "Search / block scope"),
+        ("Ctrl+Shift+L", "Jump to last error"),
     ];
     let needed = line_h * (1 + shortcuts.len()) as f32;
     if short_y + needed <= right.y + right.height - 6.0 * scale {

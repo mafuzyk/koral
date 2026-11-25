@@ -7,16 +7,23 @@ pub enum Section {
     Appearance,
     Typography,
     Terminal,
+    Blocks,
 }
 
 impl Section {
-    pub const ALL: [Self; 3] = [Self::Appearance, Self::Typography, Self::Terminal];
+    pub const ALL: [Self; 4] = [
+        Self::Appearance,
+        Self::Typography,
+        Self::Terminal,
+        Self::Blocks,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Appearance => "APPEARANCE",
             Self::Typography => "TYPOGRAPHY",
             Self::Terminal => "TERMINAL",
+            Self::Blocks => "BLOCKS",
         }
     }
 }
@@ -41,8 +48,11 @@ pub struct Field {
 
 const ITALIC_CHOICES: &[&str] = &["oblique", "italic"];
 const PERMISSION_CHOICES: &[&str] = &["allow", "ask", "deny"];
+const TAB_BAR_CHOICES: &[&str] = &["always", "auto", "hidden"];
+const CURSOR_SHAPE_CHOICES: &[&str] = &["block", "beam", "underline"];
+const PRESENT_MODE_CHOICES: &[&str] = &["auto", "fifo", "mailbox", "immediate"];
 
-pub const FIELDS: [Field; 17] = [
+pub const FIELDS: [Field; 25] = [
     Field {
         section: Section::Appearance,
         key: "theme",
@@ -59,6 +69,24 @@ pub const FIELDS: [Field; 17] = [
         section: Section::Appearance,
         key: "window_decorations",
         label: "System title bar",
+        kind: Kind::Toggle,
+    },
+    Field {
+        section: Section::Appearance,
+        key: "tab_bar",
+        label: "Tab bar",
+        kind: Kind::Choice(TAB_BAR_CHOICES),
+    },
+    Field {
+        section: Section::Appearance,
+        key: "cursor_shape",
+        label: "Cursor shape",
+        kind: Kind::Choice(CURSOR_SHAPE_CHOICES),
+    },
+    Field {
+        section: Section::Appearance,
+        key: "cursor_blink",
+        label: "Cursor blink",
         kind: Kind::Toggle,
     },
     Field {
@@ -99,6 +127,16 @@ pub const FIELDS: [Field; 17] = [
     },
     Field {
         section: Section::Typography,
+        key: "line_height",
+        label: "Line height",
+        kind: Kind::Number {
+            min: 1.0,
+            max: 1.8,
+            step: 0.05,
+        },
+    },
+    Field {
+        section: Section::Typography,
         key: "font_weight",
         label: "Regular weight",
         kind: Kind::Number {
@@ -111,6 +149,16 @@ pub const FIELDS: [Field; 17] = [
         section: Section::Typography,
         key: "bold_weight",
         label: "Bold weight",
+        kind: Kind::Number {
+            min: 100.0,
+            max: 900.0,
+            step: 100.0,
+        },
+    },
+    Field {
+        section: Section::Typography,
+        key: "bold_italic_weight",
+        label: "Bold italic weight",
         kind: Kind::Number {
             min: 100.0,
             max: 900.0,
@@ -143,6 +191,12 @@ pub const FIELDS: [Field; 17] = [
     },
     Field {
         section: Section::Terminal,
+        key: "present_mode",
+        label: "Present mode",
+        kind: Kind::Choice(PRESENT_MODE_CHOICES),
+    },
+    Field {
+        section: Section::Terminal,
         key: "scrollback",
         label: "Scrollback lines",
         kind: Kind::Number {
@@ -168,6 +222,22 @@ pub const FIELDS: [Field; 17] = [
         key: "notifications",
         label: "Notifications (OSC 777/9)",
         kind: Kind::Choice(PERMISSION_CHOICES),
+    },
+    Field {
+        section: Section::Blocks,
+        key: "auto_fold_lines",
+        label: "Auto-fold after lines",
+        kind: Kind::Number {
+            min: 0.0,
+            max: 500.0,
+            step: 10.0,
+        },
+    },
+    Field {
+        section: Section::Blocks,
+        key: "block_minimap",
+        label: "Status minimap",
+        kind: Kind::Toggle,
     },
 ];
 
@@ -538,12 +608,17 @@ pub fn value(field: usize, config: &Config) -> String {
             "off"
         }
         .to_string(),
+        "tab_bar" => config.tab_bar.as_str().to_string(),
+        "cursor_shape" => config.cursor_shape.as_str().to_string(),
+        "cursor_blink" => if config.cursor_blink { "on" } else { "off" }.to_string(),
         "opacity" => config.opacity.to_string(),
         "padding" => config.padding.to_string(),
         "font" => config.font.clone(),
         "font_size" => config.font_size.to_string(),
+        "line_height" => config.line_height.to_string(),
         "font_weight" => config.font_weight.to_string(),
         "bold_weight" => config.bold_weight.to_string(),
+        "bold_italic_weight" => config.bold_italic_weight.to_string(),
         "italic_style" => if config.oblique { "oblique" } else { "italic" }.to_string(),
         "ligatures" => if config.ligatures { "on" } else { "off" }.to_string(),
         "shell" => config.shell.clone().unwrap_or_default(),
@@ -553,10 +628,13 @@ pub fn value(field: usize, config: &Config) -> String {
             "off"
         }
         .to_string(),
+        "present_mode" => config.present_mode.as_str().to_string(),
         "scrollback" => config.scrollback.to_string(),
         "clipboard_read" => if config.clipboard_read { "on" } else { "off" }.to_string(),
         "clipboard_write" => config.clipboard_write.as_str().to_string(),
         "notifications" => config.notifications.as_str().to_string(),
+        "auto_fold_lines" => config.auto_fold_lines.to_string(),
+        "block_minimap" => if config.block_minimap { "on" } else { "off" }.to_string(),
         _ => String::new(),
     }
 }

@@ -228,6 +228,62 @@ pub enum PresentModePolicy {
     Immediate,
 }
 
+impl PresentModePolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Fifo => "fifo",
+            Self::Mailbox => "mailbox",
+            Self::Immediate => "immediate",
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum CursorShapeConfig {
+    #[default]
+    Block,
+    Beam,
+    Underline,
+}
+
+impl CursorShapeConfig {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Block => "block",
+            Self::Beam => "beam",
+            Self::Underline => "underline",
+        }
+    }
+
+    pub fn into_ansi(self) -> alacritty_terminal::vte::ansi::CursorShape {
+        use alacritty_terminal::vte::ansi::CursorShape;
+        match self {
+            Self::Block => CursorShape::Block,
+            Self::Beam => CursorShape::Beam,
+            Self::Underline => CursorShape::Underline,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum TabBarMode {
+    #[default]
+    Always,
+    Auto,
+    Hidden,
+}
+
+impl TabBarMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Always => "always",
+            Self::Auto => "auto",
+            Self::Hidden => "hidden",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub font: String,
@@ -238,6 +294,10 @@ pub struct Config {
     pub shell_integration: bool,
     pub matugen: bool,
     pub window_decorations: bool,
+    pub tab_bar: TabBarMode,
+    pub cursor_shape: CursorShapeConfig,
+    pub cursor_blink: bool,
+    pub line_height: f32,
     pub present_mode: PresentModePolicy,
     pub theme: Option<String>,
     pub scrollback: usize,
@@ -266,6 +326,10 @@ impl Default for Config {
             shell_integration: true,
             matugen: false,
             window_decorations: false,
+            tab_bar: TabBarMode::Always,
+            cursor_shape: CursorShapeConfig::Block,
+            cursor_blink: true,
+            line_height: 1.0,
             present_mode: PresentModePolicy::Auto,
             theme: None,
             scrollback: 10_000,
@@ -583,6 +647,26 @@ fn apply(config: &mut Config, line: &str) -> Result<(), String> {
         },
         "matugen" => toggle(&value).map(|on| config.matugen = on),
         "window_decorations" => toggle(&value).map(|on| config.window_decorations = on),
+        "tab_bar" => {
+            config.tab_bar = match value.as_str() {
+                "always" => TabBarMode::Always,
+                "auto" => TabBarMode::Auto,
+                "hidden" => TabBarMode::Hidden,
+                _ => return Err(format!("'{value}' is not always, auto or hidden")),
+            };
+            Ok(())
+        }
+        "cursor_shape" => {
+            config.cursor_shape = match value.as_str() {
+                "block" => CursorShapeConfig::Block,
+                "beam" => CursorShapeConfig::Beam,
+                "underline" => CursorShapeConfig::Underline,
+                _ => return Err(format!("'{value}' is not block, beam or underline")),
+            };
+            Ok(())
+        }
+        "cursor_blink" => toggle(&value).map(|on| config.cursor_blink = on),
+        "line_height" => number(&value, 1.0, 1.8).map(|lh| config.line_height = lh),
         "present_mode" => {
             config.present_mode = match value.as_str() {
                 "auto" => PresentModePolicy::Auto,

@@ -429,7 +429,9 @@ pub struct Renderer {
     coverage: fonts::Coverage,
     points: f32,
     scale: f32,
+    line_height: f32,
     cell: Cell,
+    present_modes: Vec<wgpu::PresentMode>,
     surface: wgpu::Surface<'static>,
     queue: wgpu::Queue,
     device: wgpu::Device,
@@ -486,6 +488,7 @@ impl Renderer {
         crate::lag::startup("device_ready");
 
         let capabilities = surface.get_capabilities(&adapter);
+        let present_modes = capabilities.present_modes.clone();
         let format = surface_format(&capabilities.formats);
         let alpha_mode = [
             wgpu::CompositeAlphaMode::PreMultiplied,
@@ -617,7 +620,9 @@ impl Renderer {
             coverage,
             points,
             scale,
+            line_height: 1.0,
             cell,
+            present_modes,
             surface,
             queue,
             device,
@@ -675,6 +680,22 @@ impl Renderer {
         self.remeasure();
     }
 
+    pub fn set_line_height(&mut self, line_height: f32) {
+        let clamped = line_height.clamp(1.0, 1.8);
+        if (self.line_height - clamped).abs() > 1e-3 {
+            self.line_height = clamped;
+            self.remeasure();
+        }
+    }
+
+    pub fn set_present_mode(&mut self, policy: crate::config::PresentModePolicy) {
+        let next = choose_present_mode(policy, &self.present_modes);
+        if self.config.present_mode != next {
+            self.config.present_mode = next;
+            self.surface.configure(&self.device, &self.config);
+        }
+    }
+
     /// The family drawn in place of the one in the config.
     pub fn substitute(&self) -> Option<&str> {
         (self.face.family != self.wanted.family).then_some(self.face.family.as_str())
@@ -682,7 +703,9 @@ impl Renderer {
 
     fn remeasure(&mut self) {
         self.coverage = fonts::Coverage::from_face(self.font_system.db(), &self.face);
-        self.cell = measure(&mut self.font_system, &self.face, self.points, self.scale);
+        let mut cell = measure(&mut self.font_system, &self.face, self.points, self.scale);
+        cell.height = (cell.height * self.line_height).round().max(cell.height);
+        self.cell = cell;
         self.lines = LineCache::default();
     }
 

@@ -353,3 +353,48 @@ fn font_picker_filters_wraps_and_picks_rows() {
     assert!(s2.pick(0, 6));
     assert_eq!(s2.picker.unwrap().selected, 7);
 }
+
+#[test]
+fn blocks_section_and_new_customization_fields_round_trip() {
+    use koral::config::{CursorShapeConfig, PresentModePolicy, TabBarMode};
+    use koral::settings::Section;
+
+    assert_eq!(Section::ALL.len(), 4);
+    assert_eq!(Section::Blocks.label(), "BLOCKS");
+    assert_eq!(value(index("tab_bar"), &Config::default()), "always");
+    assert_eq!(value(index("cursor_shape"), &Config::default()), "block");
+    assert_eq!(value(index("cursor_blink"), &Config::default()), "on");
+    assert_eq!(value(index("line_height"), &Config::default()), "1");
+    assert_eq!(value(index("present_mode"), &Config::default()), "auto");
+    assert_eq!(value(index("auto_fold_lines"), &Config::default()), "0");
+    assert_eq!(value(index("block_minimap"), &Config::default()), "on");
+
+    let (parsed, errors) = parse(
+        "\
+tab_bar auto
+cursor_shape beam
+cursor_blink off
+line_height 1.25
+present_mode mailbox
+auto_fold_lines 40
+block_minimap off
+theme github-dark
+",
+    );
+    assert!(errors.is_empty(), "errors: {errors:?}");
+    assert_eq!(parsed.tab_bar, TabBarMode::Auto);
+    assert_eq!(parsed.cursor_shape, CursorShapeConfig::Beam);
+    assert!(!parsed.cursor_blink);
+    assert!((parsed.line_height - 1.25).abs() < 1e-4);
+    assert_eq!(parsed.present_mode, PresentModePolicy::Mailbox);
+    assert_eq!(parsed.auto_fold_lines, 40);
+    assert!(!parsed.block_minimap);
+    assert_eq!(parsed.theme.as_deref(), Some("github-dark"));
+
+    let mut scrolled = Settings {
+        selected: index("block_minimap"),
+        ..Default::default()
+    };
+    scrolled.keep_selected_visible(12);
+    assert!(scrolled.scroll > 0);
+}

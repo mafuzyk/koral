@@ -167,7 +167,18 @@ fn builtin_themes_resolve_and_have_readable_contrast() {
         };
         0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
     };
-    assert_eq!(BUILTINS.len(), 15);
+    assert_eq!(BUILTINS.len(), 25);
+    for id in [
+        "github-dark",
+        "github-dark-dimmed",
+        "github-light",
+        "kanagawa",
+        "gruvbox-light",
+        "solarized-light",
+        "rose-pine-dawn",
+    ] {
+        assert!(is_builtin(id), "missing theme {id}");
+    }
     for info in BUILTINS {
         assert!(is_builtin(info.id));
         assert_eq!(theme_name(info.id), Some(info.name));
