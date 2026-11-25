@@ -6,10 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Dates use
 `YYYY-MM-DD`; an unreleased section carries the `Unreleased` marker instead of a date.
 
-## [2.0.0-alpha.1] - Unreleased
+## [2.0.0-alpha.1] - 2026-11-25
 
-Foundation for the `2.0.0` update. This section describes local changes only. No
-alpha tag or competitive performance results are implied.
+First `2.0.0` alpha / nightly pre-release, adding block-centric CLI and UI workflows while keeping `1.2.1` as the STABLE release (`koral-bin` stays on `1.2.1`; `koral-bin-nightly` tracks `2.0.0-alpha.1`).
 
 ### Added
 

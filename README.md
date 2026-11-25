@@ -10,7 +10,7 @@
 <p><strong>A shell-agnostic Linux terminal emulator (Wayland &amp; X11) with native <a href="https://github.com/mafuzyk/sharky-shell">sharky</a> support.</strong></p>
 
 <p>
-  Foldable command blocks, native tabs and split panes, 15 built-in themes, Kitty graphics, and live Settings — rendered on the GPU with <code>wgpu</code>.
+  Foldable command blocks, output reuse (`koral @-1` / `@err`), native block diffs, clickable status minimap, smart auto-fold, native tabs and split panes, 25 built-in themes, Kitty graphics, and scrollable live Settings — rendered on the GPU with <code>wgpu</code>.
 </p>
 
 <p>
@@ -22,7 +22,7 @@
 
 <img src="assets/screenshots/hero-koral.png" width="900" alt="koral terminal showing folded sharky commands, inline image rendering, splits, search bar, and clickable file paths" />
 
-<p><em>Foldable command blocks, inline Kitty graphics, split panes, smart-case scrollback search, and clickable file paths (v1.2.1)</em></p>
+<p><em>Foldable command blocks, inline Kitty graphics, split panes, block-scoped search, and clickable file paths (v2.0.0-alpha.1)</em></p>
 
 </div>
 
@@ -31,13 +31,16 @@
 <h2 align="center">Installation</h2>
 
 ```sh
-# Arch Linux (AUR / local packaging/arch/PKGBUILD)
+# Arch Linux STABLE (1.2.1 — AUR / packaging/arch/PKGBUILD)
 paru -S koral-bin
+
+# Arch Linux 2.0 alpha / nightly (2.0.0-alpha.1 — packaging/aur/koral-bin-nightly/PKGBUILD)
+paru -S koral-bin-nightly
 
 # NixOS / Nix flakes
 nix run github:mafuzyk/koral
 
-# Prebuilt Linux x86_64 tarball
+# Prebuilt Linux x86_64 tarball (latest stable or v2.0.0-alpha.1 prerelease)
 curl -fsSLO https://github.com/mafuzyk/koral/releases/latest/download/koral-x86_64-linux.tar.gz
 tar -xzf koral-x86_64-linux.tar.gz
 install -Dm755 koral ~/.local/bin/koral
@@ -160,9 +163,9 @@ full methodology and its `--self-test` option for percentile checks.
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="assets/screenshots/settings-themes.png" width="440" alt="Built-in Settings tab and 14 live-preview themes" />
+      <img src="assets/screenshots/settings-themes.png" width="440" alt="Built-in Settings tab and 25 live-preview themes" />
       <br />
-      <sub><b>Live Settings tab &amp; 14 built-in themes</b></sub>
+      <sub><b>Live Settings tab &amp; 25 built-in themes</b></sub>
     </td>
     <td align="center" width="50%">
       <img src="assets/screenshots/config-keybindings.png" width="440" alt="koral.conf settings and keybinds with inotify live reload and CLI flags" />
@@ -180,7 +183,10 @@ full methodology and its `--self-test` option for percentile checks.
 
 `koral` treats each command as a structured unit rather than undifferentiated scrollback text, with built-in `OSC 133` / `OSC 7` integration for `bash`, `zsh`, `fish`, and `sharky`:
 
-- **Foldable blocks:** click the marker beside any command or press `ctrl+shift+f` to collapse/expand long output with an automatic folded line count.
+- **Foldable blocks & smart auto-fold:** click the marker beside any command or press `ctrl+shift+f` to collapse/expand long output with an automatic folded line count. Opt in via `auto_fold_lines N` (`0` = off) to collapse successful (`exit 0`) commands longer than `N` lines automatically while keeping failures expanded.
+- **Output reuse (`koral @-1` / `@err` / `@<id>`):** pipe the exact stdout of any finished block straight into the next command without re-running (`koral @-1 | jq`, `koral @err | rg error`).
+- **Native block diff (`ctrl+shift+y` / `koral diff-blocks`):** compare the last two blocks (or any two selectors like `koral diff-blocks @-2 @-1`) in a scrollable inline colored diff overlay or unified CLI diff without temporary files.
+- **Block-scoped search & status minimap:** right-edge clickable status ticks (`block_minimap on`) show success/failure/running positions across scrollback; press `ctrl+shift+b` (or toggle `alt+b` inside search) to search only the block under the cursor, and `ctrl+shift+l` to jump straight to the latest failed command.
 - **Status & duration:** every block displays completion status (`✓` / `× <code>`) and elapsed duration on the right.
 - **Prompt navigation & output capture:** jump cleanly between commands (`ctrl+shift+z` / `ctrl+shift+x`) or copy an entire command's output (`ctrl+shift+g`).
 - **Zero rc-file edits:** `shell_integration on` (default) injects `bash` (`--rcfile`), `zsh` (`ZDOTDIR`), and `fish` (`XDG_DATA_DIRS`) hooks from a private runtime directory without modifying your dotfiles. Shell resolution follows `$KORAL_SHELL` → `shell` in `koral.conf` → `sharky` on `PATH` → `$SHELL`.
@@ -192,9 +198,12 @@ full methodology and its `--self-test` option for percentile checks.
 First-class tabs and split panes without `tmux`, paired with scriptable Unix socket control:
 
 - **Launch flags:** `koral [--cwd|--working-directory PATH] [--title TEXT] [--class|--app-id ID] [-e|--command COMMAND [ARGS...]]`
-- **Remote control (`koral ctl`):** every window listens on `$KORAL_SOCKET` (`$XDG_RUNTIME_DIR/koral-<pid>.sock`, `0600` permissions):
+- **Block shortcuts & CLI (`koral ctl`):** pipe prior block output (`koral @-1`, `koral @err`, `koral @42`) or control any window listening on `$KORAL_SOCKET` (`$XDG_RUNTIME_DIR/koral-<pid>.sock`, `0600` permissions):
 
 ```sh
+koral @-1 | jq .                                  # reuse previous block stdout
+koral @err | rg error                             # reuse latest failed block stdout
+koral diff-blocks [@-2 @-1]                       # unified diff between two blocks
 koral ctl new-tab --title logs --cwd /var/log -e tail -f syslog
 koral ctl split right            # also: down | horizontal | vertical
 koral ctl focus left             # also: right | up | down
@@ -207,7 +216,7 @@ koral ctl open-settings
 koral ctl reload
 koral ctl list [--json]
 koral ctl list-blocks [--pane ID] [--json]
-koral ctl get-block-output [--pane ID] [--block ID] [--json]
+koral ctl get-block-output [--pane ID] [--block ID|SELECTOR] [--json]
 koral ctl watch [--pane ID] [--json]
 koral ctl save-session NAME
 koral ctl restore-session NAME
@@ -235,9 +244,12 @@ koral ctl list-sessions [--json]
 | `ctrl+alt+shift+left/right/up/down` | Resize pane divider | `resize_left/right/up/down` |
 | `ctrl+shift+c`, `ctrl+shift+v` | Copy / paste | `copy`, `paste` |
 | `ctrl+shift+z`, `ctrl+shift+x` | Previous / next prompt | `prev_prompt`, `next_prompt` |
+| `ctrl+shift+l` | Jump to latest failed block | `jump_last_error` |
 | `ctrl+shift+f` | Fold or expand command block | `toggle_fold` |
 | `ctrl+shift+g` | Copy command output | `copy_output` |
+| `ctrl+shift+y` | Diff last two command blocks | `diff_blocks` |
 | `ctrl+shift+s` | Search scrollback | `search` |
+| `ctrl+shift+b` | Search active command block | `search_block` |
 | `ctrl+=` / `ctrl+-` (also with `shift`), `ctrl+shift+0` | Zoom in / out / reset | `zoom_in`, `zoom_out`, `zoom_reset` |
 | `shift+pageup`, `shift+pagedown` | Scroll one page | `page_up`, `page_down` |
 | `ctrl+shift+,` | Open Settings tab | `settings` (`open_settings`) |
@@ -250,22 +262,28 @@ Pass `none` or `unbind` in `keybind <shortcut>=unbind` to disable a default shor
 
 ## Settings, themes & configuration
 
-Open the interactive **Settings tab** (`ctrl+shift+,` or click the `⚙` icon in the tab bar) to inspect fixed-width system fonts, preview all 15 themes live, and persist changes directly to `~/.config/koral/koral.conf`. Edits to `~/.config/koral/koral.conf` are watched with `inotify` and reload automatically. Existing `config.sharky` / `config.koral` files are converted once to `koral.conf` on startup and left untouched:
+Open the scrollable **Settings tab** (`ctrl+shift+,` or click the `⚙` icon in the tab bar) to inspect fixed-width system fonts, preview all 25 themes live, tune appearance/typography/terminal/block options, and persist changes directly to `~/.config/koral/koral.conf`. Edits to `~/.config/koral/koral.conf` are watched with `inotify` and reload automatically. Existing `config.sharky` / `config.koral` files are converted once to `koral.conf` on startup and left untouched:
 
 ```conf
 # ~/.config/koral/koral.conf
-theme koral                             # or sharky, dracula, catppuccin-mocha, ...
+theme koral                             # or sharky, github-dark, catppuccin-mocha, ...
 font IosevkaTerm Nerd Font Mono
 font_size 13.5
+line_height 1.0
 font_weight 500
 bold_weight 800
 bold_italic_weight 900
 italic_style oblique
 ligatures on
 # font_features +zero +ss01
+tab_bar always                          # always | auto | hidden
+cursor_shape block                      # block | underline | beam
+cursor_blink on
 opacity 0.8
 padding 8
 scrollback 10000
+auto_fold_lines 0                       # 0 = off; >0 folds successful blocks >N lines
+block_minimap on
 clipboard_read off
 clipboard_write ask
 notifications allow
@@ -278,7 +296,7 @@ keybind ctrl+shift+n=new_tab
 keybind ctrl+shift+t=unbind
 ```
 
-- **15 built-in themes:** `koral`, `sharky` (reads `~/.config/sharky/theme.sharky`), `terminal`, `dracula`, `catppuccin-mocha`, `catppuccin-macchiato`, `catppuccin-frappe`, `catppuccin-latte`, `tokyo-night`, `gruvbox-dark`, `nord`, `rose-pine`, `one-dark`, `solarized-dark`, and `high-contrast`.
+- **25 built-in themes:** `koral`, `sharky` (reads `~/.config/sharky/theme.sharky`), `terminal`, `dracula`, `catppuccin-mocha`, `catppuccin-macchiato`, `catppuccin-frappe`, `catppuccin-latte`, `tokyo-night`, `gruvbox-dark`, `gruvbox-light`, `nord`, `rose-pine`, `rose-pine-dawn`, `one-dark`, `solarized-dark`, `solarized-light`, `github-dark`, `github-dark-dimmed`, `github-light`, `kanagawa`, `everforest-dark`, `ayu-dark`, `monokai-pro`, and `high-contrast`.
 - **Matugen sync:** `matugen on` installs [`assets/koral.matugen`](assets/koral.matugen) into your matugen configuration and updates colours dynamically on wallpaper changes.
 
 ---
