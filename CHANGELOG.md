@@ -13,6 +13,13 @@ alpha tag or competitive performance results are implied.
 
 ### Added
 
+- Block output reuse CLI shorthands: `koral @-1`, `koral @-N`, `koral @err`, and `koral @<id>`, plus `--block` selection on `koral ctl get-block-output`.
+- Native block diff engine (`src/diff.rs`), `koral diff-blocks` CLI command, and scrollable inline diff overlay (`Ctrl+Shift+Y`).
+- Block-scoped search (`Ctrl+Shift+B` / `Alt+B`), right-edge clickable block status minimap (`block_minimap on|off`), and `Ctrl+Shift+L` jump to the latest failed command.
+- Smart opt-in auto-folding for long successful commands (`auto_fold_lines N`, `0` = off; failures stay expanded).
+- Expanded scrollable Settings UI (`Section::Blocks`, `tab_bar`, `cursor_shape`, `cursor_blink`, `line_height`, `bold_italic_weight`, `present_mode`, `auto_fold_lines`, `block_minimap`) and 10 additional built-in themes (25 total, including `github-dark`, `github-dark-dimmed`, and `github-light`).
+- Separate pre-release AUR recipe `packaging/aur/koral-bin-nightly/PKGBUILD` (`koral-bin-nightly`) while keeping `koral-bin` `1.2.1` as STABLE.
+- Live `bash`, `zsh`, and `fish` PTY integration smoke tests in `tests/shell.rs`.
 - Linux AT-SPI accessibility bridge via `accesskit_winit` (publishes window, terminal,
   and visible viewport line nodes lazily when an AT-SPI consumer is active).
 - Arch Linux packaging recipe (`packaging/arch/PKGBUILD`) and compiled `xterm-koral`
@@ -57,6 +64,7 @@ alpha tag or competitive performance results are implied.
 
 ### Changed
 
+- Decoupled PTY reading from terminal parsing and optimized ASCII row fills and keystroke redraw skipping to lower input-to-photon latency and bulk throughput overhead.
 - Configuration moved to `~/.config/koral/koral.conf` (kitty-style `key value`,
   `keybind shortcut=action`, `#` comments), dropping the `sharky-config` dependency.
   Existing `config.sharky` / `config.koral` files are converted once to `koral.conf` and
