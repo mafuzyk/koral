@@ -236,6 +236,7 @@ struct App {
     search: Option<Search>,
     link: Option<(u64, Link)>,
     frame: Option<Frame>,
+    a11y: Option<accesskit_winit::Adapter>,
 }
 
 impl App {
@@ -288,6 +289,7 @@ impl App {
             search: None,
             link: None,
             frame: None,
+            a11y: None,
         }
     }
 
@@ -2053,8 +2055,64 @@ impl App {
             );
         }
         self.frame = Some(frame);
+        self.publish_a11y();
         cost.total = lag::millis(started);
         lag::note(&cost);
+    }
+
+    fn publish_a11y(&mut self) {
+        if self.a11y.is_none() {
+            return;
+        }
+        let pane_lines = self.layout().map_or(24, |l| {
+            let area = l.content_rect();
+            let div = Self::divider_px(l);
+            self.tabs
+                .as_ref()
+                .and_then(Tabs::active)
+                .and_then(Tab::as_tree)
+                .and_then(|tree| {
+                    let active_id = tree.active_id();
+                    tree.layout(area, div)
+                        .0
+                        .into_iter()
+                        .find(|(id, _)| *id == active_id)
+                        .map(|(_, rect)| PaneLayout::from_rect(rect, l).lines())
+                })
+                .unwrap_or(24)
+        });
+        let focused = self.focused;
+        let window_title = if self.window_title.is_empty() {
+            "koral".to_string()
+        } else {
+            self.window_title.clone()
+        };
+        let active_title = match self.tabs.as_ref().and_then(Tabs::active) {
+            Some(Tab::Settings(_)) => "Settings".to_string(),
+            Some(Tab::Terminal(tree)) => {
+                let term = tree.active();
+                let session = term.session.lock();
+                tabs::title(&session.blocks, term.title.as_deref(), self.home.as_deref())
+            }
+            None => "koral".to_string(),
+        };
+        let Some(a11y) = &mut self.a11y else {
+            return;
+        };
+        let tabs_ref = &self.tabs;
+        a11y.update_if_active(|| {
+            let lines = match tabs_ref.as_ref().and_then(Tabs::active) {
+                Some(Tab::Terminal(tree)) => {
+                    let term = tree.active();
+                    let session = term.session.lock();
+                    let rows = term.projected_rows(&session);
+                    koral::a11y::visible_lines(&session.term, &rows, term.scroll, pane_lines)
+                }
+                Some(Tab::Settings(_)) => vec!["Settings".to_string()],
+                None => Vec::new(),
+            };
+            koral::a11y::build_tree(&window_title, &active_title, &lines, focused)
+        });
     }
 
     fn handle_ipc(&mut self, request: Request, event_loop: &ActiveEventLoop) -> String {
@@ -2456,6 +2514,7 @@ impl ApplicationHandler<UserEvent> for App {
             .with_title(title)
             .with_inner_size(LogicalSize::new(960.0, 600.0))
             .with_transparent(true)
+            .with_visible(false)
             .with_decorations(self.config.window_decorations);
         let attributes = WindowAttributesExtWayland::with_name(attributes, class, class);
         let attributes = WindowAttributesExtX11::with_name(attributes, class, class);
@@ -2467,6 +2526,12 @@ impl ApplicationHandler<UserEvent> for App {
                 return;
             }
         };
+        let a11y = accesskit_winit::Adapter::with_event_loop_proxy(
+            event_loop,
+            &window,
+            self.proxy.clone(),
+        );
+        self.a11y = Some(a11y);
         lag::startup("window");
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
             Box::new(event_loop.owned_display_handle()),
@@ -2509,6 +2574,7 @@ impl ApplicationHandler<UserEvent> for App {
         )));
         lag::startup("renderer_ready");
         window.set_ime_allowed(true);
+        window.set_visible(true);
         self.window = Some(window);
         self.sync_refresh_rate();
         if self.ipc.is_none() {
@@ -2664,10 +2730,18 @@ impl ApplicationHandler<UserEvent> for App {
                 let response = self.handle_ipc(request, event_loop);
                 let _ = reply.send(response);
             }
+            UserEvent::AccessKit(event) => {
+                if let accesskit_winit::WindowEvent::InitialTreeRequested = event.window_event {
+                    self.publish_a11y();
+                }
+            }
         }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        if let (Some(a11y), Some(window)) = (&mut self.a11y, &self.window) {
+            a11y.process_event(window, &event);
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {

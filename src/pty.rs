@@ -65,6 +65,13 @@ pub enum UserEvent {
     Size(u64, SizeReply),
     Fonts(Box<FontSystem>, Vec<String>),
     Ipc(crate::ipc::Request, Sender<String>),
+    AccessKit(accesskit_winit::Event),
+}
+
+impl From<accesskit_winit::Event> for UserEvent {
+    fn from(event: accesskit_winit::Event) -> Self {
+        Self::AccessKit(event)
+    }
 }
 
 pub type SizeReply = Arc<dyn Fn(WindowSize) -> String + Sync + Send>;

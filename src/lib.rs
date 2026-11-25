@@ -1,3 +1,4 @@
+pub mod a11y;
 pub mod blink;
 pub mod blocks;
 pub mod boxes;

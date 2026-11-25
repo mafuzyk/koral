@@ -13,6 +13,8 @@ alpha tag or competitive performance results are implied.
 
 ### Added
 
+- Linux AT-SPI accessibility bridge via `accesskit_winit` (publishes window, terminal,
+  and visible viewport line nodes lazily when an AT-SPI consumer is active).
 - Arch Linux packaging recipe (`packaging/arch/PKGBUILD`) and compiled `xterm-koral`
   terminfo bundling in `flake.nix` and `.github/workflows/release.yml`.
 - `koral ctl get-block-output [--pane ID] [--block ID] [--json]`, streaming
