@@ -13,6 +13,8 @@ alpha tag or competitive performance results are implied.
 
 ### Added
 
+- `CSI ?2027` (grapheme clustering mode + `DECRQM` query) keeping ZWJ emoji, skin-tone
+  modifiers, variation selectors, and regional indicator flags in single cell clusters.
 - Extended `koral ctl` with `--pane ID` target selectors (`send-text`, `set-title`,
   `close-pane`, `list-blocks`) and `list-blocks [--json]` (`{"version":1,"blocks":[...]}`).
 - Named session layout save/restore (`save-session`, `restore-session`,

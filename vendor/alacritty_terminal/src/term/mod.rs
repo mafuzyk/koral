@@ -77,6 +77,7 @@ bitflags! {
         const REPORT_ALTERNATE_KEYS   = 1 << 20;
         const REPORT_ALL_KEYS_AS_ESC  = 1 << 21;
         const REPORT_ASSOCIATED_TEXT  = 1 << 22;
+        const GRAPHEME_CLUSTERING     = 1 << 24;
         const MOUSE_MODE              = Self::MOUSE_REPORT_CLICK.bits() | Self::MOUSE_MOTION.bits() | Self::MOUSE_DRAG.bits();
         const KITTY_KEYBOARD_PROTOCOL = Self::DISAMBIGUATE_ESC_CODES.bits()
                                       | Self::REPORT_EVENT_TYPES.bits()
@@ -1118,6 +1119,25 @@ impl<T> Term<T> {
     }
 
     #[inline]
+    fn prev_grapheme_cell(&self) -> Option<(Line, Column)> {
+        if !self.grid.cursor.input_needs_wrap && self.grid.cursor.point.column.0 == 0 {
+            return None;
+        }
+        let line = self.grid.cursor.point.line;
+        let mut column = self.grid.cursor.point.column;
+        if !self.grid.cursor.input_needs_wrap {
+            column.0 = column.saturating_sub(1);
+        }
+        if self.grid[line][column].flags.contains(Flags::WIDE_CHAR_SPACER) {
+            if column.0 == 0 {
+                return None;
+            }
+            column.0 -= 1;
+        }
+        Some((line, column))
+    }
+
+    #[inline]
     fn damage_cursor(&mut self) {
         // The normal cursor coordinates are always in viewport.
         let point =
@@ -1166,6 +1186,26 @@ impl<T: EventListener> Handler for Term<T> {
             Some(width) => width,
             None => return,
         };
+
+        if self.mode.contains(TermMode::GRAPHEME_CLUSTERING)
+            && width > 0
+            && let Some((line, column)) = self.prev_grapheme_cell()
+        {
+            let is_skin_tone = ('\u{1F3FB}'..='\u{1F3FF}').contains(&c);
+            let follows_zwj = self.grid[line][column]
+                .zerowidth()
+                .and_then(|extra| extra.last())
+                == Some(&'\u{200D}');
+            let is_ri_pair = ('\u{1F1E6}'..='\u{1F1FF}').contains(&c)
+                && ('\u{1F1E6}'..='\u{1F1FF}').contains(&self.grid[line][column].c)
+                && !self.grid[line][column].zerowidth().is_some_and(|extra| {
+                    extra.iter().any(|ch| ('\u{1F1E6}'..='\u{1F1FF}').contains(ch))
+                });
+            if is_skin_tone || follows_zwj || is_ri_pair {
+                self.grid[line][column].push_zerowidth(c);
+                return;
+            }
+        }
 
         // Handle zero-width characters.
         if width == 0 {
@@ -2035,6 +2075,10 @@ impl<T: EventListener> Handler for Term<T> {
     fn set_private_mode(&mut self, mode: PrivateMode) {
         let mode = match mode {
             PrivateMode::Named(mode) => mode,
+            PrivateMode::Unknown(2027) => {
+                self.mode.insert(TermMode::GRAPHEME_CLUSTERING);
+                return;
+            },
             PrivateMode::Unknown(mode) => {
                 debug!("Ignoring unknown mode {mode} in set_private_mode");
                 return;
@@ -2098,6 +2142,10 @@ impl<T: EventListener> Handler for Term<T> {
     fn unset_private_mode(&mut self, mode: PrivateMode) {
         let mode = match mode {
             PrivateMode::Named(mode) => mode,
+            PrivateMode::Unknown(2027) => {
+                self.mode.remove(TermMode::GRAPHEME_CLUSTERING);
+                return;
+            },
             PrivateMode::Unknown(mode) => {
                 debug!("Ignoring unknown mode {mode} in unset_private_mode");
                 return;
@@ -2184,6 +2232,9 @@ impl<T: EventListener> Handler for Term<T> {
                 },
                 NamedPrivateMode::SyncUpdate => ModeState::Reset,
                 NamedPrivateMode::ColumnMode => ModeState::NotSupported,
+            },
+            PrivateMode::Unknown(2027) => {
+                self.mode.contains(TermMode::GRAPHEME_CLUSTERING).into()
             },
             PrivateMode::Unknown(_) => ModeState::NotSupported,
         };

@@ -1228,3 +1228,60 @@ fn osc9_progress_and_osc22_cursor_shape_track_and_reset_on_alt_exit() {
     fix.feed("\x1b[?1049l");
     assert_eq!(fix.session.mouse_cursor, None);
 }
+
+#[test]
+fn mode_2027_clusters_zwj_skin_tone_vs16_and_flags_and_reports_decrqm() {
+    use alacritty_terminal::event::{Event, EventListener};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct Collector(Arc<Mutex<Vec<String>>>);
+    impl EventListener for Collector {
+        fn send_event(&self, event: Event) {
+            if let Event::PtyWrite(text) = event {
+                self.0.lock().unwrap().push(text);
+            }
+        }
+    }
+
+    let listener = Collector::default();
+    let config = Config {
+        scrolling_history: 100,
+        ..Config::default()
+    };
+    let term = Term::new(config, &TermSize::new(40, 8), listener.clone());
+    let mut session = Session::new(term);
+    let now = Instant::now();
+
+    session.feed(b"\x1b[?2027$p", now);
+    session.feed(b"\x1b[?2027h\x1b[?2027$p", now);
+    assert!(session.term.mode().contains(TermMode::GRAPHEME_CLUSTERING));
+    assert_eq!(
+        listener.0.lock().unwrap().as_slice(),
+        ["\x1b[?2027;2$y", "\x1b[?2027;1$y"]
+    );
+
+    // ZWJ cluster (👩‍💻), skin tone (👍🏽), VS16 (❤️), flag (🇧🇷) + plain ASCII 'x'.
+    session.feed("👩\u{200D}💻👍🏽❤\u{FE0F}🇧🇷x".as_bytes(), now);
+    let grid = session.term.grid();
+    let line = Line(0);
+    // Col 0..1: 👩 + [ZWJ, 💻]
+    assert_eq!(grid[line][Column(0)].c, '👩');
+    assert_eq!(
+        grid[line][Column(0)].zerowidth(),
+        Some(&['\u{200D}', '💻'][..])
+    );
+    // Col 2..3: 👍 + [🏽]
+    assert_eq!(grid[line][Column(2)].c, '👍');
+    assert_eq!(grid[line][Column(2)].zerowidth(), Some(&['🏽'][..]));
+    // Col 4: ❤ + [️]
+    assert_eq!(grid[line][Column(4)].c, '❤');
+    assert_eq!(grid[line][Column(4)].zerowidth(), Some(&['\u{FE0F}'][..]));
+    // Col 5: 🇧 + [🇷], followed immediately by 'x' on Col 6
+    assert_eq!(grid[line][Column(5)].c, '🇧');
+    assert_eq!(grid[line][Column(5)].zerowidth(), Some(&['🇷'][..]));
+    assert_eq!(grid[line][Column(6)].c, 'x');
+
+    session.feed(b"\x1b[?2027l", now);
+    assert!(!session.term.mode().contains(TermMode::GRAPHEME_CLUSTERING));
+}
