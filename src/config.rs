@@ -10,6 +10,7 @@ const KEYBIND_KEY: &str = "keybind";
 pub const USAGE: &str = "\
 Usage: koral [OPTIONS] [-e COMMAND [ARGS...]]
        koral @-N|@err|@ID [--pane ID] [--json]
+       koral diff-blocks [LEFT] [RIGHT] [--pane ID]
        koral ctl [--socket PATH] COMMAND [ARGS...]
        koral +terminfo install
        koral +ssh [--bootstrap-terminfo] [SSH_ARGS...]
@@ -21,6 +22,7 @@ Usage: koral [OPTIONS] [-e COMMAND [ARGS...]]
   --class, --app-id            window class / Wayland app-id / X11 WM_CLASS
   -e, --command                run COMMAND with ARGS in the initial tab
   @-N | @err | @ID             print stored output of a previous command block
+  diff-blocks                  show unified diff between two blocks (default @-2 @-1)
   ctl                          send a command to a running koral window
   +terminfo install            install the xterm-koral terminfo entry into ~/.terminfo
   +ssh                         run OpenSSH with safe TERM fallback or opt-in terminfo bootstrap
@@ -45,6 +47,11 @@ pub enum Launch {
         pane: Option<u64>,
         json: bool,
     },
+    DiffBlocks {
+        left: String,
+        right: String,
+        pane: Option<u64>,
+    },
     TerminfoInstall,
     Ssh(Vec<String>),
 }
@@ -58,6 +65,43 @@ where
     if iter.peek().is_some_and(|first| first == "ctl") {
         iter.next();
         return Ok(Launch::Control(iter.collect()));
+    }
+    if iter.peek().is_some_and(|first| first == "diff-blocks") {
+        iter.next();
+        let mut positional = Vec::new();
+        let mut pane = None;
+        while let Some(arg) = iter.next() {
+            if let Some(val) = arg.strip_prefix("--pane=") {
+                pane = Some(
+                    val.parse::<u64>()
+                        .map_err(|_| format!("invalid pane id '{val}'"))?,
+                );
+            } else if arg == "--pane" {
+                let val = iter
+                    .next()
+                    .ok_or_else(|| "missing value for '--pane'".to_string())?;
+                pane = Some(
+                    val.parse::<u64>()
+                        .map_err(|_| format!("invalid pane id '{val}'"))?,
+                );
+            } else if arg.starts_with("--") {
+                return Err(format!("unknown diff-blocks option '{arg}'"));
+            } else {
+                positional.push(arg);
+            }
+        }
+        if positional.len() > 2 {
+            return Err("diff-blocks takes at most two block selectors".to_string());
+        }
+        let left = positional
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "@-2".to_string());
+        let right = positional
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| "@-1".to_string());
+        return Ok(Launch::DiffBlocks { left, right, pane });
     }
     if iter.peek().is_some_and(|first| first.starts_with('@')) {
         let selector = iter.next().unwrap();

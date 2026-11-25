@@ -132,4 +132,20 @@ fn parses_launch_options_and_command() {
         })
     );
     assert!(parse_args(["@-1", "--bogus"]).is_err());
+    assert_eq!(
+        parse_args(["diff-blocks"]),
+        Ok(Launch::DiffBlocks {
+            left: "@-2".into(),
+            right: "@-1".into(),
+            pane: None,
+        })
+    );
+    assert_eq!(
+        parse_args(["diff-blocks", "@3", "@7", "--pane", "2"]),
+        Ok(Launch::DiffBlocks {
+            left: "@3".into(),
+            right: "@7".into(),
+            pane: Some(2),
+        })
+    );
 }

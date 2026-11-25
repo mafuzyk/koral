@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -9,6 +10,7 @@ use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use koral::blink::Blink;
 use koral::blocks::Activity;
 use koral::config::{self, Args, Config, Launch, USAGE};
+use koral::diff::{self, DiffLine};
 use koral::fonts;
 use koral::frame::{self, Chrome, CursorView, Frame, Layout, PaneLayout, TabView};
 use koral::input::{self, Action, Clicks, Mouse, resolve_binding};
@@ -154,6 +156,49 @@ fn main() {
                 }
             }
         }
+        Ok(Launch::DiffBlocks { left, right, pane }) => {
+            let result = (|| -> Result<String, String> {
+                let left_sel = ipc::parse_block_selector(&left)?;
+                let right_sel = ipc::parse_block_selector(&right)?;
+                let left_out = ipc::send(
+                    None,
+                    &Request::GetBlockOutput {
+                        pane,
+                        selector: left_sel,
+                        json: false,
+                    },
+                )?;
+                let right_out = ipc::send(
+                    None,
+                    &Request::GetBlockOutput {
+                        pane,
+                        selector: right_sel,
+                        json: false,
+                    },
+                )?;
+                let hunks = diff::diff_lines(&left_out, &right_out, 3);
+                Ok(diff::format_unified(
+                    &hunks,
+                    &left,
+                    &right,
+                    std::io::stdout().is_terminal(),
+                ))
+            })();
+            match result {
+                Ok(text) => {
+                    if text.is_empty() {
+                        println!("no differences");
+                    } else {
+                        print!("{text}");
+                    }
+                    return;
+                }
+                Err(message) => {
+                    eprintln!("koral diff-blocks: {message}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Err(message) => {
             eprintln!("koral: {message}\n\n{USAGE}");
             std::process::exit(2);
@@ -232,6 +277,12 @@ impl Tab {
     }
 }
 
+struct DiffOverlay {
+    title: String,
+    lines: Vec<DiffLine>,
+    scroll: usize,
+}
+
 struct App {
     proxy: EventLoopProxy<UserEvent>,
     args: Args,
@@ -266,6 +317,7 @@ struct App {
     window_title: String,
     notices: Notifier,
     search: Option<Search>,
+    diff_overlay: Option<DiffOverlay>,
     link: Option<(u64, Link)>,
     frame: Option<Frame>,
     a11y: Option<accesskit_winit::Adapter>,
@@ -319,6 +371,7 @@ impl App {
             window_title: String::new(),
             notices,
             search: None,
+            diff_overlay: None,
             link: None,
             frame: None,
             a11y: None,
@@ -775,6 +828,7 @@ impl App {
             Action::NextPrompt => self.jump(view::next_prompt),
             Action::CopyOutput => self.copy_output(),
             Action::ToggleFold => self.toggle_fold(),
+            Action::DiffBlocks => self.toggle_diff_overlay(),
             Action::Search => {
                 self.search.get_or_insert_with(Search::default);
             }
@@ -1247,6 +1301,94 @@ impl App {
         if let Some(id) = view::fold_target(&rows, end, &session.blocks) {
             session.blocks.toggle_fold(id);
         }
+    }
+
+    fn toggle_diff_overlay(&mut self) {
+        if self.diff_overlay.is_some() {
+            self.diff_overlay = None;
+            return;
+        }
+        let overlay = {
+            let Some(tab) = self.active() else {
+                return;
+            };
+            let session = tab.session.lock();
+            let completed: Vec<_> = session
+                .blocks
+                .iter()
+                .filter(|b| b.status.is_some())
+                .collect();
+            let pair = completed.last().copied().and_then(|right| {
+                let left = completed[..completed.len().saturating_sub(1)]
+                    .iter()
+                    .rev()
+                    .find(|b| right.command.is_some() && b.command == right.command)
+                    .or_else(|| completed.get(completed.len().saturating_sub(2)))
+                    .copied()?;
+                Some((left, right))
+            });
+            match pair {
+                None => DiffOverlay {
+                    title: "Diff blocks (need 2 completed blocks)".to_string(),
+                    lines: Vec::new(),
+                    scroll: 0,
+                },
+                Some((left, right)) => {
+                    let left_text = view::output_text(&session.term, &session.blocks, left.id)
+                        .unwrap_or_default();
+                    let right_text = view::output_text(&session.term, &session.blocks, right.id)
+                        .unwrap_or_default();
+                    let hunks = diff::diff_lines(&left_text, &right_text, 3);
+                    let lines: Vec<DiffLine> = hunks.into_iter().flat_map(|h| h.lines).collect();
+                    let cmd = right
+                        .command
+                        .as_deref()
+                        .and_then(|c| c.lines().next())
+                        .unwrap_or("block");
+                    DiffOverlay {
+                        title: format!("Diff: {cmd} (#{} vs #{})", left.id, right.id),
+                        lines,
+                        scroll: 0,
+                    }
+                }
+            }
+        };
+        self.diff_overlay = Some(overlay);
+    }
+
+    fn diff_overlay_key(&mut self, key: &Key, text: Option<&str>) {
+        let page = self.page().max(1) as usize;
+        let Some(overlay) = &mut self.diff_overlay else {
+            return;
+        };
+        match key {
+            Key::Named(NamedKey::Escape) => {
+                self.diff_overlay = None;
+            }
+            Key::Character(_) if text.is_some_and(|t| t.eq_ignore_ascii_case("q")) => {
+                self.diff_overlay = None;
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                overlay.scroll = overlay.scroll.saturating_sub(1);
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                overlay.scroll = (overlay.scroll + 1).min(overlay.lines.len().saturating_sub(1));
+            }
+            Key::Character(_) if text == Some("k") => {
+                overlay.scroll = overlay.scroll.saturating_sub(1);
+            }
+            Key::Character(_) if text == Some("j") => {
+                overlay.scroll = (overlay.scroll + 1).min(overlay.lines.len().saturating_sub(1));
+            }
+            Key::Named(NamedKey::PageUp) => {
+                overlay.scroll = overlay.scroll.saturating_sub(page);
+            }
+            Key::Named(NamedKey::PageDown) => {
+                overlay.scroll = (overlay.scroll + page).min(overlay.lines.len().saturating_sub(1));
+            }
+            _ => {}
+        }
+        self.redraw();
     }
 
     fn clipboard(&mut self) -> Option<&mut Clipboard> {
@@ -2043,6 +2185,15 @@ impl App {
                 settings,
                 &self.config,
                 self.settings_error.as_deref().or(notice.as_deref()),
+                layout,
+                &display_theme,
+            );
+        } else if let Some(overlay) = &self.diff_overlay {
+            frame::draw_diff_overlay(
+                &mut frame,
+                &overlay.title,
+                &overlay.lines,
+                overlay.scroll,
                 layout,
                 &display_theme,
             );
@@ -2858,6 +3009,10 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if let Some(action) = action {
                     self.run(action, event_loop);
+                    return;
+                }
+                if self.diff_overlay.is_some() {
+                    self.diff_overlay_key(&event.logical_key, event.text.as_deref());
                     return;
                 }
                 if self.search.is_some() {

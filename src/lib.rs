@@ -3,6 +3,7 @@ pub mod blink;
 pub mod blocks;
 pub mod boxes;
 pub mod config;
+pub mod diff;
 pub mod fonts;
 pub mod format;
 pub mod frame;

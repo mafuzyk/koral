@@ -44,6 +44,7 @@ fn block_actions_have_keys() {
     assert_eq!(letter("X", CTRL_SHIFT), Some(Action::NextPrompt));
     assert_eq!(letter("G", CTRL_SHIFT), Some(Action::CopyOutput));
     assert_eq!(letter("F", CTRL_SHIFT), Some(Action::ToggleFold));
+    assert_eq!(letter("Y", CTRL_SHIFT), Some(Action::DiffBlocks));
 }
 
 #[test]

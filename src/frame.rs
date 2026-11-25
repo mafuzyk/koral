@@ -11,6 +11,7 @@ use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 use crate::blocks::{Activity, Block, BlockStore};
 use crate::boxes;
 use crate::config::Config;
+use crate::diff::{DiffLine, DiffTag};
 use crate::fonts::Coverage;
 use crate::format;
 use crate::graphics::Graphics;
@@ -762,6 +763,112 @@ pub fn draw_consent(frame: &mut Frame, prompt: &str, layout: Layout, theme: &The
         spans: vec![Span::plain(fit(&text, room), theme.foreground)],
         clip: None,
     });
+}
+
+pub fn draw_diff_overlay(
+    frame: &mut Frame,
+    title: &str,
+    lines: &[DiffLine],
+    scroll: usize,
+    layout: Layout,
+    theme: &Theme,
+) {
+    let area = layout.content_rect();
+    let (scale, cell) = (layout.scale, layout.cell);
+    let margin = (18.0 * scale).min(area.width * 0.08);
+    let x = area.x + margin;
+    let y = area.y + margin * 0.7;
+    let width = (area.width - margin * 2.0).max(120.0 * scale);
+    let height = (area.height - margin * 1.4).max(cell.height * 4.0);
+    let inset = PANEL_INSET * scale;
+
+    frame.quads.push(Quad {
+        x,
+        y,
+        width,
+        height,
+        color: rgba(mix(theme.background, theme.foreground, 0.06), 0.98),
+        shape: Shape::Rounded {
+            radius: 10.0 * scale,
+        },
+    });
+
+    let header_h = cell.height + 10.0 * scale;
+    frame.quads.push(Quad::new(
+        x + inset,
+        y + header_h,
+        (width - inset * 2.0).max(1.0),
+        scale.max(1.0),
+        rgba(theme.muted, 0.25),
+    ));
+
+    let hint = "Esc/q close · ↑↓/jk scroll";
+    let hint_cols = hint.chars().count();
+    let max_cols = ((width - inset * 2.0) / cell.width).floor().max(1.0) as usize;
+    let title_room = max_cols.saturating_sub(hint_cols + 2);
+    let header_clip = Some([x + inset, y, (width - inset * 2.0).max(1.0), header_h]);
+    frame.lines.push(TextLine {
+        x: x + inset,
+        y: y + 4.0 * scale,
+        small: false,
+        spans: vec![Span::plain(fit(title, title_room), theme.accent)],
+        clip: header_clip,
+    });
+    if max_cols > hint_cols + 4 {
+        frame.lines.push(TextLine {
+            x: x + width - inset - hint_cols as f32 * cell.width,
+            y: y + 4.0 * scale,
+            small: true,
+            spans: vec![Span::plain(hint.to_string(), theme.muted)],
+            clip: header_clip,
+        });
+    }
+
+    let body_y = y + header_h + 6.0 * scale;
+    let body_h = (height - header_h - 10.0 * scale).max(cell.height);
+    let visible_rows = (body_h / cell.height).floor().max(1.0) as usize;
+    let body_clip = Some([x + inset, body_y, (width - inset * 2.0).max(1.0), body_h]);
+
+    if lines.is_empty() {
+        frame.lines.push(TextLine {
+            x: x + inset,
+            y: body_y,
+            small: false,
+            spans: vec![Span::plain(
+                "No differences between compared blocks.",
+                theme.muted,
+            )],
+            clip: body_clip,
+        });
+        return;
+    }
+
+    let start = scroll.min(lines.len().saturating_sub(1));
+    for (row_idx, line) in lines[start..].iter().take(visible_rows).enumerate() {
+        let ly = body_y + row_idx as f32 * cell.height;
+        let (prefix, color, tint) = match line.tag {
+            DiffTag::Added => ("+", theme.success, Some(rgba(theme.success, 0.12))),
+            DiffTag::Removed => ("-", theme.failure, Some(rgba(theme.failure, 0.12))),
+            DiffTag::Equal => (" ", theme.muted, None),
+        };
+        if let Some(bg) = tint {
+            frame.quads.push(Quad::new(
+                x + inset * 0.5,
+                ly,
+                (width - inset).max(1.0),
+                cell.height,
+                bg,
+            ));
+        }
+        let shown = fit(&format!("{prefix} {}", line.text), max_cols);
+        frame.lines.push(TextLine {
+            x: x + inset,
+            y: ly,
+            small: false,
+            spans: vec![Span::plain(shown, color)],
+            clip: body_clip,
+        });
+    }
 }
 
 /// A panel in the bottom right corner. Gives its x, width and the y of its text.
