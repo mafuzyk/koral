@@ -2788,11 +2788,34 @@ impl ApplicationHandler<UserEvent> for App {
         let confirm = self.confirming.map(|(_, at)| at + CONFIRM_WINDOW);
         let ask = self.notices.confirmation_due();
         let notice = self.notices.notification_due();
+        let mut anim_deadline = None;
+        let mut anim_redraw = false;
+        if let Some(tabs) = &self.tabs {
+            for tab in tabs.iter() {
+                if let Some(tree) = tab.as_tree() {
+                    for (_, term) in tree.iter() {
+                        let mut session = term.session.lock();
+                        let (changed, next) = session.graphics.advance_animations(now);
+                        if changed {
+                            anim_redraw = true;
+                        }
+                        if let Some(next) = next {
+                            anim_deadline =
+                                Some(anim_deadline.map_or(next, |prev: Instant| prev.min(next)));
+                        }
+                    }
+                }
+            }
+        }
+        if anim_redraw {
+            self.redraw();
+        }
         let deadline = blink
             .into_iter()
             .chain(confirm)
             .chain(ask)
             .chain(notice)
+            .chain(anim_deadline)
             .min();
         event_loop.set_control_flow(match deadline {
             Some(deadline) => ControlFlow::WaitUntil(deadline),

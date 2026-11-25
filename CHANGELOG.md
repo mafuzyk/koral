@@ -13,6 +13,8 @@ alpha tag or competitive performance results are implied.
 
 ### Added
 
+- Kitty graphics protocol animation support (`a=f` frames, `a=a` playback/loop control,
+  `a=c` frame composition) scheduled on the event loop without busy polling.
 - `OSC 5522` extended clipboard protocol (`text/plain` and `image/png`, `clipboard` and
   `primary` targets) gated by `clipboard_write` / `clipboard_read` policies.
 - `CSI ?2027` (grapheme clustering mode + `DECRQM` query) keeping ZWJ emoji, skin-tone

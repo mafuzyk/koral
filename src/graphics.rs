@@ -2,6 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{Cursor, Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
@@ -97,6 +98,8 @@ struct Keys {
     more: bool,
     z: i32,
     virtual_placement: bool,
+    composition: u32,
+    src_y: u32,
 }
 
 impl Default for Keys {
@@ -119,6 +122,8 @@ impl Default for Keys {
             more: false,
             z: 0,
             virtual_placement: false,
+            composition: 0,
+            src_y: 0,
         }
     }
 }
@@ -135,10 +140,44 @@ struct Decoded {
     rgba: Vec<u8>,
 }
 
+const DEFAULT_FRAME_GAP_MS: u32 = 100;
+const MIN_FRAME_GAP_MS: u32 = 10;
+const MAX_ANIM_FRAMES: usize = 512;
+
+#[derive(Clone)]
+struct AnimFrame {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+    gap_ms: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AnimState {
+    Stop,
+    Loading,
+    Run,
+}
+
+struct Animation {
+    frames: Vec<AnimFrame>,
+    state: AnimState,
+    current: usize,
+    loops_done: u32,
+    max_loops: Option<u32>,
+    next_tick: Option<Instant>,
+}
+
+impl Animation {
+    fn total_bytes(&self) -> usize {
+        self.frames.iter().map(|frame| frame.rgba.len()).sum()
+    }
+}
+
 /// The kitty graphics protocol for one terminal, without the grid or the GPU.
-// shortcut: no animation support; unicode placeholders and z-index are supported.
 pub struct Graphics {
     images: HashMap<u32, Arc<Image>>,
+    animations: HashMap<u32, Animation>,
     order: VecDeque<u32>,
     used: usize,
     placements: HashMap<u32, Placement>,
@@ -153,6 +192,7 @@ impl Default for Graphics {
     fn default() -> Self {
         Self {
             images: HashMap::new(),
+            animations: HashMap::new(),
             order: VecDeque::new(),
             used: 0,
             placements: HashMap::new(),
@@ -209,7 +249,7 @@ impl Graphics {
         let keys = transfer.keys;
         // Reading paths or shared memory would let any printed file read this machine, so a medium
         // that carries data must be answered with an error instead of being dropped.
-        if matches!(keys.action, b't' | b'T' | b'q') && keys.medium != b'd' {
+        if matches!(keys.action, b't' | b'T' | b'q' | b'f') && keys.medium != b'd' {
             return Outcome {
                 reply: reply(keys, Err("ENOTSUPPORTED:only direct transmission")),
                 place: None,
@@ -240,6 +280,21 @@ impl Graphics {
             },
             b'q' => Outcome {
                 reply: reply(keys, decode(transfer).map(|_| ())),
+                place: None,
+                delete: None,
+            },
+            b'f' => Outcome {
+                reply: reply(keys, self.transmit_frame(transfer)),
+                place: None,
+                delete: None,
+            },
+            b'a' => Outcome {
+                reply: reply(keys, self.control_animation(keys)),
+                place: None,
+                delete: None,
+            },
+            b'c' => Outcome {
+                reply: reply(keys, self.compose_frames(keys)),
                 place: None,
                 delete: None,
             },
@@ -277,6 +332,294 @@ impl Graphics {
                 delete: None,
             },
         }
+    }
+
+    fn ensure_animation(&mut self, id: u32) -> Result<(), &'static str> {
+        let base = self.images.get(&id).ok_or("ENOENT:no such image")?.clone();
+        if !self.animations.contains_key(&id) {
+            if self.used.saturating_add(base.rgba.len()) > MAX_STORE {
+                return Err("EFBIG:store limit exceeded");
+            }
+            let base_frame = AnimFrame {
+                width: base.width,
+                height: base.height,
+                rgba: base.rgba.clone(),
+                gap_ms: DEFAULT_FRAME_GAP_MS,
+            };
+            self.used += base_frame.rgba.len();
+            self.animations.insert(
+                id,
+                Animation {
+                    frames: vec![base_frame],
+                    state: AnimState::Stop,
+                    current: 0,
+                    loops_done: 0,
+                    max_loops: None,
+                    next_tick: None,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    fn transmit_frame(&mut self, transfer: &Transfer) -> Result<(), &'static str> {
+        let keys = transfer.keys;
+        let id = keys.image;
+        if id == 0 {
+            return Err("EINVAL:missing image id");
+        }
+        let decoded = decode(transfer)?;
+        let base = self.images.get(&id).ok_or("ENOENT:no such image")?.clone();
+        let (cw, ch) = (base.width, base.height);
+        let canvas_bytes = (cw as usize)
+            .checked_mul(ch as usize)
+            .and_then(|n| n.checked_mul(4))
+            .ok_or("EFBIG:image too large")?;
+        if canvas_bytes > MAX_IMAGE {
+            return Err("EFBIG:image too large");
+        }
+        let gap_ms = keys.z.max(0) as u32;
+        let gap_ms = if gap_ms == 0 {
+            DEFAULT_FRAME_GAP_MS
+        } else {
+            gap_ms.max(MIN_FRAME_GAP_MS)
+        };
+        let replace = keys.composition == 1;
+        let (dx, dy) = (keys.crop[0], keys.crop[1]);
+
+        self.ensure_animation(id)?;
+        let used = self.used;
+        let anim = self.animations.get_mut(&id).ok_or("ENOENT:no such image")?;
+        let mut canvas = if keys.columns > 0 {
+            let src_idx = (keys.columns - 1) as usize;
+            let src = anim.frames.get(src_idx).ok_or("ENOENT:no such frame")?;
+            src.rgba.clone()
+        } else {
+            vec![0; canvas_bytes]
+        };
+        composite_rect(
+            &mut canvas,
+            cw,
+            ch,
+            &decoded.rgba,
+            decoded.width,
+            decoded.height,
+            dx,
+            dy,
+            0,
+            0,
+            decoded.width,
+            decoded.height,
+            replace,
+        );
+
+        let frame = AnimFrame {
+            width: cw,
+            height: ch,
+            rgba: canvas,
+            gap_ms,
+        };
+        let frame_len = frame.rgba.len();
+        let mut replace_active: Option<Arc<Image>> = None;
+        if keys.rows > 0 {
+            let idx = (keys.rows - 1) as usize;
+            if idx >= anim.frames.len() {
+                return Err("ENOENT:no such frame");
+            }
+            let old_len = anim.frames[idx].rgba.len();
+            if idx == anim.current {
+                replace_active = Some(Arc::new(Image {
+                    generation: GENERATION.fetch_add(1, Ordering::Relaxed),
+                    width: frame.width,
+                    height: frame.height,
+                    rgba: frame.rgba.clone(),
+                }));
+            }
+            anim.frames[idx] = frame;
+            self.used = self.used - old_len + frame_len;
+        } else {
+            if anim.frames.len() >= MAX_ANIM_FRAMES {
+                return Err("EFBIG:too many animation frames");
+            }
+            if used.saturating_add(frame_len) > MAX_STORE {
+                return Err("EFBIG:store limit exceeded");
+            }
+            anim.frames.push(frame);
+            self.used += frame_len;
+        }
+        if let Some(active_img) = replace_active
+            && let Some(old) = self.images.insert(id, active_img)
+        {
+            self.used = self.used - old.rgba.len() + canvas_bytes;
+        }
+        self.evict_excess();
+        Ok(())
+    }
+
+    fn control_animation(&mut self, keys: Keys) -> Result<(), &'static str> {
+        let id = keys.image;
+        let anim = self.animations.get_mut(&id).ok_or("ENOENT:no such image")?;
+        if keys.rows > 0 {
+            let idx = (keys.rows - 1) as usize;
+            let frame = anim.frames.get_mut(idx).ok_or("ENOENT:no such frame")?;
+            if keys.z > 0 {
+                frame.gap_ms = (keys.z as u32).max(MIN_FRAME_GAP_MS);
+            }
+        }
+        if keys.height > 0 {
+            anim.max_loops = if keys.height == 1 {
+                None
+            } else {
+                Some(keys.height - 1)
+            };
+        }
+        if keys.columns > 0 {
+            let target = (keys.columns - 1) as usize;
+            let frame = anim.frames.get(target).ok_or("ENOENT:no such frame")?;
+            anim.current = target;
+            let active = Arc::new(Image {
+                generation: GENERATION.fetch_add(1, Ordering::Relaxed),
+                width: frame.width,
+                height: frame.height,
+                rgba: frame.rgba.clone(),
+            });
+            let new_len = active.rgba.len();
+            if let Some(old) = self.images.insert(id, active) {
+                self.used = self.used - old.rgba.len() + new_len;
+            }
+        }
+        match keys.width {
+            0 => {}
+            1 => {
+                anim.state = AnimState::Stop;
+                anim.next_tick = None;
+            }
+            2 => {
+                anim.state = AnimState::Loading;
+                anim.next_tick = None;
+            }
+            3 => {
+                anim.state = AnimState::Run;
+                anim.loops_done = 0;
+                anim.next_tick = None;
+            }
+            _ => return Err("EINVAL:unknown animation state"),
+        }
+        Ok(())
+    }
+
+    fn compose_frames(&mut self, keys: Keys) -> Result<(), &'static str> {
+        let anim = self
+            .animations
+            .get_mut(&keys.image)
+            .ok_or("ENOENT:no such image")?;
+        if keys.columns == 0 || keys.rows == 0 {
+            return Err("EINVAL:missing frame index");
+        }
+        let dst_idx = (keys.columns - 1) as usize;
+        let src_idx = (keys.rows - 1) as usize;
+        if dst_idx >= anim.frames.len() || src_idx >= anim.frames.len() {
+            return Err("ENOENT:no such frame");
+        }
+        let src = anim.frames[src_idx].clone();
+        let dst = &mut anim.frames[dst_idx];
+        let w = if keys.crop[2] == 0 {
+            src.width
+        } else {
+            keys.crop[2]
+        };
+        let h = if keys.crop[3] == 0 {
+            src.height
+        } else {
+            keys.crop[3]
+        };
+        composite_rect(
+            &mut dst.rgba,
+            dst.width,
+            dst.height,
+            &src.rgba,
+            src.width,
+            src.height,
+            keys.crop[0],
+            keys.crop[1],
+            keys.composition,
+            keys.src_y,
+            w,
+            h,
+            keys.keep_cursor,
+        );
+        if dst_idx == anim.current {
+            let active = Arc::new(Image {
+                generation: GENERATION.fetch_add(1, Ordering::Relaxed),
+                width: dst.width,
+                height: dst.height,
+                rgba: dst.rgba.clone(),
+            });
+            let new_len = active.rgba.len();
+            if let Some(old) = self.images.insert(keys.image, active) {
+                self.used = self.used - old.rgba.len() + new_len;
+            }
+        }
+        Ok(())
+    }
+
+    /// Advances active animations due by `now`, returning whether any frame changed and the
+    /// earliest upcoming tick deadline.
+    pub fn advance_animations(&mut self, now: Instant) -> (bool, Option<Instant>) {
+        let mut changed = false;
+        let mut earliest: Option<Instant> = None;
+        for (&id, anim) in &mut self.animations {
+            if anim.state != AnimState::Run || anim.frames.len() < 2 {
+                continue;
+            }
+            let active_placed = self.placements.values().any(|p| p.image == id)
+                || self.virtuals.values().any(|p| p.image == id);
+            if !active_placed {
+                continue;
+            }
+            let gap = Duration::from_millis(u64::from(
+                anim.frames
+                    .get(anim.current)
+                    .map_or(DEFAULT_FRAME_GAP_MS, |f| f.gap_ms.max(MIN_FRAME_GAP_MS)),
+            ));
+            let Some(due) = anim.next_tick else {
+                let next = now + gap;
+                anim.next_tick = Some(next);
+                earliest = Some(earliest.map_or(next, |prev| prev.min(next)));
+                continue;
+            };
+            if now < due {
+                earliest = Some(earliest.map_or(due, |prev| prev.min(due)));
+                continue;
+            }
+            let next_idx = (anim.current + 1) % anim.frames.len();
+            if next_idx == 0 {
+                anim.loops_done = anim.loops_done.saturating_add(1);
+                if anim.max_loops.is_some_and(|max| anim.loops_done >= max) {
+                    anim.state = AnimState::Stop;
+                    anim.next_tick = None;
+                    continue;
+                }
+            }
+            anim.current = next_idx;
+            let frame = &anim.frames[next_idx];
+            let active = Arc::new(Image {
+                generation: GENERATION.fetch_add(1, Ordering::Relaxed),
+                width: frame.width,
+                height: frame.height,
+                rgba: frame.rgba.clone(),
+            });
+            let new_len = active.rgba.len();
+            if let Some(old) = self.images.insert(id, active) {
+                self.used = self.used - old.rgba.len() + new_len;
+            }
+            changed = true;
+            let next_gap = Duration::from_millis(u64::from(frame.gap_ms.max(MIN_FRAME_GAP_MS)));
+            let next = now + next_gap;
+            anim.next_tick = Some(next);
+            earliest = Some(earliest.map_or(next, |prev| prev.min(next)));
+        }
+        (changed, earliest)
     }
 
     fn store(&mut self, id: u32, decoded: Decoded) -> u32 {
@@ -317,6 +660,11 @@ impl Graphics {
             }),
         );
 
+        self.evict_excess();
+        id
+    }
+
+    fn evict_excess(&mut self) {
         while self.used > MAX_STORE {
             // A preview nothing shows goes before an image a placement still keeps on screen; only
             // when every image has one does the oldest transmission go.
@@ -342,13 +690,15 @@ impl Graphics {
             self.virtuals
                 .retain(|_, placement| placement.image != victim);
         }
-        id
     }
 
     fn forget(&mut self, id: u32) {
         if let Some(image) = self.images.remove(&id) {
             self.used -= image.rgba.len();
             self.order.retain(|other| *other != id);
+        }
+        if let Some(anim) = self.animations.remove(&id) {
+            self.used -= anim.total_bytes();
         }
     }
 
@@ -534,6 +884,7 @@ impl Graphics {
                 self.virtuals.clear();
                 if free {
                     self.images.clear();
+                    self.animations.clear();
                     self.order.clear();
                     self.used = 0;
                 }
@@ -708,6 +1059,8 @@ fn parse(body: &[u8]) -> Option<(Keys, &[u8])> {
             "m" => keys.more = number == 1,
             "z" => keys.z = signed,
             "U" => keys.virtual_placement = number == 1,
+            "X" => keys.composition = number,
+            "Y" => keys.src_y = number,
             _ => {}
         }
     }
@@ -802,6 +1155,47 @@ pub fn encode_png_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, 
         .map_err(|_| "EINVAL:png encode")?;
     drop(writer);
     Ok(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn composite_rect(
+    dst: &mut [u8],
+    dw: u32,
+    dh: u32,
+    src: &[u8],
+    sw: u32,
+    sh: u32,
+    dx: u32,
+    dy: u32,
+    sx: u32,
+    sy: u32,
+    w: u32,
+    h: u32,
+    replace: bool,
+) {
+    if dx >= dw || dy >= dh || sx >= sw || sy >= sh {
+        return;
+    }
+    let copy_w = w.min(dw - dx).min(sw - sx);
+    let copy_h = h.min(dh - dy).min(sh - sy);
+    for row in 0..copy_h {
+        for col in 0..copy_w {
+            let s_idx = (((sy + row) * sw + (sx + col)) * 4) as usize;
+            let d_idx = (((dy + row) * dw + (dx + col)) * 4) as usize;
+            let s = &src[s_idx..s_idx + 4];
+            let d = &mut dst[d_idx..d_idx + 4];
+            if replace || s[3] == 255 {
+                d.copy_from_slice(s);
+            } else if s[3] > 0 {
+                let sa = u16::from(s[3]);
+                let inv = 255 - sa;
+                for c in 0..3 {
+                    d[c] = ((u16::from(s[c]) * sa + u16::from(d[c]) * inv + 127) / 255) as u8;
+                }
+                d[3] = ((sa * 255 + u16::from(d[3]) * inv + 127) / 255) as u8;
+            }
+        }
+    }
 }
 
 fn decode_png(raw: &[u8]) -> Result<Decoded, &'static str> {

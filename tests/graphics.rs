@@ -180,7 +180,7 @@ fn a_query_over_an_unsupported_medium_reports_it() {
 #[test]
 fn an_action_the_terminal_does_not_implement_is_answered() {
     let mut g = graphics();
-    let reply = send(&mut g, "a=f,f=24,s=1,v=1,i=9", &[0; 3]).reply.unwrap();
+    let reply = send(&mut g, "a=z,f=24,s=1,v=1,i=9", &[0; 3]).reply.unwrap();
     assert!(reply.contains("EINVAL"), "{reply:?}");
 }
 
@@ -744,4 +744,58 @@ fn graphics_limits_are_exposed_and_bounded() {
     body.extend(vec![b'A'; MAX_TRANSFER + 1]);
     let _ = graphics.handle(&body);
     assert!(graphics.used() <= MAX_IMAGE);
+}
+
+#[test]
+fn animation_frames_control_playback_compose_and_loop() {
+    use std::time::{Duration, Instant};
+
+    let mut g = graphics();
+    let base = Instant::now();
+    // Base image id=10, 2x1 RGBA red, placed so advance_animations ticks it.
+    let transmit = send(
+        &mut g,
+        "a=T,f=32,s=2,v=1,i=10",
+        &[255, 0, 0, 255, 255, 0, 0, 255],
+    );
+    assert_eq!(transmit.reply.as_deref(), Some("\x1b_Gi=10;OK\x1b\\"));
+    let req = transmit.place.unwrap();
+    g.place(req, &[]);
+
+    // Frame 2 (`a=f`, 1x1 blue at x=1, replace mode X=1, gap 50ms).
+    let f2 = send(
+        &mut g,
+        "a=f,f=32,s=1,v=1,i=10,x=1,y=0,z=50,X=1",
+        &[0, 0, 255, 255],
+    );
+    assert_eq!(f2.reply.as_deref(), Some("\x1b_Gi=10;OK\x1b\\"));
+
+    // Compose frame 1 onto frame 2's pixel at x=0 (`a=c`).
+    let comp = send(&mut g, "a=c,i=10,r=1,c=2,w=1,h=1,x=0,y=0,C=1", &[]);
+    assert_eq!(comp.reply.as_deref(), Some("\x1b_Gi=10;OK\x1b\\"));
+
+    let gen0 = g.image(10).unwrap().generation;
+    // Start animation (`a=a,s=3,v=2` => run 1 loop).
+    let run = send(&mut g, "a=a,i=10,s=3,v=2", &[]);
+    assert_eq!(run.reply.as_deref(), Some("\x1b_Gi=10;OK\x1b\\"));
+
+    // First call schedules next tick without swapping yet.
+    let (changed, next) = g.advance_animations(base);
+    assert!(!changed);
+    assert!(next.is_some());
+
+    // After default 100ms gap on frame 0, advances to frame 1 (red+blue composite).
+    let t1 = base + Duration::from_millis(120);
+    let (changed, next) = g.advance_animations(t1);
+    assert!(changed);
+    assert!(next.is_some());
+    let img1 = g.image(10).unwrap();
+    assert_ne!(img1.generation, gen0);
+    assert_eq!(img1.rgba, vec![255, 0, 0, 255, 0, 0, 255, 255]);
+
+    // After frame 1 gap (50ms), reaches loop limit (v=2 -> 1 loop) and stops.
+    let t2 = t1 + Duration::from_millis(60);
+    let (changed, next) = g.advance_animations(t2);
+    assert!(!changed);
+    assert!(next.is_none());
 }
