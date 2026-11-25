@@ -46,6 +46,8 @@ pub struct Session<L> {
     grid_revision: u64,
     /// True when the VT parser is proven to be in Ground state for fast ASCII batching.
     ascii_ground: bool,
+    /// Opt-in line threshold above which successful (`exit 0`) blocks auto-fold on completion.
+    pub auto_fold_lines: usize,
 }
 
 impl<L: EventListener> Session<L> {
@@ -56,6 +58,7 @@ impl<L: EventListener> Session<L> {
             term,
             grid_revision: 0,
             ascii_ground: true,
+            auto_fold_lines: 0,
             blocks: BlockStore::default(),
             graphics: Graphics::default(),
             replies: Vec::new(),
@@ -104,6 +107,7 @@ impl<L: EventListener> Session<L> {
             alt_screen,
             grid_revision,
             ascii_ground,
+            auto_fold_lines,
         } = self;
         let width = term.grid().columns();
         // shortcut: the row counts are read again on the next read, so a frame drawn
@@ -207,10 +211,32 @@ impl<L: EventListener> Session<L> {
                             Mark::Cwd(path) => Some(("cwd", None, Some(path.clone()), None)),
                             _ => None,
                         };
+                        let finished_ok = mark == Mark::CommandEnd(Some(0));
                         if let Some(id) = blocks.apply(mark, now) {
                             let line = anchor(term, id, *prompt_start);
                             let feeds = blocks.get(id).map_or(0, |block| block.prompt_breaks);
                             blocks.set_prompt_lines(id, prompt_rows(term, line, feeds));
+                        }
+                        if finished_ok
+                            && *auto_fold_lines > 0
+                            && let Some(block_id) = blocks.latest().map(|b| b.id)
+                            && let Some(anchor_line) = find_anchor_back(term, block_id)
+                        {
+                            let grid = term.grid();
+                            let last = Column(grid.columns() - 1);
+                            let mut cmd_end = anchor_line;
+                            let cursor = grid.cursor.point;
+                            while cmd_end < cursor.line
+                                && grid[cmd_end][last].flags.contains(Flags::WRAPLINE)
+                            {
+                                cmd_end = Line(cmd_end.0 + 1);
+                            }
+                            let trailing = i32::from(cursor.column.0 == 0);
+                            let output_lines =
+                                (cursor.line.0 - cmd_end.0 - trailing).max(0) as usize;
+                            if output_lines > *auto_fold_lines {
+                                blocks.set_folded(block_id, true);
+                            }
                         }
                         if let Some((kind, cmd, path, status)) = event_info {
                             let latest = blocks.latest();
@@ -410,6 +436,20 @@ fn anchor<L>(term: &mut Term<L>, id: u32, start: Option<Line>) -> Line {
         cell.push_zerowidth(ch);
     }
     line
+}
+
+fn find_anchor_back<L>(term: &Term<L>, id: u32) -> Option<Line> {
+    let ch = anchor_char(id);
+    let grid = term.grid();
+    let top = grid.topmost_line().0;
+    let bottom = grid.cursor.point.line.0.min(grid.bottommost_line().0);
+    (top..=bottom).rev().find_map(|num| {
+        let line = Line(num);
+        grid[line][Column(0)]
+            .zerowidth()
+            .is_some_and(|extra| extra.contains(&ch))
+            .then_some(line)
+    })
 }
 
 /// Rows the prompt takes above `line`. A reflow changes the rows but not the line

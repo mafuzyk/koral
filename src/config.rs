@@ -252,6 +252,7 @@ pub struct Config {
     pub ligatures: bool,
     pub font_features: Vec<([u8; 4], u32)>,
     pub block_minimap: bool,
+    pub auto_fold_lines: usize,
 }
 
 impl Default for Config {
@@ -279,6 +280,7 @@ impl Default for Config {
             ligatures: true,
             font_features: Vec::new(),
             block_minimap: true,
+            auto_fold_lines: 0,
         }
     }
 }
@@ -572,6 +574,13 @@ fn apply(config: &mut Config, line: &str) -> Result<(), String> {
         "clipboard_write" => policy(&value).map(|policy| config.clipboard_write = policy),
         "notifications" => policy(&value).map(|policy| config.notifications = policy),
         "block_minimap" => toggle(&value).map(|on| config.block_minimap = on),
+        "auto_fold_lines" => match value.parse::<usize>() {
+            Ok(lines) if lines <= 1_000_000 => {
+                config.auto_fold_lines = lines;
+                Ok(())
+            }
+            _ => Err(format!("'{value}' is not an integer from 0 to 1000000")),
+        },
         "matugen" => toggle(&value).map(|on| config.matugen = on),
         "window_decorations" => toggle(&value).map(|on| config.window_decorations = on),
         "present_mode" => {

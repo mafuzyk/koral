@@ -1307,3 +1307,18 @@ fn osc5522_clipboard_ops_queue_in_session() {
         ]
     );
 }
+
+#[test]
+fn auto_fold_only_folds_long_successful_blocks() {
+    let mut fix = Fixture::new(40, 24);
+    fix.session.auto_fold_lines = 3;
+
+    fix.command("short-ok", &["1", "2", "3"], 0);
+    assert!(!fix.session.blocks.latest().unwrap().folded);
+
+    fix.command("long-fail", &["1", "2", "3", "4", "5"], 1);
+    assert!(!fix.session.blocks.latest().unwrap().folded);
+
+    fix.command("long-ok", &["1", "2", "3", "4"], 0);
+    assert!(fix.session.blocks.latest().unwrap().folded);
+}

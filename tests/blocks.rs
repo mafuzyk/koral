@@ -237,3 +237,18 @@ fn last_failed_id_returns_latest_nonzero_exit() {
 
     assert_eq!(store.last_failed_id(), Some(fail_id));
 }
+
+#[test]
+fn set_folded_updates_only_on_change() {
+    let mut store = BlockStore::default();
+    let now = Instant::now();
+    run(&mut store, now, "seq 10", 0);
+    let id = store.latest().unwrap().id;
+    let before = store.revision();
+
+    store.set_folded(id, false);
+    assert_eq!(store.revision(), before);
+    store.set_folded(id, true);
+    assert!(store.get(id).unwrap().folded);
+    assert!(store.revision() > before);
+}

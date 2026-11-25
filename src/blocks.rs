@@ -176,6 +176,15 @@ impl BlockStore {
         }
     }
 
+    pub fn set_folded(&mut self, id: u32, folded: bool) {
+        if let Some(block) = self.blocks.get_mut(&id)
+            && block.folded != folded
+        {
+            block.folded = folded;
+            self.changed();
+        }
+    }
+
     pub fn any_folded(&self) -> bool {
         self.blocks.values().any(|block| block.folded)
     }

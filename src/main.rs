@@ -570,6 +570,7 @@ impl App {
         };
         if let Some(term) = &mut terminal {
             term.set_refresh_millihertz(self.refresh_millihertz);
+            term.session.lock().auto_fold_lines = self.config.auto_fold_lines;
             if title.is_some() {
                 term.title = title;
             }
@@ -975,6 +976,13 @@ impl App {
             window.set_decorations(config.window_decorations);
         }
         self.config = config;
+        if let Some(tabs) = &self.tabs {
+            for tree in tabs.iter().filter_map(Tab::as_tree) {
+                for (_, terminal) in tree.iter() {
+                    terminal.session.lock().auto_fold_lines = self.config.auto_fold_lines;
+                }
+            }
+        }
         self.theme = matugen::resolve_theme(self.config.matugen, self.config.theme.as_deref());
 
         if font_changed && let Some(renderer) = &mut self.renderer {
@@ -1022,6 +1030,13 @@ impl App {
             window.set_decorations(config.window_decorations);
         }
         self.config = config;
+        if let Some(tabs) = &self.tabs {
+            for tree in tabs.iter().filter_map(Tab::as_tree) {
+                for (_, terminal) in tree.iter() {
+                    terminal.session.lock().auto_fold_lines = self.config.auto_fold_lines;
+                }
+            }
+        }
         self.theme = matugen::resolve_theme(self.config.matugen, self.config.theme.as_deref());
         if font_changed && let Some(renderer) = &mut self.renderer {
             renderer.set_font(
