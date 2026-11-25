@@ -12,7 +12,7 @@ use koral::config::{self, Args, Config, Launch, USAGE};
 use koral::fonts;
 use koral::frame::{self, Chrome, CursorView, Frame, Layout, PaneLayout, TabView};
 use koral::input::{self, Action, Clicks, Mouse, resolve_binding};
-use koral::ipc::{self, Request};
+use koral::ipc::{self, BlockSelector, Request};
 use koral::keyboard::{self, KeyPress, Stage};
 use koral::lag;
 use koral::links::{self, Link};
@@ -117,6 +117,38 @@ fn main() {
                         println!("{}", koral::ipc::json_error(&message));
                     } else {
                         eprintln!("koral ctl: {message}");
+                    }
+                    std::process::exit(1);
+                }
+            }
+        }
+        Ok(Launch::BlockOutput {
+            selector,
+            pane,
+            json,
+        }) => {
+            let result = ipc::parse_block_selector(&selector).and_then(|sel| {
+                ipc::send(
+                    None,
+                    &Request::GetBlockOutput {
+                        pane,
+                        selector: sel,
+                        json,
+                    },
+                )
+            });
+            match result {
+                Ok(out) => {
+                    if !out.is_empty() {
+                        println!("{out}");
+                    }
+                    return;
+                }
+                Err(message) => {
+                    if json {
+                        println!("{}", ipc::json_error(&message));
+                    } else {
+                        eprintln!("koral: {message}");
                     }
                     std::process::exit(1);
                 }
@@ -2237,7 +2269,11 @@ impl App {
                     Err(message) => format!("ERR {message}\n"),
                 }
             }
-            Request::GetBlockOutput { pane, block, json } => {
+            Request::GetBlockOutput {
+                pane,
+                selector,
+                json,
+            } => {
                 let target = match pane {
                     Some(id) => self.terminal(id).map(|t| (id, t)).ok_or("pane not found"),
                     None => self
@@ -2248,14 +2284,28 @@ impl App {
                 match target {
                     Ok((pane_id, term)) => {
                         let session = term.session.lock();
-                        let block_id = block.or_else(|| {
-                            session
+                        let block_id = match selector {
+                            BlockSelector::Last => session
                                 .blocks
                                 .iter()
                                 .rfind(|b| b.status.is_some())
                                 .or_else(|| session.blocks.latest())
-                                .map(|b| b.id)
-                        });
+                                .map(|b| b.id),
+                            BlockSelector::Offset(n) => session
+                                .blocks
+                                .iter()
+                                .rev()
+                                .filter(|b| b.status.is_some())
+                                .nth(n.saturating_sub(1))
+                                .map(|b| b.id),
+                            BlockSelector::LastFailed => session
+                                .blocks
+                                .iter()
+                                .rev()
+                                .find(|b| b.status.is_some_and(|code| code != 0))
+                                .map(|b| b.id),
+                            BlockSelector::Id(id) => Some(id),
+                        };
                         let Some(block_id) = block_id else {
                             return "ERR block not found\n".to_string();
                         };

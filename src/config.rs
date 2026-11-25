@@ -9,6 +9,7 @@ const KEYBIND_KEY: &str = "keybind";
 
 pub const USAGE: &str = "\
 Usage: koral [OPTIONS] [-e COMMAND [ARGS...]]
+       koral @-N|@err|@ID [--pane ID] [--json]
        koral ctl [--socket PATH] COMMAND [ARGS...]
        koral +terminfo install
        koral +ssh [--bootstrap-terminfo] [SSH_ARGS...]
@@ -19,6 +20,7 @@ Usage: koral [OPTIONS] [-e COMMAND [ARGS...]]
   --title                      initial window and tab title
   --class, --app-id            window class / Wayland app-id / X11 WM_CLASS
   -e, --command                run COMMAND with ARGS in the initial tab
+  @-N | @err | @ID             print stored output of a previous command block
   ctl                          send a command to a running koral window
   +terminfo install            install the xterm-koral terminfo entry into ~/.terminfo
   +ssh                         run OpenSSH with safe TERM fallback or opt-in terminfo bootstrap
@@ -38,6 +40,11 @@ pub enum Launch {
     Version,
     Run(Args),
     Control(Vec<String>),
+    BlockOutput {
+        selector: String,
+        pane: Option<u64>,
+        json: bool,
+    },
     TerminfoInstall,
     Ssh(Vec<String>),
 }
@@ -51,6 +58,36 @@ where
     if iter.peek().is_some_and(|first| first == "ctl") {
         iter.next();
         return Ok(Launch::Control(iter.collect()));
+    }
+    if iter.peek().is_some_and(|first| first.starts_with('@')) {
+        let selector = iter.next().unwrap();
+        let mut pane = None;
+        let mut json = false;
+        while let Some(arg) = iter.next() {
+            if arg == "--json" {
+                json = true;
+            } else if let Some(val) = arg.strip_prefix("--pane=") {
+                pane = Some(
+                    val.parse::<u64>()
+                        .map_err(|_| format!("invalid pane id '{val}'"))?,
+                );
+            } else if arg == "--pane" {
+                let val = iter
+                    .next()
+                    .ok_or_else(|| "missing value for '--pane'".to_string())?;
+                pane = Some(
+                    val.parse::<u64>()
+                        .map_err(|_| format!("invalid pane id '{val}'"))?,
+                );
+            } else {
+                return Err(format!("unknown block output option '{arg}'"));
+            }
+        }
+        return Ok(Launch::BlockOutput {
+            selector,
+            pane,
+            json,
+        });
     }
     if iter.peek().is_some_and(|first| first == "+ssh") {
         iter.next();

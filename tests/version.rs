@@ -115,4 +115,21 @@ fn parses_launch_options_and_command() {
             "list".into()
         ]))
     );
+    assert_eq!(
+        parse_args(["@-1"]),
+        Ok(Launch::BlockOutput {
+            selector: "@-1".into(),
+            pane: None,
+            json: false,
+        })
+    );
+    assert_eq!(
+        parse_args(["@err", "--pane", "3", "--json"]),
+        Ok(Launch::BlockOutput {
+            selector: "@err".into(),
+            pane: Some(3),
+            json: true,
+        })
+    );
+    assert!(parse_args(["@-1", "--bogus"]).is_err());
 }

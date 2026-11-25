@@ -3,9 +3,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use koral::ipc::{
-    BlockEvent, BlockInfo, PaneInfo, Request, Server, TabInfo, TabKind, decode, encode, json_error,
-    json_string, parse_cli, render_block_output_json, render_blocks_json, render_blocks_text,
-    render_event_ndjson, render_list_json, render_list_text, send, watch,
+    BlockEvent, BlockInfo, BlockSelector, PaneInfo, Request, Server, TabInfo, TabKind, decode,
+    encode, json_error, json_string, parse_block_selector, parse_cli, render_block_output_json,
+    render_blocks_json, render_blocks_text, render_event_ndjson, render_list_json,
+    render_list_text, send, watch,
 };
 use koral::splits::{Axis, Dir};
 
@@ -66,8 +67,18 @@ fn wire_encode_decode_round_trips_all_commands() {
         },
         Request::GetBlockOutput {
             pane: Some(4),
-            block: Some(9),
+            selector: BlockSelector::Id(9),
             json: true,
+        },
+        Request::GetBlockOutput {
+            pane: None,
+            selector: BlockSelector::Offset(2),
+            json: false,
+        },
+        Request::GetBlockOutput {
+            pane: Some(1),
+            selector: BlockSelector::LastFailed,
+            json: false,
         },
         Request::Watch { pane: Some(2) },
         Request::SaveSession("work-1".to_string()),
@@ -361,10 +372,34 @@ fn get_block_output_and_ndjson_watch_stream_work() {
         .1,
         Request::GetBlockOutput {
             pane: Some(2),
-            block: Some(7),
+            selector: BlockSelector::Id(7),
             json: true,
         }
     );
+    assert_eq!(
+        parse_cli(&["get-block-output".into(), "--block=@-2".into()])
+            .unwrap()
+            .1,
+        Request::GetBlockOutput {
+            pane: None,
+            selector: BlockSelector::Offset(2),
+            json: false,
+        }
+    );
+    assert_eq!(
+        parse_cli(&["get-block-output".into(), "--block".into(), "@err".into()])
+            .unwrap()
+            .1,
+        Request::GetBlockOutput {
+            pane: None,
+            selector: BlockSelector::LastFailed,
+            json: false,
+        }
+    );
+    assert_eq!(parse_block_selector("@-1"), Ok(BlockSelector::Offset(1)));
+    assert_eq!(parse_block_selector("@err"), Ok(BlockSelector::LastFailed));
+    assert_eq!(parse_block_selector("@42"), Ok(BlockSelector::Id(42)));
+    assert!(parse_block_selector("@-0").is_err());
     assert_eq!(
         parse_cli(&["watch".into(), "--pane=4".into(), "--json".into()])
             .unwrap()

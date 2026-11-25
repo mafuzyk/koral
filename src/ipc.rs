@@ -51,7 +51,7 @@ pub enum Request {
     },
     GetBlockOutput {
         pane: Option<u64>,
-        block: Option<u32>,
+        selector: BlockSelector,
         json: bool,
     },
     Watch {
@@ -80,12 +80,49 @@ Commands:
   send-text [--pane ID] TEXT
   list [--json]
   list-blocks [--pane ID] [--json]
-  get-block-output [--pane ID] [--block ID] [--json]
+  get-block-output [--pane ID] [--block SEL] [--json]
   watch [--pane ID] [--json]
   save-session NAME
   restore-session NAME
   list-sessions [--json]
 ";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BlockSelector {
+    #[default]
+    Last,
+    Offset(usize),
+    LastFailed,
+    Id(u32),
+}
+
+pub fn parse_block_selector(spec: &str) -> Result<BlockSelector, String> {
+    let raw = spec.strip_prefix('@').unwrap_or(spec).trim();
+    if raw.is_empty() {
+        return Err("empty block selector".to_string());
+    }
+    if raw.eq_ignore_ascii_case("last") {
+        return Ok(BlockSelector::Last);
+    }
+    if raw.eq_ignore_ascii_case("err")
+        || raw.eq_ignore_ascii_case("error")
+        || raw.eq_ignore_ascii_case("failed")
+    {
+        return Ok(BlockSelector::LastFailed);
+    }
+    if let Some(rest) = raw.strip_prefix('-') {
+        let offset = rest
+            .parse::<usize>()
+            .ok()
+            .filter(|n| *n >= 1)
+            .ok_or_else(|| format!("invalid relative block selector '{spec}'"))?;
+        return Ok(BlockSelector::Offset(offset));
+    }
+    let id = raw
+        .parse::<u32>()
+        .map_err(|_| format!("invalid block selector '{spec}'"))?;
+    Ok(BlockSelector::Id(id))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockEvent {
@@ -436,7 +473,11 @@ pub fn encode(req: &Request) -> String {
                 parts.push(format!("pane:{id}"));
             }
         }
-        Request::GetBlockOutput { pane, block, json } => {
+        Request::GetBlockOutput {
+            pane,
+            selector,
+            json,
+        } => {
             parts.push(if *json {
                 "get-block-output-json".to_string()
             } else {
@@ -445,8 +486,11 @@ pub fn encode(req: &Request) -> String {
             if let Some(id) = pane {
                 parts.push(format!("pane:{id}"));
             }
-            if let Some(bid) = block {
-                parts.push(format!("block:{bid}"));
+            match selector {
+                BlockSelector::Last => {}
+                BlockSelector::Offset(n) => parts.push(format!("block:offset:{n}")),
+                BlockSelector::LastFailed => parts.push("block:err".to_string()),
+                BlockSelector::Id(bid) => parts.push(format!("block:{bid}")),
             }
         }
         Request::Watch { pane } => {
@@ -555,25 +599,36 @@ pub fn decode(line: &str) -> Result<Request, String> {
         }),
         "get-block-output" | "get-block-output-json" => {
             let mut pane = None;
-            let mut block = None;
+            let mut selector = BlockSelector::Last;
             for field in fields {
                 if let Some(id) = field.strip_prefix("pane:") {
                     pane = Some(
                         id.parse::<u64>()
                             .map_err(|_| format!("invalid pane id '{id}'"))?,
                     );
-                } else if let Some(bid) = field.strip_prefix("block:") {
-                    block = Some(
-                        bid.parse::<u32>()
-                            .map_err(|_| format!("invalid block id '{bid}'"))?,
-                    );
+                } else if let Some(sel) = field.strip_prefix("block:") {
+                    selector = if sel == "err" {
+                        BlockSelector::LastFailed
+                    } else if let Some(off) = sel.strip_prefix("offset:") {
+                        let n = off
+                            .parse::<usize>()
+                            .ok()
+                            .filter(|n| *n >= 1)
+                            .ok_or_else(|| format!("invalid block offset '{off}'"))?;
+                        BlockSelector::Offset(n)
+                    } else {
+                        BlockSelector::Id(
+                            sel.parse::<u32>()
+                                .map_err(|_| format!("invalid block id '{sel}'"))?,
+                        )
+                    };
                 } else {
                     return Err(format!("unknown field '{field}'"));
                 }
             }
             Ok(Request::GetBlockOutput {
                 pane,
-                block,
+                selector,
                 json: cmd == "get-block-output-json",
             })
         }
@@ -861,31 +916,25 @@ pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> 
         }
         "get-block-output" => {
             let mut pane = None;
-            let mut block = None;
+            let mut selector = BlockSelector::Last;
             let mut flag_json = json;
             while let Some(arg) = iter.next() {
                 if arg == "--json" {
                     flag_json = true;
                 } else if let Some(val) = arg.strip_prefix("--block=") {
-                    block = Some(
-                        val.parse::<u32>()
-                            .map_err(|_| format!("invalid block id '{val}'"))?,
-                    );
+                    selector = parse_block_selector(val)?;
                 } else if arg == "--block" {
                     let val = iter
                         .next()
                         .ok_or_else(|| "missing value for '--block'".to_string())?;
-                    block = Some(
-                        val.parse::<u32>()
-                            .map_err(|_| format!("invalid block id '{val}'"))?,
-                    );
+                    selector = parse_block_selector(val)?;
                 } else if !take_pane_flag(arg, &mut iter, &mut pane)? {
                     return Err(format!("unknown get-block-output option '{arg}'"));
                 }
             }
             Request::GetBlockOutput {
                 pane,
-                block,
+                selector,
                 json: flag_json,
             }
         }
