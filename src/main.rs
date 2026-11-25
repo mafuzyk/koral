@@ -826,12 +826,14 @@ impl App {
             Action::Paste => self.paste(LinuxClipboardKind::Clipboard),
             Action::PreviousPrompt => self.jump(view::previous_prompt),
             Action::NextPrompt => self.jump(view::next_prompt),
+            Action::JumpLastError => self.jump_to_last_error(),
             Action::CopyOutput => self.copy_output(),
             Action::ToggleFold => self.toggle_fold(),
             Action::DiffBlocks => self.toggle_diff_overlay(),
             Action::Search => {
                 self.search.get_or_insert_with(Search::default);
             }
+            Action::SearchBlock => self.open_scoped_search(),
             Action::PageUp => self.scroll_lines(self.page()),
             Action::PageDown => self.scroll_lines(-self.page()),
             Action::OpenSettings => {
@@ -1045,6 +1047,19 @@ impl App {
             Key::Named(NamedKey::Backspace) => self.search_edit(|query| {
                 query.pop();
             }),
+            _ if self.mods == ModifiersState::ALT
+                && text.is_some_and(|t| t.eq_ignore_ascii_case("b")) =>
+            {
+                let next_scope = if self.search.as_ref().is_some_and(|s| s.scope.is_some()) {
+                    None
+                } else {
+                    self.active_block_scope()
+                };
+                if let Some(search) = &mut self.search {
+                    search.set_scope(next_scope);
+                }
+                self.search_step(Direction::Left);
+            }
             _ if !self.mods.control_key() => self.search_type(text.unwrap_or("")),
             _ => {}
         }
@@ -1268,6 +1283,50 @@ impl App {
         let top = frame::visible_top(&rows, lines, tab.scroll);
         if let Some(index) = target(&rows, top) {
             tab.scroll = rows.len().saturating_sub(lines + index);
+        }
+    }
+
+    fn active_block_scope(
+        &self,
+    ) -> Option<(
+        alacritty_terminal::index::Line,
+        alacritty_terminal::index::Line,
+    )> {
+        let (_, _, pane) = self.active_pane()?;
+        let lines = pane.lines();
+        let tab = self.active()?;
+        let session = tab.session.lock();
+        let rows = tab.projected_rows(&session);
+        let end = frame::visible_top(&rows, lines, tab.scroll) + lines;
+        let id = view::fold_target(&rows, end, &session.blocks)
+            .or_else(|| session.blocks.latest().map(|b| b.id))?;
+        view::block_line_range(&session.term, &session.blocks, id)
+    }
+
+    fn open_scoped_search(&mut self) {
+        let scope = self.active_block_scope();
+        let search = self.search.get_or_insert_with(Search::default);
+        search.set_scope(scope);
+    }
+
+    fn jump_to_last_error(&mut self) {
+        let Some((_, _, pane)) = self.active_pane() else {
+            return;
+        };
+        let lines = pane.lines();
+        let Some(tab) = self.active_mut() else {
+            return;
+        };
+        let target_idx = {
+            let session = tab.session.lock();
+            let Some(err_id) = session.blocks.last_failed_id() else {
+                return;
+            };
+            let rows = tab.projected_rows(&session);
+            view::block_row(&rows, err_id).map(|idx| (rows.len(), idx))
+        };
+        if let Some((total, index)) = target_idx {
+            tab.scroll = total.saturating_sub(lines + index.saturating_sub(lines / 4));
         }
     }
 
@@ -1785,6 +1844,23 @@ impl App {
         let Some((id, point, block, pane)) = self.point_under_cursor() else {
             return;
         };
+        let (cx, cy) = self.cursor;
+        if self.config.block_minimap
+            && let Some(tab) = self.terminal_mut(id)
+        {
+            let target = {
+                let session = tab.session.lock();
+                let rows = tab.projected_rows(&session);
+                frame::minimap_target(&rows, &session.blocks, pane, cx, cy)
+                    .map(|idx| (rows.len(), idx))
+            };
+            if let Some((total, index)) = target {
+                tab.scroll =
+                    total.saturating_sub(pane.lines() + index.saturating_sub(pane.lines() / 4));
+                self.redraw();
+                return;
+            }
+        }
         if pane.in_gutter(self.cursor.0) {
             if let (Some(block_id), Some(tab)) = (block, self.terminal(id)) {
                 tab.session.lock().blocks.toggle_fold(block_id);
@@ -2120,6 +2196,15 @@ impl App {
                         *pane,
                         &display_theme,
                     );
+                    if self.config.block_minimap {
+                        frame::draw_block_minimap(
+                            &mut frame,
+                            &session.blocks,
+                            rows,
+                            *pane,
+                            &display_theme,
+                        );
+                    }
                     let top = frame::visible_top(rows, pane.lines(), *scroll);
                     let shown = &rows[top..rows.len().min(top + pane.lines())];
                     if *id == active_id
@@ -2198,11 +2283,12 @@ impl App {
                 &display_theme,
             );
         } else if let Some(search) = &self.search {
-            frame::draw_search_bar_status(
+            frame::draw_search_bar_scoped(
                 &mut frame,
                 &search.query,
                 search.current.is_some(),
                 search.position,
+                search.scope.is_some(),
                 layout,
                 &display_theme,
             );

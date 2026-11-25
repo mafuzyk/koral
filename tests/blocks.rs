@@ -223,3 +223,17 @@ fn the_oldest_blocks_are_dropped_at_the_limit() {
     assert!(store.get(first).is_none());
     assert_eq!(store.latest().unwrap().command.as_deref(), Some("again"));
 }
+
+#[test]
+fn last_failed_id_returns_latest_nonzero_exit() {
+    let mut store = BlockStore::default();
+    let now = Instant::now();
+    assert_eq!(store.last_failed_id(), None);
+
+    run(&mut store, now, "ok-1", 0);
+    run(&mut store, now, "fail-1", 2);
+    let fail_id = store.latest().unwrap().id;
+    run(&mut store, now, "ok-2", 0);
+
+    assert_eq!(store.last_failed_id(), Some(fail_id));
+}

@@ -251,6 +251,7 @@ pub struct Config {
     pub oblique: bool,
     pub ligatures: bool,
     pub font_features: Vec<([u8; 4], u32)>,
+    pub block_minimap: bool,
 }
 
 impl Default for Config {
@@ -277,6 +278,7 @@ impl Default for Config {
             oblique: true,
             ligatures: true,
             font_features: Vec::new(),
+            block_minimap: true,
         }
     }
 }
@@ -569,6 +571,7 @@ fn apply(config: &mut Config, line: &str) -> Result<(), String> {
         "clipboard_read" => toggle(&value).map(|on| config.clipboard_read = on),
         "clipboard_write" => policy(&value).map(|policy| config.clipboard_write = policy),
         "notifications" => policy(&value).map(|policy| config.notifications = policy),
+        "block_minimap" => toggle(&value).map(|on| config.block_minimap = on),
         "matugen" => toggle(&value).map(|on| config.matugen = on),
         "window_decorations" => toggle(&value).map(|on| config.window_decorations = on),
         "present_mode" => {

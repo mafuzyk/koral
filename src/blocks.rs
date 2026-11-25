@@ -150,6 +150,13 @@ impl BlockStore {
         self.get(*self.order.back()?)
     }
 
+    pub fn last_failed_id(&self) -> Option<u32> {
+        self.iter()
+            .rev()
+            .find(|block| block.status.is_some_and(|code| code != 0))
+            .map(|block| block.id)
+    }
+
     pub fn len(&self) -> usize {
         self.order.len()
     }

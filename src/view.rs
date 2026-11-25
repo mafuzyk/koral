@@ -241,6 +241,25 @@ pub fn row_of(rows: &[Row], line: Line) -> Option<usize> {
     rows.binary_search_by_key(&line, |row| row.line).ok()
 }
 
+pub fn block_row(rows: &[Row], id: u32) -> Option<usize> {
+    rows.iter().position(|row| row.block == Some(id))
+}
+
+pub fn block_line_range<L: EventListener>(
+    term: &Term<L>,
+    blocks: &BlockStore,
+    id: u32,
+) -> Option<(Line, Line)> {
+    let grid = term.grid();
+    let headers = headers(term, blocks);
+    let index = headers.iter().position(|(_, header)| *header == id)?;
+    let start = prompt_top(headers[index], blocks);
+    let end = headers
+        .get(index + 1)
+        .map_or(grid.bottommost_line(), |next| prompt_top(*next, blocks) - 1);
+    Some((start, end.max(start)))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ProjectionKey {
     grid_len: usize,

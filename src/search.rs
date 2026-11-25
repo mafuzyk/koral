@@ -22,6 +22,7 @@ pub struct Search {
     pub query: String,
     pub current: Option<Match>,
     pub position: Option<(usize, usize)>,
+    pub scope: Option<(Line, Line)>,
     regex: Option<RegexSearch>,
 }
 
@@ -35,12 +36,54 @@ impl Search {
         self.position = None;
     }
 
+    pub fn set_scope(&mut self, scope: Option<(Line, Line)>) {
+        self.scope = scope;
+        self.current = None;
+        self.position = None;
+    }
+
     pub fn step<L: EventListener>(
         &mut self,
         term: &Term<L>,
         direction: Direction,
     ) -> Option<Match> {
         let regex = self.regex.as_mut()?;
+        if let Some((scope_top, scope_bottom)) = self.scope {
+            let start = Point::new(scope_top, Column(0));
+            let end = Point::new(scope_bottom, term.last_column());
+            let matches: Vec<Match> =
+                RegexIter::new(start, end, Direction::Right, term, regex).collect();
+            if matches.is_empty() {
+                self.current = None;
+                self.position = None;
+                return None;
+            }
+            let idx = match &self.current {
+                None => match direction {
+                    Direction::Left => matches.len() - 1,
+                    Direction::Right => 0,
+                },
+                Some(current) => {
+                    let cur = matches.iter().position(|m| m.start() == current.start());
+                    match (cur, direction) {
+                        (Some(i), Direction::Right) => (i + 1) % matches.len(),
+                        (Some(i), Direction::Left) => {
+                            if i == 0 {
+                                matches.len() - 1
+                            } else {
+                                i - 1
+                            }
+                        }
+                        (None, Direction::Left) => matches.len() - 1,
+                        (None, Direction::Right) => 0,
+                    }
+                }
+            };
+            self.current = Some(matches[idx].clone());
+            self.position = Some((idx + 1, matches.len()));
+            return self.current.clone();
+        }
+
         let bottom = Point::new(term.bottommost_line(), term.last_column());
         let origin = match (&self.current, direction) {
             (None, _) => bottom,
@@ -71,6 +114,15 @@ impl Search {
     ) -> Vec<Match> {
         let Some(regex) = self.regex.as_mut() else {
             return Vec::new();
+        };
+        let (first, last) = match self.scope {
+            Some((scope_top, scope_bottom)) => {
+                if last < scope_top || first > scope_bottom {
+                    return Vec::new();
+                }
+                (first.max(scope_top), last.min(scope_bottom))
+            }
+            None => (first, last),
         };
         let start = Point::new(first, Column(0));
         let end = Point::new(last, term.last_column());

@@ -629,6 +629,87 @@ pub fn draw_pane_overlays<L: EventListener>(
     }
 }
 
+fn minimap_rect(pane: PaneLayout) -> (f32, f32, f32, f32) {
+    let strip_w = (6.0 * pane.scale).round().max(4.0);
+    let track_x = pane.x + pane.width - strip_w - (2.0 * pane.scale).round();
+    let track_y = pane.grid_y();
+    let track_h = pane.lines() as f32 * pane.cell.height;
+    (track_x, track_y, strip_w, track_h)
+}
+
+/// Draws right-edge status ticks for all command blocks in `rows`.
+pub fn draw_block_minimap(
+    frame: &mut Frame,
+    blocks: &BlockStore,
+    rows: &[Row],
+    pane: PaneLayout,
+    theme: &Theme,
+) {
+    if rows.is_empty() || blocks.is_empty() {
+        return;
+    }
+    let (track_x, track_y, strip_w, track_h) = minimap_rect(pane);
+    let tick_h = (4.0 * pane.scale).round().max(3.0);
+    let total = rows.len().max(1) as f32;
+    let mut has_ticks = false;
+    for (idx, row) in rows.iter().enumerate() {
+        let Some(block) = row.block.and_then(|id| blocks.get(id)) else {
+            continue;
+        };
+        if !has_ticks {
+            frame.quads.push(Quad::new(
+                track_x,
+                track_y,
+                strip_w,
+                track_h,
+                rgba(theme.muted, 0.10),
+            ));
+            has_ticks = true;
+        }
+        let color = match block.status {
+            Some(0) => theme.success,
+            Some(_) => theme.failure,
+            None => theme.accent,
+        };
+        let tick_y = track_y + (idx as f32 / total) * (track_h - tick_h).max(0.0);
+        frame.quads.push(Quad::new(
+            track_x,
+            tick_y,
+            strip_w,
+            tick_h,
+            rgba(color, 0.85),
+        ));
+    }
+}
+
+/// Maps a left click inside the pane's right-edge block minimap to the nearest block row index.
+pub fn minimap_target(
+    rows: &[Row],
+    blocks: &BlockStore,
+    pane: PaneLayout,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
+    if rows.is_empty() || blocks.is_empty() {
+        return None;
+    }
+    let (track_x, track_y, strip_w, track_h) = minimap_rect(pane);
+    let hit_pad = (4.0 * pane.scale).max(2.0);
+    if x < track_x - hit_pad || x > track_x + strip_w + hit_pad {
+        return None;
+    }
+    if y < track_y || y > track_y + track_h {
+        return None;
+    }
+    let frac = ((y - track_y) / track_h.max(1.0)).clamp(0.0, 1.0);
+    let target_idx = (frac * rows.len() as f32) as usize;
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| row.block.is_some())
+        .min_by_key(|(idx, _)| idx.abs_diff(target_idx))
+        .map(|(idx, _)| idx)
+}
+
 pub fn draw_pane_dividers(
     frame: &mut Frame,
     dividers: &[Divider],
@@ -913,18 +994,42 @@ pub fn draw_search_bar_status(
     layout: Layout,
     theme: &Theme,
 ) {
+    draw_search_bar_scoped(frame, query, found, position, false, layout, theme);
+}
+
+pub fn draw_search_bar_scoped(
+    frame: &mut Frame,
+    query: &str,
+    found: bool,
+    position: Option<(usize, usize)>,
+    scoped: bool,
+    layout: Layout,
+    theme: &Theme,
+) {
     let (scale, cell) = (layout.scale, layout.cell);
     let inset = PANEL_INSET * scale;
     let (x, width, text_y) = bottom_panel(frame, SEARCH_COLUMNS, layout, theme);
-    let (status, status_color) = if query.is_empty() {
-        (String::new(), theme.muted)
+    let mut status = if query.is_empty() {
+        String::new()
     } else if !found {
-        ("No matches".to_string(), theme.failure)
+        "No matches".to_string()
     } else if let Some((index, total)) = position {
-        (format!("{index}/{total}"), theme.muted)
+        format!("{index}/{total}")
     } else {
-        (String::new(), theme.muted)
+        String::new()
     };
+    let status_color = if !query.is_empty() && !found {
+        theme.failure
+    } else {
+        theme.muted
+    };
+    if scoped {
+        status = if status.is_empty() {
+            "[block]".to_string()
+        } else {
+            format!("[block] {status}")
+        };
+    }
     let room =
         (((width - inset * 2.0) / cell.width) as usize).saturating_sub(status.chars().count());
     let shown = fit(query, room.saturating_sub(1));
