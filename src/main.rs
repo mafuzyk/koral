@@ -2828,11 +2828,16 @@ impl ApplicationHandler<UserEvent> for App {
                     .kitty_key(&event, stage)
                     .or_else(|| input::encode(&event.logical_key, text, self.mods, self.mode()));
                 if let Some(bytes) = bytes {
-                    if let Some(tab) = self.active() {
-                        tab.session.lock().term.selection = None;
+                    let mut needs_redraw = !self.blink_shown;
+                    if let Some(tab) = self.active_mut() {
+                        needs_redraw |= tab.scroll != 0;
+                        tab.scroll = 0;
+                        needs_redraw |= tab.session.lock().term.selection.take().is_some();
+                        tab.write(bytes);
                     }
-                    self.write_active(bytes);
-                    self.redraw();
+                    if needs_redraw {
+                        self.redraw();
+                    }
                 }
             }
             WindowEvent::KeyboardInput { event, .. }
