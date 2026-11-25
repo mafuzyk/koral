@@ -207,6 +207,8 @@ koral ctl open-settings
 koral ctl reload
 koral ctl list [--json]
 koral ctl list-blocks [--pane ID] [--json]
+koral ctl get-block-output [--pane ID] [--block ID] [--json]
+koral ctl watch [--pane ID] [--json]
 koral ctl save-session NAME
 koral ctl restore-session NAME
 koral ctl list-sessions [--json]

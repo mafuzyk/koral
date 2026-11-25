@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use koral::ipc::{
-    BlockInfo, PaneInfo, Request, Server, TabInfo, TabKind, decode, encode, json_error,
-    json_string, parse_cli, render_blocks_json, render_blocks_text, render_list_json,
-    render_list_text, send,
+    BlockEvent, BlockInfo, PaneInfo, Request, Server, TabInfo, TabKind, decode, encode, json_error,
+    json_string, parse_cli, render_block_output_json, render_blocks_json, render_blocks_text,
+    render_event_ndjson, render_list_json, render_list_text, send, watch,
 };
 use koral::splits::{Axis, Dir};
 
@@ -64,6 +64,12 @@ fn wire_encode_decode_round_trips_all_commands() {
             pane: Some(3),
             json: true,
         },
+        Request::GetBlockOutput {
+            pane: Some(4),
+            block: Some(9),
+            json: true,
+        },
+        Request::Watch { pane: Some(2) },
         Request::SaveSession("work-1".to_string()),
         Request::RestoreSession("work-1".to_string()),
         Request::ListSessions,
@@ -338,4 +344,80 @@ fn pane_selectors_and_list_blocks_parse_and_render() {
         render_blocks_json(&blocks),
         "{\"version\":1,\"blocks\":[{\"id\":1,\"pane_id\":2,\"command\":\"cargo test\",\"cwd\":\"/home/mafu/Projetos/koral\",\"status\":0,\"folded\":false}]}"
     );
+}
+
+#[test]
+fn get_block_output_and_ndjson_watch_stream_work() {
+    assert_eq!(
+        parse_cli(&[
+            "get-block-output".into(),
+            "--pane".into(),
+            "2".into(),
+            "--block".into(),
+            "7".into(),
+            "--json".into(),
+        ])
+        .unwrap()
+        .1,
+        Request::GetBlockOutput {
+            pane: Some(2),
+            block: Some(7),
+            json: true,
+        }
+    );
+    assert_eq!(
+        parse_cli(&["watch".into(), "--pane=4".into(), "--json".into()])
+            .unwrap()
+            .1,
+        Request::Watch { pane: Some(4) }
+    );
+    assert_eq!(
+        render_block_output_json(2, 7, "ok\n"),
+        "{\"version\":1,\"pane_id\":2,\"block_id\":7,\"output\":\"ok\\n\"}"
+    );
+
+    let ev = BlockEvent {
+        pane_id: 4,
+        kind: "command_end".to_string(),
+        block_id: Some(7),
+        command: Some("cargo test".to_string()),
+        cwd: Some("/tmp".to_string()),
+        status: Some(0),
+    };
+    let ev_json = render_event_ndjson(&ev);
+    assert_eq!(
+        ev_json,
+        "{\"version\":1,\"event\":\"command_end\",\"pane_id\":4,\"block_id\":7,\"command\":\"cargo test\",\"cwd\":\"/tmp\",\"status\":0}"
+    );
+
+    let sock = std::env::temp_dir().join(format!("koral-ipc-watch-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&sock);
+    let server = Server::bind_with(sock.clone(), |_, tx| {
+        let _ = tx.send("OK\n".to_string());
+    })
+    .unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_bg = seen.clone();
+    let sock_bg = sock.clone();
+    let handle = std::thread::spawn(move || {
+        watch(Some(sock_bg), &Request::Watch { pane: Some(4) }, |line| {
+            seen_bg.lock().unwrap().push(line.to_string());
+        })
+        .unwrap();
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    server.publish(5, "ignored");
+    while server.publish(4, &ev_json) == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "watcher did not subscribe in time"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    while seen.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    drop(server);
+    let _ = handle.join();
+    assert_eq!(seen.lock().unwrap().as_slice(), [ev_json]);
 }

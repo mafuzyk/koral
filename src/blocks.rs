@@ -158,7 +158,7 @@ impl BlockStore {
         self.order.is_empty()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Block> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Block> {
         self.order.iter().filter_map(|id| self.blocks.get(id))
     }
 

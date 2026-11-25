@@ -13,6 +13,9 @@ alpha tag or competitive performance results are implied.
 
 ### Added
 
+- `koral ctl get-block-output [--pane ID] [--block ID] [--json]`, streaming
+  `koral ctl watch [--pane ID] [--json]` NDJSON lifecycle hooks, and Linux `SO_PEERCRED`
+  same-UID socket authentication.
 - Kitty graphics protocol animation support (`a=f` frames, `a=a` playback/loop control,
   `a=c` frame composition) scheduled on the event loop without busy polling.
 - `OSC 5522` extended clipboard protocol (`text/plain` and `image/png`, `clipboard` and

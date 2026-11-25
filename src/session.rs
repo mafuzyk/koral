@@ -10,6 +10,7 @@ use alacritty_terminal::vte::ansi::{Processor, Timeout};
 
 use crate::blocks::BlockStore;
 use crate::graphics::{Area, Graphics, Request};
+use crate::ipc::BlockEvent;
 use crate::marks::{ClipboardOp, Mark, Piece, Progress, Scanner};
 use crate::notify::{BODY_LIMIT, Notice, TITLE_LIMIT, clean};
 use crate::view::{anchor_char, picture_anchor, picture_char, picture_foot};
@@ -25,6 +26,8 @@ pub struct Session<L> {
     pub notices: Vec<Notice>,
     /// Extended clipboard requests (`OSC 5522`) awaiting host policy handling.
     pub clipboard_ops: Vec<ClipboardOp>,
+    /// Block lifecycle transitions emitted for `koral ctl watch`.
+    pub events: Vec<BlockEvent>,
     /// Latest tab progress indicator (`OSC 9;4`).
     pub progress: Option<Progress>,
     /// Latest pointer cursor shape requested by the app (`OSC 22`).
@@ -58,6 +61,7 @@ impl<L: EventListener> Session<L> {
             replies: Vec::new(),
             notices: Vec::new(),
             clipboard_ops: Vec::new(),
+            events: Vec::new(),
             progress: None,
             mouse_cursor: None,
             parser: Processor::new(),
@@ -90,6 +94,7 @@ impl<L: EventListener> Session<L> {
             replies,
             notices,
             clipboard_ops,
+            events,
             progress,
             mouse_cursor,
             parser,
@@ -193,10 +198,30 @@ impl<L: EventListener> Session<L> {
                                 cursor.point.line.0 + i32::from(cursor.input_needs_wrap),
                             ));
                         }
+                        let event_info = match &mark {
+                            Mark::PromptStart => Some(("prompt_start", None, None, None)),
+                            Mark::CommandStart(cmd) => {
+                                Some(("command_start", cmd.clone(), None, None))
+                            }
+                            Mark::CommandEnd(status) => Some(("command_end", None, None, *status)),
+                            Mark::Cwd(path) => Some(("cwd", None, Some(path.clone()), None)),
+                            _ => None,
+                        };
                         if let Some(id) = blocks.apply(mark, now) {
                             let line = anchor(term, id, *prompt_start);
                             let feeds = blocks.get(id).map_or(0, |block| block.prompt_breaks);
                             blocks.set_prompt_lines(id, prompt_rows(term, line, feeds));
+                        }
+                        if let Some((kind, cmd, path, status)) = event_info {
+                            let latest = blocks.latest();
+                            events.push(BlockEvent {
+                                pane_id: 0,
+                                kind: kind.to_string(),
+                                block_id: latest.map(|b| b.id),
+                                command: cmd.or_else(|| latest.and_then(|b| b.command.clone())),
+                                cwd: path.or_else(|| latest.and_then(|b| b.cwd.clone())),
+                                status,
+                            });
                         }
                     });
                 }

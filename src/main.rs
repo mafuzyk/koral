@@ -97,9 +97,15 @@ fn main() {
         Ok(Launch::Run(args)) => args,
         Ok(Launch::Control(ctl)) => {
             let wants_json = ctl.iter().any(|arg| arg == "--json");
-            match koral::ipc::parse_cli(&ctl)
-                .and_then(|(socket, req)| koral::ipc::send(socket, &req))
-            {
+            let result = koral::ipc::parse_cli(&ctl).and_then(|(socket, req)| {
+                if matches!(req, Request::Watch { .. }) {
+                    koral::ipc::watch(socket, &req, |line| println!("{line}"))?;
+                    Ok(String::new())
+                } else {
+                    koral::ipc::send(socket, &req)
+                }
+            });
+            match result {
                 Ok(out) => {
                     if !out.is_empty() {
                         println!("{out}");
@@ -2173,6 +2179,46 @@ impl App {
                     Err(message) => format!("ERR {message}\n"),
                 }
             }
+            Request::GetBlockOutput { pane, block, json } => {
+                let target = match pane {
+                    Some(id) => self.terminal(id).map(|t| (id, t)).ok_or("pane not found"),
+                    None => self
+                        .active()
+                        .map(|t| (t.id, t))
+                        .ok_or("active tab is not a terminal"),
+                };
+                match target {
+                    Ok((pane_id, term)) => {
+                        let session = term.session.lock();
+                        let block_id = block.or_else(|| {
+                            session
+                                .blocks
+                                .iter()
+                                .rfind(|b| b.status.is_some())
+                                .or_else(|| session.blocks.latest())
+                                .map(|b| b.id)
+                        });
+                        let Some(block_id) = block_id else {
+                            return "ERR block not found\n".to_string();
+                        };
+                        let Some(output) =
+                            view::output_text(&session.term, &session.blocks, block_id)
+                        else {
+                            return "ERR block output not available\n".to_string();
+                        };
+                        if json {
+                            format!(
+                                "OK\n{}\n",
+                                ipc::render_block_output_json(pane_id, block_id, &output)
+                            )
+                        } else {
+                            format!("OK\n{output}\n")
+                        }
+                    }
+                    Err(message) => format!("ERR {message}\n"),
+                }
+            }
+            Request::Watch { .. } => "ERR watch must stream\n".to_string(),
             Request::SaveSession(name) => match self.save_named_session(&name) {
                 Ok(()) => "OK\n".to_string(),
                 Err(message) => format!("ERR {message}\n"),
@@ -2557,6 +2603,11 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             UserEvent::ClipboardOp(id, op) => self.handle_osc5522(id, op),
+            UserEvent::BlockEvent(id, event) => {
+                if let Some(ipc) = &self.ipc {
+                    ipc.publish(id, &ipc::render_event_ndjson(&event));
+                }
+            }
             UserEvent::Blink => {
                 self.blink.reset(Instant::now());
                 self.redraw();

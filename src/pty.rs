@@ -61,6 +61,7 @@ pub enum UserEvent {
     Bell(u64),
     Notify(u64, Notice),
     ClipboardOp(u64, crate::marks::ClipboardOp),
+    BlockEvent(u64, crate::ipc::BlockEvent),
     Size(u64, SizeReply),
     Fonts(Box<FontSystem>, Vec<String>),
     Ipc(crate::ipc::Request, Sender<String>),
@@ -569,6 +570,10 @@ fn read_loop(
             }
             for op in session.clipboard_ops.drain(..) {
                 let _ = proxy.send_event(UserEvent::ClipboardOp(id, op));
+            }
+            for mut event in session.events.drain(..) {
+                event.pane_id = id;
+                let _ = proxy.send_event(UserEvent::BlockEvent(id, event));
             }
             drop(session);
             let rate = refresh_millihertz.load(Ordering::Relaxed);

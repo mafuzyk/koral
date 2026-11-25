@@ -3,7 +3,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use winit::event_loop::EventLoopProxy;
@@ -48,6 +49,14 @@ pub enum Request {
         pane: Option<u64>,
         json: bool,
     },
+    GetBlockOutput {
+        pane: Option<u64>,
+        block: Option<u32>,
+        json: bool,
+    },
+    Watch {
+        pane: Option<u64>,
+    },
     SaveSession(String),
     RestoreSession(String),
     ListSessions,
@@ -71,10 +80,22 @@ Commands:
   send-text [--pane ID] TEXT
   list [--json]
   list-blocks [--pane ID] [--json]
+  get-block-output [--pane ID] [--block ID] [--json]
+  watch [--pane ID] [--json]
   save-session NAME
   restore-session NAME
   list-sessions [--json]
 ";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockEvent {
+    pub pane_id: u64,
+    pub kind: String,
+    pub block_id: Option<u32>,
+    pub command: Option<String>,
+    pub cwd: Option<String>,
+    pub status: Option<i32>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockInfo {
@@ -267,6 +288,39 @@ pub fn render_blocks_json(blocks: &[BlockInfo]) -> String {
     out
 }
 
+pub fn render_block_output_json(pane_id: u64, block_id: u32, output: &str) -> String {
+    format!(
+        "{{\"version\":1,\"pane_id\":{pane_id},\"block_id\":{block_id},\"output\":{}}}",
+        json_string(output)
+    )
+}
+
+pub fn render_event_ndjson(event: &BlockEvent) -> String {
+    use std::fmt::Write;
+    let block_id = event
+        .block_id
+        .map_or_else(|| "null".to_string(), |id| id.to_string());
+    let command = event
+        .command
+        .as_deref()
+        .map_or_else(|| "null".to_string(), json_string);
+    let cwd = event
+        .cwd
+        .as_deref()
+        .map_or_else(|| "null".to_string(), json_string);
+    let status = event
+        .status
+        .map_or_else(|| "null".to_string(), |code| code.to_string());
+    let mut out = String::new();
+    let _ = write!(
+        out,
+        "{{\"version\":1,\"event\":{},\"pane_id\":{},\"block_id\":{block_id},\"command\":{command},\"cwd\":{cwd},\"status\":{status}}}",
+        json_string(&event.kind),
+        event.pane_id
+    );
+    out
+}
+
 fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
@@ -382,6 +436,25 @@ pub fn encode(req: &Request) -> String {
                 parts.push(format!("pane:{id}"));
             }
         }
+        Request::GetBlockOutput { pane, block, json } => {
+            parts.push(if *json {
+                "get-block-output-json".to_string()
+            } else {
+                "get-block-output".to_string()
+            });
+            if let Some(id) = pane {
+                parts.push(format!("pane:{id}"));
+            }
+            if let Some(bid) = block {
+                parts.push(format!("block:{bid}"));
+            }
+        }
+        Request::Watch { pane } => {
+            parts.push("watch".to_string());
+            if let Some(id) = pane {
+                parts.push(format!("pane:{id}"));
+            }
+        }
         Request::SaveSession(name) => {
             parts.push("save-session".to_string());
             parts.push(escape(name));
@@ -479,6 +552,33 @@ pub fn decode(line: &str) -> Result<Request, String> {
         "list-blocks-json" => Ok(Request::ListBlocks {
             pane: parse_optional_pane_field(fields.next())?,
             json: true,
+        }),
+        "get-block-output" | "get-block-output-json" => {
+            let mut pane = None;
+            let mut block = None;
+            for field in fields {
+                if let Some(id) = field.strip_prefix("pane:") {
+                    pane = Some(
+                        id.parse::<u64>()
+                            .map_err(|_| format!("invalid pane id '{id}'"))?,
+                    );
+                } else if let Some(bid) = field.strip_prefix("block:") {
+                    block = Some(
+                        bid.parse::<u32>()
+                            .map_err(|_| format!("invalid block id '{bid}'"))?,
+                    );
+                } else {
+                    return Err(format!("unknown field '{field}'"));
+                }
+            }
+            Ok(Request::GetBlockOutput {
+                pane,
+                block,
+                json: cmd == "get-block-output-json",
+            })
+        }
+        "watch" => Ok(Request::Watch {
+            pane: parse_optional_pane_field(fields.next())?,
         }),
         "save-session" => Ok(Request::SaveSession(unescape(
             fields
@@ -621,7 +721,14 @@ pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> 
     if json
         && !matches!(
             cmd.as_str(),
-            "list" | "list-sessions" | "list-blocks" | "-h" | "--help" | "help"
+            "list"
+                | "list-sessions"
+                | "list-blocks"
+                | "get-block-output"
+                | "watch"
+                | "-h"
+                | "--help"
+                | "help"
         )
     {
         return Err(format!("--json is not supported for '{cmd}'"));
@@ -752,6 +859,47 @@ pub fn parse_cli(args: &[String]) -> Result<(Option<PathBuf>, Request), String> 
                 json: flag_json,
             }
         }
+        "get-block-output" => {
+            let mut pane = None;
+            let mut block = None;
+            let mut flag_json = json;
+            while let Some(arg) = iter.next() {
+                if arg == "--json" {
+                    flag_json = true;
+                } else if let Some(val) = arg.strip_prefix("--block=") {
+                    block = Some(
+                        val.parse::<u32>()
+                            .map_err(|_| format!("invalid block id '{val}'"))?,
+                    );
+                } else if arg == "--block" {
+                    let val = iter
+                        .next()
+                        .ok_or_else(|| "missing value for '--block'".to_string())?;
+                    block = Some(
+                        val.parse::<u32>()
+                            .map_err(|_| format!("invalid block id '{val}'"))?,
+                    );
+                } else if !take_pane_flag(arg, &mut iter, &mut pane)? {
+                    return Err(format!("unknown get-block-output option '{arg}'"));
+                }
+            }
+            Request::GetBlockOutput {
+                pane,
+                block,
+                json: flag_json,
+            }
+        }
+        "watch" => {
+            let mut pane = None;
+            while let Some(arg) = iter.next() {
+                if arg == "--json" {
+                    continue;
+                } else if !take_pane_flag(arg, &mut iter, &mut pane)? {
+                    return Err(format!("unknown watch option '{arg}'"));
+                }
+            }
+            Request::Watch { pane }
+        }
         "save-session" => {
             let name = iter
                 .next()
@@ -821,8 +969,11 @@ pub fn default_socket_path() -> Option<PathBuf> {
         .find(|path| UnixStream::connect(path).is_ok())
 }
 
+type WatcherList = Arc<Mutex<Vec<(Option<u64>, Sender<String>)>>>;
+
 pub struct Server {
     path: PathBuf,
+    watchers: WatcherList,
 }
 
 impl Server {
@@ -842,15 +993,36 @@ impl Server {
         let _ = std::fs::remove_file(&path);
         let listener = UnixListener::bind(&path)?;
         std::fs::set_permissions(&path, Permissions::from_mode(0o600))?;
+        let watchers: WatcherList = Arc::new(Mutex::new(Vec::new()));
+        let watchers_bg = watchers.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else {
                     break;
                 };
-                handle_client(stream, &dispatch);
+                handle_client(stream, &dispatch, &watchers_bg);
             }
         });
-        Ok(Self { path })
+        Ok(Self { path, watchers })
+    }
+
+    pub fn publish(&self, pane_id: u64, ndjson_line: &str) -> usize {
+        let Ok(mut list) = self.watchers.lock() else {
+            return 0;
+        };
+        let mut delivered = 0usize;
+        list.retain(|(filter, tx)| {
+            if filter.is_none_or(|target| target == pane_id) {
+                let ok = tx.send(ndjson_line.to_string()).is_ok();
+                if ok {
+                    delivered += 1;
+                }
+                ok
+            } else {
+                true
+            }
+        });
+        delivered
     }
 
     pub fn path(&self) -> &Path {
@@ -860,14 +1032,68 @@ impl Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
+        if let Ok(mut list) = self.watchers.lock() {
+            list.clear();
+        }
         let _ = std::fs::remove_file(&self.path);
     }
 }
 
-fn handle_client<F>(mut stream: UnixStream, dispatch: &F)
+#[cfg(target_os = "linux")]
+pub fn verify_peer(stream: &UnixStream) -> bool {
+    use std::os::unix::io::AsRawFd;
+    const SOL_SOCKET: i32 = 1;
+    const SO_PEERCRED: i32 = 17;
+    #[repr(C)]
+    struct UCred {
+        pid: i32,
+        uid: u32,
+        gid: u32,
+    }
+    unsafe extern "C" {
+        fn geteuid() -> u32;
+        fn getsockopt(
+            sockfd: i32,
+            level: i32,
+            optname: i32,
+            optval: *mut UCred,
+            optlen: *mut u32,
+        ) -> i32;
+    }
+    let mut cred = UCred {
+        pid: 0,
+        uid: u32::MAX,
+        gid: u32::MAX,
+    };
+    let mut len = std::mem::size_of::<UCred>() as u32;
+    // SAFETY: `cred` matches kernel `struct ucred` and `len` is initialized to its byte size.
+    let rc = unsafe {
+        getsockopt(
+            stream.as_raw_fd(),
+            SOL_SOCKET,
+            SO_PEERCRED,
+            &mut cred,
+            &mut len,
+        )
+    };
+    // SAFETY: `geteuid()` has no preconditions and returns the effective UID of this process.
+    rc == 0 && cred.uid == unsafe { geteuid() }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn verify_peer(_stream: &UnixStream) -> bool {
+    true
+}
+
+fn handle_client<F>(mut stream: UnixStream, dispatch: &F, watchers: &WatcherList)
 where
     F: Fn(Request, Sender<String>),
 {
+    if !verify_peer(&stream) {
+        let _ = stream.write_all(b"ERR unauthorized\n");
+        let _ = stream.flush();
+        return;
+    }
     let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
     let Ok(cloned) = stream.try_clone() else {
@@ -881,17 +1107,90 @@ where
     if read == 0 {
         return;
     }
-    let response = match decode(&line) {
+    match decode(&line) {
+        Ok(Request::Watch { pane }) => {
+            let watchers = watchers.clone();
+            std::thread::spawn(move || {
+                let (tx, rx) = mpsc::channel::<String>();
+                if let Ok(mut list) = watchers.lock() {
+                    list.push((pane, tx));
+                }
+                if stream.write_all(b"OK\n").is_err() || stream.flush().is_err() {
+                    return;
+                }
+                loop {
+                    match rx.recv_timeout(Duration::from_millis(500)) {
+                        Ok(event_line) => {
+                            if stream.write_all(event_line.as_bytes()).is_err()
+                                || stream.write_all(b"\n").is_err()
+                                || stream.flush().is_err()
+                            {
+                                break;
+                            }
+                        }
+                        Err(RecvTimeoutError::Timeout) => continue,
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+            });
+        }
         Ok(request) => {
             let (tx, rx) = mpsc::channel();
             dispatch(request, tx);
-            rx.recv_timeout(IO_TIMEOUT)
-                .unwrap_or_else(|_| "ERR timed out\n".to_string())
+            let response = rx
+                .recv_timeout(IO_TIMEOUT)
+                .unwrap_or_else(|_| "ERR timed out\n".to_string());
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
         }
-        Err(error) => format!("ERR {error}\n"),
-    };
-    let _ = stream.write_all(response.as_bytes());
-    let _ = stream.flush();
+        Err(error) => {
+            let response = format!("ERR {error}\n");
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    }
+}
+
+pub fn watch(
+    socket: Option<PathBuf>,
+    request: &Request,
+    mut on_line: impl FnMut(&str),
+) -> Result<(), String> {
+    let path = socket
+        .or_else(default_socket_path)
+        .ok_or_else(|| "no running koral socket found".to_string())?;
+    let mut stream = UnixStream::connect(&path)
+        .map_err(|e| format!("cannot connect to {}: {e}", path.display()))?;
+    let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
+    stream
+        .write_all(encode(request).as_bytes())
+        .map_err(|e| format!("write error: {e}"))?;
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let _ = stream.set_read_timeout(None);
+    let mut reader = BufReader::new(stream);
+    let mut header = String::new();
+    let n = reader
+        .read_line(&mut header)
+        .map_err(|e| format!("read error: {e}"))?;
+    if n == 0 {
+        return Err("connection closed before acknowledgement".to_string());
+    }
+    if header != "OK\n" {
+        return if let Some(err) = header.strip_prefix("ERR ") {
+            Err(err.trim().to_string())
+        } else {
+            Err(format!("unexpected reply: {}", header.trim()))
+        };
+    }
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => return Ok(()),
+            Ok(_) => on_line(line.trim_end_matches(['\r', '\n'])),
+            Err(e) => return Err(format!("stream read error: {e}")),
+        }
+    }
 }
 
 pub fn send(socket: Option<PathBuf>, request: &Request) -> Result<String, String> {
