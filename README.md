@@ -34,7 +34,7 @@
 # Arch Linux STABLE (1.2.1 — AUR / packaging/arch/PKGBUILD)
 paru -S koral-bin
 
-# Arch Linux 2.0 alpha / nightly (2.0.0-alpha.1 — packaging/aur/koral-bin-nightly/PKGBUILD)
+# Arch Linux 2.0 alpha / nightly (2.0.0-alpha.2, packaging/aur/koral-bin-nightly/PKGBUILD)
 paru -S koral-bin-nightly
 
 # NixOS / Nix flakes
