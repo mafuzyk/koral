@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Dates use
 `YYYY-MM-DD`; an unreleased section carries the `Unreleased` marker instead of a date.
 
+## [2.0.0-alpha.2] - 2026-11-26
+
+### Fixed
+
+- Prevent a GPU validation crash when opening Settings from a terminal tab running a full-screen TUI.
+
 ## [2.0.0-alpha.1] - 2026-11-25
 
 First `2.0.0` alpha / nightly pre-release, adding block-centric CLI and UI workflows while keeping `1.2.1` as the STABLE release (`koral-bin` stays on `1.2.1`; `koral-bin-nightly` tracks `2.0.0-alpha.1`).

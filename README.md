@@ -40,8 +40,10 @@ paru -S koral-bin-nightly
 # NixOS / Nix flakes
 nix run github:mafuzyk/koral
 
-# Prebuilt Linux x86_64 tarball (latest stable or v2.0.0-alpha.1 prerelease)
+# Prebuilt Linux x86_64 tarball (latest stable)
 curl -fsSLO https://github.com/mafuzyk/koral/releases/latest/download/koral-x86_64-linux.tar.gz
+# For the v2.0.0-alpha.2 prerelease, use this download instead:
+# curl -fsSLO https://github.com/mafuzyk/koral/releases/download/v2.0.0-alpha.2/koral-x86_64-linux.tar.gz
 tar -xzf koral-x86_64-linux.tar.gz
 install -Dm755 koral ~/.local/bin/koral
 ```

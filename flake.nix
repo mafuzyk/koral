@@ -1,7 +1,7 @@
 # koral-bin is the default package and points at the current release tarball.
-# For a new release, bump Cargo.toml, `version`, `releaseVersion` and the tarball
-# hash together, refresh `cargoHash` (the lock changes with the bump), tag, and
-# let CI publish the tarball.
+# For a new release, bump Cargo.toml and `version`, refresh `cargoHash` after
+# updating Cargo.lock, tag, and let CI publish the tarball. Update the default
+# binary's `releaseVersion` and tarball hash only for a stable release.
 {
   description = "A Rust terminal with native sharky shell support";
 
@@ -12,7 +12,7 @@
       lib = nixpkgs.lib;
       systems = [ "x86_64-linux" ];
       forAllSystems = f: lib.genAttrs systems (system: f (import nixpkgs { inherit system; }));
-      version = "2.0.0-alpha.1";
+      version = "2.0.0-alpha.2";
       releaseVersion = "1.2.1";
     in
     {
@@ -22,7 +22,7 @@
           inherit version;
           src = self;
 
-          cargoHash = "sha256-Orj0sVH5p5etikLbNXI680FYsmlvX6ihijWlr8F8Pao=";
+          cargoHash = "sha256-WiAGztNuarLHYirzgbA055G3PyrveTfIo70mef+Qjo0=";
 
           nativeBuildInputs = with pkgs; [ pkg-config makeWrapper ncurses ];
           buildInputs = with pkgs; [
