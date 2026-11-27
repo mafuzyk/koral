@@ -183,6 +183,7 @@ impl Frame {
         self.quads.clear();
         self.lines.clear();
         self.pictures.list.clear();
+        self.pictures.over = 0;
         self.clip = Clip::default();
     }
 }
@@ -2346,6 +2347,17 @@ fn fit(text: &str, room: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reset_clears_picture_layer_boundary() {
+        let mut frame = Frame::default();
+        frame.quads.push(Quad::new(0.0, 0.0, 1.0, 1.0, [1.0; 4]));
+        frame.pictures.over = frame.quads.len();
+
+        frame.reset();
+
+        assert_eq!(frame.pictures.over, 0);
+    }
 
     #[test]
     fn consent_banner_shows_prompt_and_gesture() {
